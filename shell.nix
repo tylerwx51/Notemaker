@@ -59,7 +59,7 @@ let
   };
 in
 pkgs.mkShell {
-  packages = [ android.androidsdk pkgs.jdk17 emulator headless pkgs.git pkgs.jujutsu pkgs.openssh ];
+  packages = [ android.androidsdk pkgs.jdk17 pkgs.python3 pkgs.chromium pkgs.zip pkgs.unzip emulator headless pkgs.git pkgs.jujutsu pkgs.openssh ];
   ANDROID_HOME = sdk;
   ANDROID_SDK_ROOT = sdk;
   JAVA_HOME = pkgs.jdk17.home;

@@ -57,3 +57,6 @@ work. A request to develop locally does not by itself require remote deployment.
 Run checks appropriate to the affected application through the Nix development
 environment. Record what was verified and any hardware or remote checks that
 remain untested. Keep documentation aligned with implemented behavior.
+
+## Misc
+Keep your ADRs up to date.
