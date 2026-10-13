@@ -186,6 +186,10 @@ apps/cli/notemaker --state .test-artifacts/my-replica --document demo sync http:
 The CLI reads and changes local state, not the server directly. `sync` exchanges
 pending operations once; `watch URL` retries until stopped. A desktop does not
 need to run a server to use its CLI. Separate devices use separate replicas.
+Read `apps/cli/notemaker --help` for options, defaults, input/output conventions,
+and quick examples; use [CLI documentation](apps/cli/README.md) for JSON schemas.
+The Nix shell includes PyYAML for validating Codex skill metadata with the
+skill-creator validator.
 Multiple local CLI processes can share one replica and use distinct `--actor`
 values. Give one agent session a stable actor ID across calls.
 
@@ -205,7 +209,7 @@ upgrade the app, CLI, and server together before synchronizing SVG objects.
 
 The installed Android APK includes the CLI. `MainActivity.startCli(args)` launches
 it as a child process under the app's UID and supplies its private state directory
-and current document. No agent orchestration is included. The standalone Android
+and current document. Server agent chats use the same local-state CLI workflow. The standalone Android
 DEX jar is also built for diagnostics. See [CLI usage and schema](apps/cli/README.md)
 and [ADR 0003](docs/adr/0003-local-replicas-and-cli.md).
 
@@ -298,3 +302,84 @@ The benchmark uses the host GPU with Vulkan disabled and requires a working
 graphical session and host graphics driver. `shell.nix` supplies the GL loader;
 `NOTEMAKER_TEST_GPU` can override the renderer. The usual emulator launchers
 retain their software-rendering defaults for functional tests.
+
+### Agent chats on BOOX
+
+Tap **Agent** in the top bar to open a popup with **New chat**, the five most
+recent chats across all documents, and **More chats**. Choose the harness, model,
+and effort when starting a chat. Defaults are **Pi / openai / GPT-6-luna / medium**;
+**mock** streams a deterministic reply and sample tool activity without reading
+or editing notes. Tool rows show filenames or commands; tap one for readable
+arguments and results. The popup shrinks above the keyboard while composing,
+keeping the message field and Send button visible, and expands when it closes.
+
+Replies stream while the agent works. Closing the popup or disconnecting the
+tablet does not stop the agent; reopen the chat to catch up. **Stop** cancels the
+run but retains completed edits. Chats persist on the server; unsent drafts stay
+on the device. When a send fails, **Retry send** reuses its request ID so an
+accepted request is not executed twice. A server restart marks running chats
+interrupted; review their activity before requesting further edits. New chats
+can use different harness/model settings; existing chats retain their selection.
+
+Run from this checkout on the development computer:
+
+```sh
+nix-shell
+apps/cli/build.sh
+apps/android/build.sh
+python3 apps/server/server.py --port 8765 --database notemaker.sqlite3 \
+  --pi-command /home/tyler/.npm-global/bin/pi
+```
+
+Use the existing primary database when restarting the primary server. The CLI
+JAR must be built before Pi can edit notes. The Nix shell supplies Node.js and
+Bubblewrap; Pi is the already installed `@earendil-works/pi-coding-agent` CLI
+(tested with its RPC `agent_settled` and extension hook APIs). `--pi-command`
+can select another installation. The mock needs no provider credentials.
+
+Pi runs inside Bubblewrap in this repository, with read/write access to the
+checkout, read-only runtime dependencies, a private temporary home, and network
+access to the server and provider. No fallback runs Pi outside the sandbox.
+The default upstream is `http://127.0.0.1:8765` (or the chosen server port).
+`--agent-root`, `--agent-data`, and `--agent-upstream` configure these locations.
+Agent data defaults to `.agent-data` beside the database and is ignored by Git.
+It contains a shared CLI replica, per-chat Pi sessions, and private credential
+copies. Pi uses the existing CLI skill to discover note content and perform
+permission-free edits under a stable chat-specific actor, then synchronizes them.
+
+At startup the server copies `auth.json` and `models.json`, if present, from
+`$PI_CODING_AGENT_DIR` or `~/.pi/agent` into private agent data. OAuth refreshes
+update the dedicated copy. A newer host file is recopied on server startup;
+reauthenticate in Pi and restart the server if those credentials expire.
+Credentials, transcript files, and replica data must stay outside committed files.
+Back up the server database and agent data together. This feature runs on the
+existing trusted-LAN server; it does not add login/authentication.
+
+The model selector initially includes the two Luna models exposed by the
+installed Pi catalog. Override its options with `--chat-models FILE.json`:
+
+```json
+[
+  {"provider":"openai","model":"gpt-6-luna","efforts":["low","medium","high"]},
+  {"provider":"openai","model":"gpt-5.6-luna","efforts":["low","medium","high"]}
+]
+```
+
+The first model is the default, with medium effort when supported. Configure
+only provider/model combinations available and authenticated in the selected Pi
+installation. Runs are limited to one per chat, four globally, and 30 minutes.
+See [chat protocol](apps/server/agent/PROTOCOL.md) and
+[ADR 0006](docs/adr/0006-server-agent-chats.md).
+
+```sh
+nix-shell --run 'python3 tests/chat_checks.py'
+nix-shell --run 'apps/android/build.sh && python3 tests/chat_ui.py'
+# Opt-in: uses the real authenticated provider and creates an isolated test note.
+nix-shell --run 'python3 tests/pi_chat.py'
+```
+
+The HTTP checks cover streaming, reconnect cursors, idempotent sends, cancellation,
+history pagination, restart recovery, and a real sandboxed CLI edit/sync. The UI
+check uses an isolated emulator on port 5586 and a temporary mock server; it
+saves screenshots under `.test-artifacts/chat-ui/`. The live Pi check uses a
+temporary server/database and verifies streamed hooks and CLI-generated edits.

@@ -13,8 +13,15 @@ public final class Main {
     private Main() {}
     static final ThreadLocal<Object> proxyInput=new ThreadLocal<>();
     static final ThreadLocal<Boolean> inProxy=new ThreadLocal<>();
-    public static final String HELP = "NoteMaker CLI\nUsage: notemaker [--state DIR] [--document NAME] [--actor ID] COMMAND [ARGS]\n"
-        + "--proxy-file FILE          Send commands to a local proxy descriptor\nserve [PORT [SERVER_URL]]   Start local replica proxy (default port 8766)\n"
+    public static final String HELP = "NoteMaker CLI\nUsage: notemaker [OPTIONS] COMMAND [ARGS]\n"
+        + "Options precede the command:\n"
+        + "--state DIR                Local replica; default NOTEMAKER_STATE, otherwise\n"
+        + "                           $XDG_STATE_HOME/notemaker or ~/.local/state/notemaker\n"
+        + "--document NAME            Case-sensitive document name (default: notes)\n"
+        + "--actor ID                 Stable editing identity; default NOTEMAKER_ACTOR, otherwise cli\n"
+        + "--proxy-file FILE          Send commands to a local proxy descriptor\n"
+        + "--help                     Show this help without contacting a server\n\n"
+        + "serve [PORT [SERVER_URL]]   Start local replica proxy (default port 8766)\n"
         + "document create [fixed|pages|infinite] | document list\ninspect | status | log\n"
         + "diagram add FILE|-         Atomic new layer and editable diagram objects\n"
         + "svg add FILE.svg|- [PLACEMENT.json]   Place SVG; optional {x,y,w,h,layer,page,object}\n"
@@ -24,18 +31,25 @@ public final class Main {
         + "object hide ID | object show ID\n"
         + "stroke put FILE|- | stroke hide ID | stroke show ID\n"
         + "apply FILE|-               Atomic JSON array of protocol actions\n"
-        + "undo | redo                History for --actor (default: cli)\n"
+        + "undo | redo                History for the selected actor\n"
         + "export FILE.svg|FILE.png [PAGE [X Y WIDTH HEIGHT]]   Page is zero-based\n"
-        + "sync SERVER_URL            Synchronize once; local edits work offline\n"
+        + "sync SERVER_URL            Upload one batch and fetch all remote pages; repeat if pending > 0\n"
         + "watch SERVER_URL           Keep synchronizing until interrupted\n"
-        + "JSON on stdout; errors on stderr and nonzero exit. Mutation retries: inspect the\n"
-        + "returned IDs before retrying. sync retries are idempotent. See apps/cli/README.md.\n";
+        + "FILE|- accepts JSON from a file or stdin (svg add reads raw SVG).\n"
+        + "Edits use local state and work offline; document list lists local documents only.\n"
+        + "JSON on stdout (except help); JSON errors on stderr and exit 1.\n"
+        + "Mutations are not idempotent: inspect log before retrying a lost result.\n"
+        + "sync retries are idempotent. See apps/cli/README.md for input schemas.\n\n"
+        + "Examples:\n"
+        + "  notemaker --document notes status\n"
+        + "  notemaker --document notes sync http://127.0.0.1:8765\n";
     public static void main(String[] args){try{Object result=run(args);if(result!=null)System.out.println(write(result));}catch(Exception e){Throwable cause=e;while(cause.getCause()!=null)cause=cause.getCause();System.err.println(write(object("error",cause.toString())));System.exit(1);}}
     public static Object run(String[] args) throws Exception {
         List<String>a=new ArrayList<>(Arrays.asList(args));
         if(a.isEmpty()||a.contains("--help")||(a.size()==1&&a.get(0).equals("help"))){System.out.print(HELP);return null;}
         String state=System.getenv("NOTEMAKER_STATE");if(state==null){String xdg=System.getenv("XDG_STATE_HOME");state=(xdg==null?System.getProperty("user.home")+"/.local/state":xdg)+"/notemaker";}
-        String doc="notes",actor="cli",proxy=null;
+        String doc="notes",actor=System.getenv("NOTEMAKER_ACTOR"),proxy=null;
+        if(actor==null||actor.isEmpty())actor="cli";
         while(!a.isEmpty()&&a.get(0).startsWith("--")){String flag=a.remove(0);require(!a.isEmpty(),"Missing "+flag+" value");String value=a.remove(0);switch(flag){case "--state":state=value;break;case "--document":doc=value;break;case "--actor":actor=value;break;case "--proxy-file":proxy=value;break;default:throw new IllegalArgumentException("Unknown option "+flag);}}
         require(!a.isEmpty(),"Missing command");
         Model remoteModel=null;

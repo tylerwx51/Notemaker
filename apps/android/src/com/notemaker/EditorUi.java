@@ -61,6 +61,7 @@ final class EditorUi {
         connection = text("", 12, MUTED, false);
         connection.setGravity(Gravity.RIGHT);
         header.addView(connection);
+        header.addView(action("Agent", () -> { dismissPopup(); app.agent.show(); }));
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(70)));
         root.addView(divider(), new LinearLayout.LayoutParams(-1, dp(1)));
 

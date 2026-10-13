@@ -303,3 +303,113 @@ Physical stylus-to-display latency and E Ink refresh still require manual use
 of the updated BOOX build. Emulator results measure application response and
 rendering, not physical display scanout. Journal compaction and a guarantee of
 Android background execution are outside this change; see ADR 0004 for limits.
+
+## Agent popup and sandboxed Pi chats (2026-10-13)
+
+Built the JVM/Android CLI artifacts and Android APK through `nix-shell`.
+Implemented ADR 0006 and verified:
+
+- `python3 tests/server_checks.py`: 3 document protocol checks passed.
+- `python3 tests/chat_checks.py`: 6 checks passed, covering incremental delivery
+  before completion, reconnect cursors, duplicate/concurrent message submissions,
+  Stop, real Pi cancellation during startup, global pagination, restart recovery,
+  input validation, cross-origin rejection, and sandboxed CLI edit/sync.
+- The sandbox test confirmed repository writes, upstream access, and denial of
+  reads outside its mounts, including the user's SSH directory.
+- `python3 tests/cli_checks.py`: 15 checks passed, including real CLI calls proving
+  `NOTEMAKER_ACTOR` defaults and explicit actor overrides.
+- `python3 tests/chat_ui.py`: passed on an isolated API 36 emulator. Verified five
+  recent chats, More chats, mock/model/effort selection, replies, expandable tool
+  output, reopen/catch-up, and draft persistence. Screenshots are under
+  `.test-artifacts/chat-ui/`; no fatal Android exception was recorded.
+- `python3 tests/pi_chat.py`: passed using installed Pi 1.2.0, openai-codex /
+  GPT-6-luna at medium effort, real authentication, and Bubblewrap. Hooks emitted
+  text deltas and tool events. Pi created and synchronized a test layer via the
+  CLI under the exact chat actor. A second turn resumed the native session and
+  correctly recalled the layer's name. All note edits used a temporary server,
+  database, and replica.
+
+Live testing caught stdout redirection/backpressure in Pi RPC mode; the hook now
+uses a private per-run event file, tailed during execution and removed after
+consumption. It also caught NixOS's indirect system certificate path; the harness
+supplies its resolved certificate bundle to Node without disabling verification.
+Actor identity is supplied through the environment to avoid model transcription
+errors.
+
+The primary server on port 8765 was not restarted and this APK was not installed
+on the physical BOOX as part of these checks. Physical E Ink refresh, keyboard
+behavior, and stylus interaction while the popup is open remain untested. No
+Phenom II deployment was performed. Offline chat-history browsing is not
+implemented; drafts remain local and history is fetched from the server.
+
+### Physical BOOX agent upgrade (2026-10-13)
+
+At the user's request, installed the tested APK on BOOX Note Air6 C serial
+`eac89823` using `adb install -r`. Before installation the app was stopped and
+its files/preferences archived to
+`.test-artifacts/boox-agent-upgrade-20261013-103145/before.tar`. All 17 files were
+byte-for-byte identical immediately after installation. The installed APK was
+pulled back and its SHA-256 compared with the build artifact.
+
+Backed up the live server database using SQLite's backup API, then restarted the
+existing local server in tmux pane `2:1.2` through the updated `nix-shell` on port
+8765. Its identity remained `2220a9fd-fead-4f9a-a601-14f5cd7ca87e`, and all 363
+existing document events were unchanged. The live chat options endpoint returns
+Pi / openai-codex / GPT-6-luna / medium. Restored the tablet's USB reverse tunnel
+for port 8765.
+
+The app launched successfully and the Agent button was found. Full popup
+inspection was interrupted when the foreground switched to BOOX Settings; no
+chat was submitted. The app process log contained no fatal Java exception.
+Verification details and the installed APK copy are in the same backup directory.
+Physical refresh and keyboard behavior still require manual use.
+
+### Pi provider changed to openai (2026-10-13)
+
+Changed both default Luna model options to provider `openai`, retaining
+GPT-6-luna / medium as the default. Updated selector expectations, configuration
+examples, and ADR 0006. Six chat checks and the live Pi test passed using the
+host's current `openai` credentials; the live test verified streamed text/tool
+hooks, CLI edits under the chat actor, synchronization, and session continuation.
+
+Backed up the live database and private credential copy under
+`.test-artifacts/openai-provider-20261013-105110/`, changed the provider of all
+three existing Pi chats from `openai-codex` to `openai`, refreshed the dedicated
+credentials from the host Pi configuration, and restarted the existing server
+on port 8765. Verified the live options and existing-chat endpoints return
+`openai`. Server identity, document events, and chat history were preserved.
+The tablet loads provider options from the server; no APK change was needed.
+
+### Chat keyboard sizing and readable tools (2026-10-13)
+
+Changed the popup to a transparent full-window host with a centered panel sized
+from the available area after system and keyboard insets. The transcript gives
+up height while the composer and Send/Stop controls remain visible. Hiding the
+keyboard restores the original panel size. The implementation follows Android's
+[keyboard inset guidance](https://developer.android.com/develop/ui/views/layout/sw-keyboard)
+and retains adjust-resize behavior on Android versions before API 30.
+
+Tool headings now include the filename, shell command, or search pattern.
+Expanded arguments show readable labels, preserved command text, edit before/after
+text, and a separate Output section. Unknown tools get labeled arguments, and
+malformed/truncated arguments fall back to their original text.
+
+Built the APK inside `nix-shell`. The updated `tests/chat_ui.py` passed on an
+isolated API 36 emulator, including keyboard-visible input and Send bounds,
+sending with the keyboard open, restored size, readable read/bash/edit fixtures,
+and the existing chat/history/draft checks. Screenshots include
+`.test-artifacts/chat-ui/keyboard-visible.png` and `tool-formatting.png`.
+The final run completed without a fatal exception in the NoteMaker process.
+
+Installed on BOOX `eac89823` with `adb install -r`. All 17 app data/preference
+files were identical before and after installation; backup and verification
+artifacts are in `.test-artifacts/boox-chat-layout-20261013-110736/`.
+The installed APK matched the build SHA-256:
+`6e113236378821cee61817ae1ced25c5d35e6c2a041bab9f9ad58fccd464831c`.
+
+Woke the BOOX from its dozing/screensaver state and checked an existing chat
+without typing or sending a message. With its keyboard visible, the keyboard
+started at y=1725, the message field ended at y=1589, and Send ended at y=1679.
+Hiding the keyboard restored Send to its original y=2275 position. Screenshots
+and `layout-check.json` record these physical-device measurements. The local
+server required no restart for these Android-only UI changes.

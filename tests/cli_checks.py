@@ -2,6 +2,7 @@
 """Exercise actual CLI processes, replicas, server and image exporters."""
 import concurrent.futures
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,6 +14,21 @@ CLI = ROOT / 'apps/cli/notemaker'
 EXAMPLE = json.loads((ROOT / 'apps/cli/examples/diagram.json').read_text())
 
 class CliChecks(server_checks.ServerChecks):
+    def test_environment_actor_and_explicit_override(self):
+        env = dict(os.environ, NOTEMAKER_ACTOR='chat-agent')
+        args = [str(CLI), '--state', str(self.directory / 'env'), '--document', self.document]
+        result = subprocess.run(args + ['layer', 'put', '-'], env=env,
+            input=json.dumps({'layer':'env-layer','name':'Environment actor','force':False}),
+            text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.cli('log', replica='env')
+        self.assertEqual(log['pending'][0]['actor'], 'chat-agent')
+        result = subprocess.run(args + ['--actor', 'explicit', 'layer', 'put', '-'], env=env,
+            input=json.dumps({'layer':'explicit-layer','name':'Explicit actor','force':False}),
+            text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.cli('log', replica='env')['pending'][-1]['actor'], 'explicit')
+
     def test_svg_placement_history_export_and_sync(self):
         source = ROOT / 'apps/cli/examples/placed.svg'
         self.cli('document', 'create', 'pages')

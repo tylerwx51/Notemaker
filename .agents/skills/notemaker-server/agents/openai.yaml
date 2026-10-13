@@ -1,0 +1,6 @@
+interface:
+  display_name: "NoteMaker Server"
+  short_description: "Inspect, edit, and sync NoteMaker using its CLI"
+  default_prompt: "Use $notemaker-server to inspect my NoteMaker document and its sync status."
+policy:
+  allow_implicit_invocation: true

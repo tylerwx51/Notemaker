@@ -6,13 +6,16 @@ import sqlite3
 import threading
 import math
 import uuid
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from svg_asset import validate_svg
+from agent.chats import Chats, ChatError
 
 LOCK = threading.Lock()
 DB = None
+CHATS = None
 
 def validate(op, nested=False):
     if not isinstance(op, dict) or not isinstance(op.get('id'), str) or len(op['id']) > 200:
@@ -80,6 +83,74 @@ def validate(op, nested=False):
         raise ValueError('Unknown operation')
 
 class Handler(BaseHTTPRequestHandler):
+    def chat_request(self):
+        url = urlparse(self.path)
+        if not (url.path == '/api/chats' or url.path.startswith('/api/chats/')):
+            return False
+        try:
+            parts = url.path.strip('/').split('/')
+            q = parse_qs(url.query)
+            if self.command == 'GET':
+                if parts == ['api', 'chats', 'options']:
+                    self.reply(200, CHATS.options())
+                elif len(parts) == 2:
+                    self.reply(200, CHATS.list(int(q.get('limit', ['5'])[0]), int(q.get('offset', ['0'])[0])))
+                elif len(parts) == 3:
+                    self.reply(200, CHATS.get(parts[2]))
+                elif len(parts) == 4 and parts[3] in ('events', 'stream'):
+                    after = int(q.get('after', ['0'])[0])
+                    events = CHATS.events(parts[2], after)
+                    if parts[3] == 'events':
+                        self.reply(200, {'events': events})
+                    else:
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
+                        self.send_header('Cache-Control', 'no-store')
+                        self.send_header('Connection', 'close')
+                        self.end_headers()
+                        self.connection.settimeout(10)
+                        deadline = time.monotonic() + 20
+                        while True:
+                            for event in events:
+                                self.wfile.write((json.dumps(event) + '\n').encode())
+                                after = event['seq']
+                            self.wfile.write(b'{}\n')  # heartbeat, also flush HTTP headers immediately
+                            self.wfile.flush()
+                            if time.monotonic() >= deadline or CHATS.closed:
+                                break
+                            events = CHATS.events(parts[2], after, wait=2)
+                        self.close_connection = True
+                else:
+                    raise ChatError('Not found', 404)
+            elif self.command == 'POST':
+                # Prevent ordinary browser forms and cross-origin pages starting agents.
+                origin = self.headers.get('Origin')
+                if origin and urlparse(origin).netloc != self.headers.get('Host'):
+                    raise ChatError('Cross-origin chat request rejected', 403)
+                if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                    raise ChatError('Expected application/json', 415)
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 150000:
+                    raise ChatError('Invalid request size')
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ChatError('Expected an object')
+                if len(parts) == 2:
+                    self.reply(200, CHATS.create(body))
+                elif len(parts) == 4 and parts[3] == 'messages':
+                    with LOCK:
+                        documents = [row[0] for row in DB.execute('SELECT DISTINCT document FROM events ORDER BY document')]
+                    self.reply(200, CHATS.send(parts[2], body, documents))
+                elif len(parts) == 4 and parts[3] == 'stop':
+                    self.reply(200, CHATS.stop(parts[2]))
+                else:
+                    raise ChatError('Not found', 404)
+        except (ValueError, KeyError, TypeError) as error:
+            self.reply(getattr(error, 'status', 400), {'error': str(error)})
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+        return True
+
     def reply(self, status, value, mime='application/json'):
         data = (json.dumps(value) if mime == 'application/json' else value).encode()
         self.send_response(status)
@@ -90,6 +161,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.chat_request():
+            return
         url = urlparse(self.path)
         if url.path == '/':
             return self.reply(200, Path(__file__).with_name('viewer.html').read_text(), 'text/html; charset=utf-8')
@@ -110,6 +183,8 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(404, {'error': 'Not found'})
 
     def do_POST(self):
+        if self.chat_request():
+            return
         if urlparse(self.path).path != '/api/events':
             return self.reply(404, {'error': 'Not found'})
         try:
@@ -138,11 +213,16 @@ class Handler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
 def main():
-    global DB
+    global DB, CHATS
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='0.0.0.0')
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--database', default='notemaker.sqlite3')
+    parser.add_argument('--agent-root', default=str(Path(__file__).resolve().parents[2]))
+    parser.add_argument('--agent-data', help='Private chat sessions and CLI replica; default: DATABASE parent/.agent-data')
+    parser.add_argument('--pi-command', default='pi')
+    parser.add_argument('--agent-upstream', help='CLI sync URL; default: http://127.0.0.1:PORT')
+    parser.add_argument('--chat-models', help='JSON file containing provider, model and efforts options')
     args = parser.parse_args()
     DB = sqlite3.connect(args.database, check_same_thread=False)
     DB.execute('PRAGMA journal_mode=WAL')
@@ -150,8 +230,17 @@ def main():
     DB.execute('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
     DB.execute("INSERT OR IGNORE INTO metadata VALUES('id', ?)", (str(uuid.uuid4()),))
     DB.commit()
+    CHATS = Chats(args.database, args.agent_root,
+                  args.agent_data or str(Path(args.database).resolve().parent / '.agent-data'),
+                  args.pi_command, args.agent_upstream or f'http://127.0.0.1:{args.port}',
+                  json.loads(Path(args.chat_models).read_text()) if args.chat_models else None)
     print(f'NoteMaker listening on http://{args.host}:{args.port}', flush=True)
-    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    try:
+        server.serve_forever()
+    finally:
+        CHATS.close()
+        server.server_close()
 
 if __name__ == '__main__':
     main()

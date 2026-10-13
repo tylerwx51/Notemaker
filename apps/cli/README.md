@@ -36,7 +36,7 @@ apps/cli/notemaker --state /path/to/replica --document notes --actor diagram-age
 - `--state`: defaults to `$NOTEMAKER_STATE`, or `$XDG_STATE_HOME/notemaker`, or
   `~/.local/state/notemaker`. The Android launcher supplies app-private storage.
 - `--document`: shared case-sensitive document name, default `notes`.
-- `--actor`: stable editing session identity, default `cli`. Give distinct agents
+- `--actor`: stable editing session identity, default `$NOTEMAKER_ACTOR` or `cli`. Give distinct agents
   distinct IDs. The Android UI uses `human`. Calls with the same ID share history.
 
 Successful commands return JSON on stdout (except `--help`); errors return JSON

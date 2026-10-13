@@ -32,6 +32,7 @@ public class MainActivity extends Activity {
     volatile boolean running=true;
     CanvasView canvas;
     EditorUi editor;
+    AgentUi agent;
     boolean displayedConnected;
     Thread syncThread, localThread;
     Store store;
@@ -47,6 +48,7 @@ public class MainActivity extends Activity {
         android.content.SharedPreferences prefs=getSharedPreferences("settings",0);
         host=prefs.getString("host",host);document=prefs.getString("document",document);
         load("fixed");
+        agent=new AgentUi(this);
         editor=new EditorUi(this);
         View root=editor.build();
         setContentView(root);
@@ -56,7 +58,7 @@ public class MainActivity extends Activity {
         configureProxy();
         localThread=new Thread(this::localLoop,"local-state");localThread.start();
     }
-    @Override public void onDestroy(){running=false;if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
+    @Override public void onDestroy(){running=false;if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
     File stateFile(){return store.file;}
     void configureProxy(){startService(new Intent(this,ReplicaService.class).putExtra("document",document).putExtra("host",host));}
     interface Work {void run(Store target) throws Exception;}
