@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.request
 import uuid
+from replica import read_replica
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / '.test-artifacts'
@@ -74,7 +75,7 @@ def converged(strokes=None):
     for serial in SERIALS:
         doc = json.loads((OUT / f'{serial}-state.json').read_text())['document']
         filename = 'files/document-' + str(uuid.UUID(bytes=hashlib.md5(doc.encode()).digest(), version=3)) + '.json'
-        saved.append(json.loads(adb(serial, 'shell', 'run-as', 'com.notemaker', 'cat', filename)))
+        saved.append(read_replica(serial, doc))
     a, b = saved
     if a['pending'] or b['pending'] or a['cursor'] != b['cursor'] or a['events'] != b['events']:
         return False
@@ -211,7 +212,7 @@ try:
 
     def received_partial():
         assert swipe.poll() is None, 'Gesture ended before remote partial stroke arrived'
-        saved = json.loads(adb(SERIALS[1], 'shell', 'run-as', 'com.notemaker', 'cat', filename))
+        saved = read_replica(SERIALS[1], "infinite")
         partial = [o for o in saved['events'] if o['kind'] == 'stroke' and o['stroke'] not in baseline]
         return any(len(o['points']) >= 2 for o in partial)
 
@@ -227,11 +228,11 @@ try:
     report('PASS live partial stroke reaches the second running app before finger-up')
     # Open an existing multipage document with the default fixed-page creation choice.
     pages_file = 'files/document-' + str(uuid.UUID(bytes=hashlib.md5(b'pages').digest(), version=3)) + '.json'
-    adb(SERIALS[1], 'shell', 'run-as', 'com.notemaker', 'rm', pages_file)
+    adb(SERIALS[1], 'shell', 'run-as', 'com.notemaker', 'rm', pages_file, pages_file+'.journal')
     instrument(SERIALS[1], 'configure', document='pages', host='http://10.0.2.2:18765', type='fixed')
 
     def existing_type_received():
-        saved = json.loads(adb(SERIALS[1], 'shell', 'run-as', 'com.notemaker', 'cat', pages_file))
+        saved = read_replica(SERIALS[1], "pages")
         creations = [o for o in saved['events'] if o['kind'] == 'document']
         return not saved['pending'] and creations and creations[0]['type'] == 'pages'
 

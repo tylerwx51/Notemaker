@@ -1,0 +1,14 @@
+{
+  "name": "Local collaboration",
+  "layer": "architecture",
+  "objects": [
+    {"object":"app","shape":"rect","x":100,"y":140,"w":300,"h":100,"text":"NoteMaker app"},
+    {"object":"cli","shape":"rect","x":600,"y":140,"w":280,"h":100,"text":"Agent CLI"},
+    {"object":"state","shape":"ellipse","x":340,"y":400,"w":320,"h":150,"text":"Shared local state"},
+    {"object":"server","shape":"rect","x":340,"y":720,"w":320,"h":110,"text":"Optional server"},
+    {"object":"app-state","shape":"arrow","from":"app","to":"state"},
+    {"object":"cli-state","shape":"arrow","from":"cli","to":"state"},
+    {"object":"state-server","shape":"arrow","from":"state","to":"server"},
+    {"object":"caption","shape":"text","x":100,"y":970,"w":800,"h":100,"text":"Local edits work offline.\nSynchronize when the connection returns.","fontSize":26}
+  ]
+}

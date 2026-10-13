@@ -59,10 +59,13 @@ let
   };
 in
 pkgs.mkShell {
-  packages = [ android.androidsdk pkgs.jdk17 pkgs.python3 pkgs.chromium pkgs.zip pkgs.unzip emulator headless pkgs.git pkgs.jujutsu pkgs.openssh ];
+  packages = [ android.androidsdk pkgs.jdk17 pkgs.python3 pkgs.chromium pkgs.zip pkgs.unzip emulator headless pkgs.git pkgs.jujutsu pkgs.openssh pkgs.tmux pkgs.iproute2 ];
   ANDROID_HOME = sdk;
   ANDROID_SDK_ROOT = sdk;
   JAVA_HOME = pkgs.jdk17.home;
+  NOTEMAKER_JSVG = (import ./apps/cli/dependencies.nix { inherit (pkgs) fetchurl; }).jsvg;
+  NOTEMAKER_ANDROIDSVG = (import ./apps/android/dependencies.nix { inherit (pkgs) fetchurl; }).androidsvg;
+  NOTEMAKER_GL_LIBRARY_PATH = "${pkgs.libglvnd}/lib";
   shellHook = ''
     echo "Android 16 ready: boox-emulator (GUI), boox-emulator-headless (automated testing), adb"
   '';

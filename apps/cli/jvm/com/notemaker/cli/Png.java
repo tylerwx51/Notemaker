@@ -1,0 +1,19 @@
+package com.notemaker.cli;
+import com.notemaker.core.*;
+import java.awt.*;
+import java.awt.geom.*;
+import java.awt.image.BufferedImage;
+import java.io.*;
+import java.util.Collections;
+import javax.imageio.ImageIO;
+
+public final class Png implements Render.Surface {
+    private final Graphics2D g;
+    private Png(Graphics2D g){this.g=g;g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);}
+    public static void export(Model m,int page,double x,double y,int w,int h,File out)throws IOException {
+        BufferedImage image=new BufferedImage(w,h,BufferedImage.TYPE_INT_ARGB);Graphics2D g=image.createGraphics();g.setColor(Color.WHITE);g.fillRect(0,0,w,h);g.translate(-x,-y);Render.draw(m,page,Collections.emptySet(),new Png(g));g.dispose();ImageIO.write(image,"png",out);
+    }
+    public void line(double x,double y,double ex,double ey,int color,double width){g.setColor(new Color(color,true));g.setStroke(new BasicStroke((float)width,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));g.draw(new Line2D.Double(x,y,ex,ey));}
+    public void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse){Shape shape=ellipse?new Ellipse2D.Double(x,y,w,h):new Rectangle2D.Double(x,y,w,h);if(fill!=null){g.setColor(new Color(fill,true));g.fill(shape);}if(width>0){g.setColor(new Color(color,true));g.setStroke(new BasicStroke((float)width));g.draw(shape);}}
+    public void text(double x,double y,String text,int color,double size){g.setColor(new Color(color,true));g.setFont(new Font(Font.SANS_SERIF,Font.PLAIN,1).deriveFont((float)size));g.drawString(text,(float)x,(float)y);}
+}

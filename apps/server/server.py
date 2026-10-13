@@ -4,6 +4,8 @@ import argparse
 import json
 import sqlite3
 import threading
+import math
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -11,11 +13,45 @@ from urllib.parse import urlparse, parse_qs
 LOCK = threading.Lock()
 DB = None
 
-def validate(op):
+def validate(op, nested=False):
     if not isinstance(op, dict) or not isinstance(op.get('id'), str) or len(op['id']) > 200:
         raise ValueError('Operation needs an id')
     kind = op.get('kind')
-    if kind == 'document':
+    if kind == 'batch':
+        actions = op.get('actions')
+        if nested or not isinstance(actions, list) or not 1 <= len(actions) <= 200:
+            raise ValueError('Invalid or nested action batch')
+        for action in actions:
+            if not isinstance(action, dict):
+                raise ValueError('Invalid action')
+            validate(dict(action, id='nested'), nested=True)
+    elif kind == 'object':
+        if not all(isinstance(op.get(k), str) and 0 < len(op[k]) <= 200 for k in ('object', 'layer')):
+            raise ValueError('Invalid object identity')
+        if op.get('shape') not in ('rect', 'ellipse', 'text', 'arrow'):
+            raise ValueError('Invalid shape')
+        for k in ('x', 'y', 'w', 'h', 'width', 'page', 'color'):
+            if type(op.get(k)) not in (int, float) or not math.isfinite(op[k]):
+                raise ValueError('Invalid object number: ' + k)
+        if any(abs(op[k]) > 1000000 for k in ('x', 'y', 'w', 'h')) or not 1 <= op['width'] <= 100:
+            raise ValueError('Object geometry out of range')
+        if op['shape'] != 'arrow' and (op['w'] <= 0 or op['h'] <= 0):
+            raise ValueError('Object dimensions must be positive')
+        if not 0 <= op['page'] <= 10000 or op['page'] != int(op['page']):
+            raise ValueError('Invalid page')
+        for k in ('color', 'fill'):
+            if k in op and (type(op[k]) not in (int, float) or not math.isfinite(op[k]) or not -2147483648 <= op[k] <= 2147483647 or op[k] != int(op[k])):
+                raise ValueError('Invalid color')
+        if 'text' in op and (not isinstance(op['text'], str) or len(op['text']) > 10000 or type(op.get('fontSize')) not in (int, float) or not 1 <= op['fontSize'] <= 500):
+            raise ValueError('Invalid object text')
+        for k in ('from', 'to'):
+            if k in op and (not isinstance(op[k], str) or not 0 < len(op[k]) <= 200):
+                raise ValueError('Invalid connector')
+    elif kind in ('object-active', 'layer-active'):
+        key = 'object' if kind == 'object-active' else 'layer'
+        if not isinstance(op.get(key), str) or not isinstance(op.get('active'), bool) or (key == 'layer' and op[key] == 'base'):
+            raise ValueError('Invalid visibility')
+    elif kind == 'document':
         if op.get('type') not in ('fixed', 'pages', 'infinite'):
             raise ValueError('Unknown document type')
     elif kind == 'layer':
@@ -54,6 +90,10 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path == '/':
             return self.reply(200, Path(__file__).with_name('viewer.html').read_text(), 'text/html; charset=utf-8')
+        if url.path == '/api/info':
+            with LOCK:
+                identity = DB.execute("SELECT value FROM metadata WHERE key='id'").fetchone()[0]
+            return self.reply(200, {'id': identity, 'protocol': 2})
         if url.path == '/api/events':
             q = parse_qs(url.query)
             try:
@@ -104,6 +144,8 @@ def main():
     DB = sqlite3.connect(args.database, check_same_thread=False)
     DB.execute('PRAGMA journal_mode=WAL')
     DB.execute('CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, document TEXT NOT NULL, operation TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(document, operation))')
+    DB.execute('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    DB.execute("INSERT OR IGNORE INTO metadata VALUES('id', ?)", (str(uuid.uuid4()),))
     DB.commit()
     print(f'NoteMaker listening on http://{args.host}:{args.port}', flush=True)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()

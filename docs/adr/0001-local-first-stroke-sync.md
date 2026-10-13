@@ -2,6 +2,10 @@
 
 Status: accepted, 2026-10-09.
 
+Extended by [ADR 0003](0003-local-replicas-and-cli.md) on 2026-10-11: the app and
+CLI now share a local replica, and the protocol includes editable diagram objects
+and atomic actor actions. The original stroke log remains compatible.
+
 ## Context
 
 The first application targets Android 16 on the BOOX Note Air6 C. Finger and

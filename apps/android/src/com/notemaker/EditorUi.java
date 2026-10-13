@@ -145,21 +145,21 @@ final class EditorUi {
         setText(title, app.document);
         setText(subtitle, app.type.equals("pages") ? "NOTEBOOK  /  PAGE " + (app.page + 1)
                 : app.type.equals("infinite") ? "INFINITE CANVAS" : "SINGLE PAGE");
-        setText(connection, app.connected
-                ? app.pending.length() == 0 ? "●  Connected" : "●  Syncing changes"
+        setText(connection, app.saveError!=null ? "Save failed" : app.saving>0 ? "Saving on device…" : app.connected
+                ? app.pendingCount == 0 ? "●  Connected" : "●  Syncing changes"
                 : "○  Offline · saved on device");
         String mode = app.erase ? "eraser" : app.pan ? "move" : "pen";
         for (Map.Entry<String, Tool> entry : tools.entrySet()) entry.getValue().active(entry.getKey().equals(mode));
 
         StringBuilder state = new StringBuilder(app.document).append('/').append(app.page).append('/').append(app.selected);
         for (Map.Entry<String, JSONObject> entry : app.layers.entrySet()) {
-            state.append('|').append(entry.getKey()).append(entry.getValue().toString()).append(app.hidden.contains(entry.getKey()));
+            state.append('|').append(entry.getKey()).append(entry.getValue().toString()).append(app.hidden.contains(entry.getKey())).append(app.model.layerActive.get(entry.getKey()));
         }
         if (!state.toString().equals(trayState)) {
             trayState = state.toString();
             rebuildLayers();
         }
-        int revision = app.events.length() + app.pending.length();
+        int revision = app.eventCount + app.pendingCount;
         long now = android.os.SystemClock.uptimeMillis();
         if (revision != thumbnailRevision && (app.canvas.points == null || now - thumbnailTime > 400)) {
             thumbnailRevision = revision;
@@ -214,6 +214,7 @@ final class EditorUi {
             layerList.removeAllViews();
             previews.clear();
             ArrayList<String> ids = new ArrayList<>(app.layers.keySet());
+            ids.removeIf(id -> Boolean.FALSE.equals(app.model.layerActive.get(id)));
             Collections.reverse(ids);
             for (int index = 0; index < ids.size(); index++) {
                 String id = ids.get(index);
@@ -286,7 +287,7 @@ final class EditorUi {
                     synchronized (app.lock) {
                         app.selected = MainActivity.id();
                         app.enqueue(MainActivity.obj("kind", "layer", "layer", app.selected, "name", name, "force", false));
-                        app.update();
+                        app.save();app.update();
                     }
                 }).show();
     }
@@ -394,6 +395,7 @@ final class EditorUi {
             default:
                 box = popupBody("Documents", "Open a note or start a new one.");
                 menuAction(box, "Open or create document…", true, app::documentDialog);
+                menuAction(box, "Edit diagram objects…", !app.model.objects.isEmpty(), app::objectDialog);
                 TextView server = text("Server\n" + app.host, 11, MUTED, false);
                 server.setPadding(0, dp(18), 0, 0);
                 box.addView(server);
@@ -459,25 +461,25 @@ final class EditorUi {
         final int number;
         final boolean visible;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        InkCache raster;String rasterKey="";
         LayerPreview(String layer, int number, boolean visible) { super(app); this.layer = layer; this.number = number; this.visible = visible; }
         protected void onDraw(Canvas c) {
             float w = getWidth(), h = getHeight();
             paint.setStyle(Paint.Style.FILL); paint.setColor(visible ? Color.WHITE : 0xffecefe9);
             c.drawRect(1, 1, w - 1, h - 1, paint);
             float scale = Math.min((w - dp(6)) / 1000f, (h - dp(20)) / 1400f);
-            c.save(); c.clipRect(1, dp(16), w - 1, h - 1);
-            c.translate((w - 1000 * scale) / 2, dp(16)); c.scale(scale, scale);
-            synchronized (app.lock) {
-                for (Map.Entry<String, JSONObject> entry : app.strokes.entrySet()) {
-                    JSONObject stroke = entry.getValue();
-                    if (layer.equals(stroke.optString("layer")) && stroke.optInt("page") == app.page && !Boolean.FALSE.equals(app.active.get(entry.getKey()))) {
-                        JSONObject preview = MainActivity.obj("color", stroke.optInt("color"),
-                                "width", Math.max(stroke.optDouble("width"), dp(1.4f) / scale),
-                                "points", stroke.optJSONArray("points"));
-                        app.canvas.drawStroke(c, preview);
-                    }
-                }
+            String key=app.document+"/"+app.page+"/"+getWidth()+"/"+getHeight();
+            if(!key.equals(rasterKey)){if(raster!=null)raster.bitmap.recycle();raster=new InkCache(getWidth(),getHeight());rasterKey=key;}
+            LinkedHashMap<String,JSONObject> settled=new LinkedHashMap<>();
+            for(Map.Entry<String,JSONObject> entry:app.strokes.entrySet()){
+                JSONObject stroke=entry.getValue();if(!entry.getKey().equals(app.canvas.current)&&layer.equals(stroke.optString("layer"))&&stroke.optInt("page")==app.page&&!Boolean.FALSE.equals(app.active.get(entry.getKey())))settled.put(entry.getKey(),stroke);
             }
+            raster.draw(c,settled,image->{image.clipRect(1,dp(16),w-1,h-1);image.translate((w-1000*scale)/2,dp(16));image.scale(scale,scale);},(image,stroke)->{
+                JSONObject preview=MainActivity.obj("color",stroke.optInt("color"),"width",Math.max(stroke.optDouble("width"),dp(1.4f)/scale),"points",stroke.optJSONArray("points"));app.canvas.drawStroke(image,preview);
+            });
+            c.save();c.clipRect(1,dp(16),w-1,h-1);c.translate((w-1000*scale)/2,dp(16));c.scale(scale,scale);
+            if(layer.equals(app.selected)&&app.canvas.points!=null)app.canvas.drawStroke(c,app.canvas.stroke());
+            synchronized(app.lock){for(Map.Entry<String,Map<String,Object>> entry:app.model.objects.entrySet()){Map<String,Object> o=entry.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==app.page&&!Boolean.FALSE.equals(app.model.objectActive.get(entry.getKey())))com.notemaker.core.Render.drawObject(app.model,o,new com.notemaker.cli.Png(c));}}
             c.restore();
             paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(1)); paint.setColor(LINE);
             c.drawRect(1, 1, w - 1, h - 1, paint);

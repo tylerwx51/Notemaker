@@ -62,16 +62,16 @@ class DebugSocket:
         assert 'exceptionDetails' not in result, result
         return result['result'].get('value')
 
-def check_browser(out, port, expected_cursor):
+def check_browser(out, port, expected_cursor, debug_port=19222):
     directory = out / 'chromium-profile'
-    browser = subprocess.Popen(['chromium', '--headless', '--no-sandbox', '--disable-gpu', '--remote-debugging-port=19222', '--remote-allow-origins=*', f'--user-data-dir={directory}', f'http://127.0.0.1:{port}/?document=integration'], stdout=(out / 'chromium.log').open('w'), stderr=subprocess.STDOUT)
+    browser = subprocess.Popen(['chromium', '--headless', '--no-sandbox', '--disable-gpu', f'--remote-debugging-port={debug_port}', '--remote-allow-origins=*', f'--user-data-dir={directory}', f'http://127.0.0.1:{port}/?document=integration'], stdout=(out / 'chromium.log').open('w'), stderr=subprocess.STDOUT)
     debug = None
     try:
         deadline = time.monotonic() + 40
         last_error = None
         while time.monotonic() < deadline:
             try:
-                pages = json.load(urllib.request.urlopen('http://127.0.0.1:19222/json', timeout=2))
+                pages = json.load(urllib.request.urlopen(f'http://127.0.0.1:{debug_port}/json', timeout=2))
                 target = next(p for p in pages if p['type'] == 'page' and '/?document=integration' in p['url'])
                 debug = DebugSocket(target['webSocketDebuggerUrl'])
                 break

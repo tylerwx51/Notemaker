@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+exec java -Djava.awt.headless=true -jar "$(dirname "$0")/build/notemaker.jar" "$@"

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import uuid
+from replica import read_replica
 import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -46,7 +47,7 @@ def capture(name):
         subprocess.check_call(['adb', '-s', SERIAL, 'exec-out', 'screencap', '-p'], stdout=output)
 
 def state():
-    return json.loads(adb('shell', 'run-as', 'com.notemaker', 'cat', FILE))
+    return read_replica(SERIAL, DOCUMENT)
 
 def operations():
     saved = state()
@@ -79,7 +80,7 @@ else:
     raise AssertionError('Emulator did not finish booting')
 adb('install', '-r', str(ROOT / 'apps/android/build/notemaker.apk'))
 adb('shell', 'am', 'force-stop', 'com.notemaker')
-adb('shell', 'run-as', 'com.notemaker', 'rm', '-f', FILE)
+adb('shell', 'run-as', 'com.notemaker', 'rm', '-f', FILE, FILE+'.journal')
 result = adb('shell', 'am', 'instrument', '-w', '-e', 'action', 'configure', '-e', 'document', DOCUMENT,
              '-e', 'host', 'http://10.0.2.2:18766', 'com.notemaker/.Integration')
 assert 'PASS configure' in result, result
