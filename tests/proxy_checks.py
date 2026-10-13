@@ -40,6 +40,13 @@ class ProxyChecks(server_checks.ServerChecks):
                     self.assertEqual(p.returncode,0,p.stderr);return json.loads(p.stdout)
                 call('document','create','pages')
                 call('diagram','add','-',value=EXAMPLE)
+                svg=Path(__file__).resolve().parents[1]/'apps/cli/examples/placed.svg'
+                placement=root/'placement.json';placement.write_text(json.dumps({'object':'proxy-svg','x':55,'y':66,'page':1}))
+                call('svg','add',str(svg),str(placement))
+                self.assertEqual(call('inspect')['objects'][-1]['svg'],svg.read_text())
+                self.assertEqual(call('inspect')['objects'][-1]['x'],55)
+                call('undo');self.assertFalse(call('inspect')['objectActive']['proxy-svg'])
+                call('redo');self.assertTrue(call('inspect')['objectActive']['proxy-svg'])
                 def edit(i):return call('object','put','-',actor=f'agent-{i}',value={'object':f'node-{i}','shape':'rect','x':i*10})
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:list(pool.map(edit,range(24)))
                 call('undo',actor='agent-3');model=call('inspect');self.assertFalse(model['objectActive']['node-3']);self.assertTrue(model['objectActive']['node-4'])

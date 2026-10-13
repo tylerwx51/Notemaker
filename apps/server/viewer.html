@@ -7,7 +7,19 @@ function render(){let layers=new Map([['base',{name:'Layer 1',force:false}]]),st
 const box=document.querySelector('#layers');box.replaceChildren();for(const [id,l] of layers){if(layerActive.get(id)===false)continue;let label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=l.force||!hidden.has(id);check.disabled=l.force;check.onchange=()=>{check.checked?hidden.delete(id):hidden.add(id);render()};label.append(check,document.createTextNode(l.name+(l.force?' (forced visible)':'')));box.append(label)}
 ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='white';ctx.fillRect(0,0,1000,1400);if(type==='infinite')ctx.setTransform(zoom,0,0,zoom,panX,panY);for(const [id,l] of layers){if(layerActive.get(id)===false||(hidden.has(id)&&!l.force))continue;for(const [sid,s] of strokes){if(s.layer!==id||active.get(sid)===false||s.page!==(type==='pages'?Number(document.querySelector('#page').value)-1:0))continue;ctx.fillStyle='#'+(s.color&0xffffff).toString(16).padStart(6,'0');ctx.strokeStyle=ctx.fillStyle;ctx.lineCap='round';let prev=null;for(const p of s.points){let w=s.width*(.25+.75*p[2]);if(prev){ctx.lineWidth=(w+prev[3])/2;ctx.beginPath();ctx.moveTo(prev[0],prev[1]);ctx.lineTo(p[0],p[1]);ctx.stroke()}ctx.beginPath();ctx.arc(p[0],p[1],w/2,0,Math.PI*2);ctx.fill();prev=[...p,w]}}for(const [oid,o] of objects){if(o.layer===id&&objectActive.get(oid)!==false&&o.page===(type==='pages'?Number(document.querySelector('#page').value)-1:0))drawObject(o,objects)}}}
 function argb(n){return '#'+(n&0xffffff).toString(16).padStart(6,'0')+((n>>>24)&255).toString(16).padStart(2,'0')}
+const svgImages=new Map();
+function drawSvg(o){
+ const key=JSON.stringify([o.svg,o.w,o.h]);let image=svgImages.get(key);
+ if(!image){
+  const root=new DOMParser().parseFromString(o.svg,'image/svg+xml').documentElement;
+  if(!root.hasAttribute('viewBox'))root.setAttribute('viewBox',`0 0 ${parseFloat(root.getAttribute('width'))} ${parseFloat(root.getAttribute('height'))}`);
+  root.setAttribute('width',o.w);root.setAttribute('height',o.h);
+  image=new Image();image.onload=render;image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(new XMLSerializer().serializeToString(root));svgImages.set(key,image);
+ }
+ if(image.complete&&image.naturalWidth)ctx.drawImage(image,o.x,o.y,o.w,o.h);
+}
 function drawObject(o,objects){
+ if(o.shape==='svg'){drawSvg(o);return;}
  let {x,y,w,h}=o;ctx.strokeStyle=argb(o.color);ctx.fillStyle=argb(o.color);ctx.lineWidth=o.width;ctx.lineCap='round';
  function line(x,y,ex,ey){ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(ex,ey);ctx.stroke()}
  if(o.shape==='arrow'){

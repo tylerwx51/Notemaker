@@ -50,9 +50,9 @@ public final class SvgAsset {
     }
     private static double length(String s){return Double.parseDouble(s.trim().replaceFirst("px$",""));}
     private static void visit(Node node,int depth,int[] count){
-        require(depth<=64&&++count[0]<=10000,"SVG is too complex");
         require(node.getNodeType()!=Node.PROCESSING_INSTRUCTION_NODE&&node.getNodeType()!=Node.ENTITY_REFERENCE_NODE,"SVG processing instructions/entities are unsupported");
         if(node instanceof Element){
+            require(depth<=64&&++count[0]<=10000,"SVG is too complex");
             Element e=(Element)node;String ns=e.getNamespaceURI(),tag=e.getLocalName();
             require("http://www.w3.org/2000/svg".equals(ns)&&TAGS.contains(tag),"Unsupported SVG element: "+tag);
             NamedNodeMap attrs=e.getAttributes();

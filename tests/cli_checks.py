@@ -13,6 +13,73 @@ CLI = ROOT / 'apps/cli/notemaker'
 EXAMPLE = json.loads((ROOT / 'apps/cli/examples/diagram.json').read_text())
 
 class CliChecks(server_checks.ServerChecks):
+    def test_svg_placement_history_export_and_sync(self):
+        source = ROOT / 'apps/cli/examples/placed.svg'
+        self.cli('document', 'create', 'pages')
+        self.cli('layer', 'put', '-', value={'layer':'art','name':'Art','force':False}, actor='human')
+        placement = self.directory / 'placement.json'
+        placement.write_text(json.dumps({'object':'generated','x':100,'y':200,'w':400,'h':200,'layer':'art','page':1}))
+        result = self.cli('svg', 'add', str(source), str(placement))
+        self.assertIn('operation', result)
+        m = self.cli('inspect');o=m['objects'][0]
+        self.assertEqual((o['shape'],o['svg'],o['x'],o['y'],o['w'],o['h'],o['page'],o['layer']),('svg',source.read_text(),100,200,400,200,1,'art'))
+        self.cli('undo', actor='human')  # independent history
+        self.assertIsNot(self.cli('inspect')['objectActive'].get('generated'), False)
+        self.cli('redo', actor='human')
+        self.cli('undo');self.assertFalse(self.cli('inspect')['objectActive']['generated'])
+        self.cli('redo')
+        self.cli('object','update','generated','-',value={'x':120,'w':300},actor='editor')
+        self.cli('undo',actor='editor');self.assertEqual(self.cli('inspect')['objects'][0]['x'],100)
+        self.cli('export',str(self.directory/'svg.png'),'1')
+        self.cli('export',str(self.directory/'svg.svg'),'1')
+        self.assertIn('data:image/svg+xml;base64,',(self.directory/'svg.svg').read_text())
+        self.cli('export',str(self.directory/'other-page.svg'),'0')
+        self.assertNotIn('<image',(self.directory/'other-page.svg').read_text())
+        self.cli('sync',self.url);self.cli('sync',self.url,replica='b')
+        self.assertEqual(self.cli('inspect'),self.cli('inspect',replica='b'))
+        self.cli('svg','add',str(source),str(placement),ok=False)  # no accidental replacement
+        raw = subprocess.run([str(CLI),'--state',str(self.directory/'stdin'),'--document',self.document,'svg','add','-'],input=source.read_text(),text=True,capture_output=True,timeout=30)
+        self.assertEqual(raw.returncode,0,raw.stderr)
+        self.assertEqual(self.cli('inspect',replica='stdin')['objects'][0]['w'],200)
+
+    def test_svg_rejections_are_atomic(self):
+        self.diagram();before=self.cli('log')
+        for source in [
+            '<svg',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 0 5"/>',
+            '<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">&x;</svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><script>alert(1)</script></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20" fill="url(https://example.com/a)"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><style>@import "https://example.com/a";</style></svg>',
+            '<?xml-stylesheet href="file:///tmp/style.css"?><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"/>',
+            '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">'+' '*262144+'</svg>',
+        ]:
+            value={'object':'bad-svg','shape':'svg','svg':source}
+            self.cli('object','put','-',value=value,ok=False)
+            self.assertEqual(self.cli('log'),before)
+            import urllib.error
+            with self.assertRaises(urllib.error.HTTPError):
+                self.post(self.document,[dict(value,id='bad',kind='object',layer='base',page=0,x=0,y=0,w=20,h=20,width=3,color=-16777216)])
+        for placement in ({'page':1},{'layer':'missing'},{'w':0},{'x':1000001},{'rotation':90}):
+            p=self.directory/'bad-placement.json';p.write_text(json.dumps(placement))
+            self.cli('svg','add',str(ROOT/'apps/cli/examples/placed.svg'),str(p),ok=False)
+            self.assertEqual(self.cli('log'),before)
+
+    def test_svg_intrinsic_size_and_isolated_export(self):
+        import base64
+        import xml.etree.ElementTree as ET
+        source='<?xml version="1.0"?><s:svg xmlns:s="http://www.w3.org/2000/svg" width="80px" height="40px"><!-- <?not-a-pi ?> --><s:rect width="80" height="40"/></s:svg>'
+        self.cli('object','put','-',value={'shape':'svg','object':'pixel-sized','svg':source})
+        o=self.cli('inspect')['objects'][0]
+        self.assertEqual((o['w'],o['h'],o['svg']),(80,40,source))
+        self.cli('export',str(self.directory/'embedded.svg'))
+        root=ET.parse(self.directory/'embedded.svg').getroot()
+        image=root.find('{http://www.w3.org/2000/svg}image')
+        embedded=ET.fromstring(base64.b64decode(image.attrib['{http://www.w3.org/1999/xlink}href'].split(',')[1]))
+        self.assertEqual(embedded.attrib['viewBox'],'0 0 80.0 40.0')
+        self.assertEqual(embedded.attrib['width'],'100%')
+        self.cli('sync',self.url)
+
     def setUp(self):
         self.local = tempfile.TemporaryDirectory()
         self.directory = Path(self.local.name)

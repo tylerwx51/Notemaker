@@ -7,6 +7,10 @@ Updated by [ADR 0004](0004-local-proxy-and-incremental-state.md): local command
 proxy, journal transactions, cached incremental models and asynchronous ink
 replace full-file saving and per-edit replay described below.
 
+[ADR 0005](0005-embedded-svg-objects.md) adds embedded SVG objects and bundles
+platform-specific SVG rendering libraries; the local replica/core remains free
+of external Java dependencies.
+
 ## Context
 
 Agents most commonly need to draw a labeled diagram on a new layer. App and CLI

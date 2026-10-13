@@ -8,8 +8,10 @@ on local Linux/Android filesystem semantics.
 
 ## Build and run
 
-All tools are supplied by the root Nix shell; there are no external Java libraries
-or application dependency downloads/lockfiles.
+All tools are supplied by the root Nix shell. SVG rendering libraries are pinned
+by URL and hash in `apps/cli/dependencies.nix` (JSVG, JVM) and
+`apps/android/dependencies.nix` (AndroidSVG). Nix fetches them at shell setup;
+the builds bundle them, so installed applications need no runtime downloads.
 
 ```sh
 nix-shell
@@ -59,6 +61,7 @@ The current trusted-LAN server has no authentication.
 | `status` | Pending count, cursor, local revision and pinned server identity. |
 | `log` | Committed events, pending operations, actor histories and local settings. |
 | `diagram add FILE\|-` | Create a new layer and editable objects atomically. |
+| `svg add FILE.svg\|- [PLACEMENT.json]` | Place a static SVG as one object; `-` reads raw SVG from stdin. |
 | `layer put FILE\|-` | Create/update `{layer,name,force}`. |
 | `object put FILE\|-` | Create/replace a complete object (defaults below). |
 | `object update ID FILE\|-` | Patch existing object's geometry, label, style, layer/page or attachments. |
@@ -84,6 +87,53 @@ The Android child uses `/system/fonts/Roboto-Regular.ttf`; set `NOTEMAKER_FONT`
 in its environment for another readable font/character coverage. Its isolated font
 initialization uses framework APIs, verified on API 36; BOOX firmware still needs
 a hardware check. Ordinary app rendering retains the system's full font fallback.
+
+## Place a generated SVG
+
+Run inside `nix-shell` after building the CLI:
+
+```sh
+cat > /tmp/placement.json <<'JSON'
+{"object":"generated-figure","x":100,"y":200,"w":600,"h":300,"layer":"base","page":0}
+JSON
+apps/cli/notemaker --document demo --actor agent-1 svg add generated.svg /tmp/placement.json
+apps/cli/notemaker --document demo --actor agent-1 object update generated-figure - <<'JSON'
+{"x":150,"y":250,"w":400,"h":200}
+JSON
+apps/cli/notemaker --document demo export /tmp/demo.png
+```
+
+Placement JSON is optional. Defaults are `x=0`, `y=0`, `layer="base"`, `page=0`,
+a generated object ID, and `w`/`h` from the SVG's viewBox dimensions (or its
+pixel width/height if no viewBox is present). Supply both `w` and `h` for a custom
+viewport. The SVG's `preserveAspectRatio` controls its fit (default centered meet).
+Layers must already exist; pages above zero require a `pages` document. Placement
+coordinates are document units. A supplied object ID must be new.
+
+The original SVG is embedded in the local replica, so deleting the source file
+does not affect the document. Placement, resizing, replacement, hide/show, and
+actor undo/redo work offline and synchronize normally. The SVG is one object;
+its internal paths are not individual editable diagram nodes. To replace its
+contents, use `object update ID` with `{"svg":"<svg ...>...</svg>"}`. JSON-only
+callers can also use `object put` with `{"shape":"svg","svg":"...",...}`;
+SVG objects work in atomic `diagram add` and `apply` actions.
+
+The local proxy reads files on the calling machine and transfers their contents;
+the tablet does not need access to those paths. A direct proxy request uses
+`args:["svg","add","-"]` and `input:{"svg":"...","x":100,...}`.
+SVG export embeds an isolated SVG image; PNG, Android canvas/layer previews, and
+the browser render the vector asset in its viewport.
+
+Supported imports are static, self-contained SVGs up to 256 KiB with an SVG
+namespace and positive viewBox or pixel dimensions. Paths (including curves),
+basic shapes, groups/transforms, text/tspans, gradients, clipping, markers, and
+basic CSS are supported. Scripts, animation, external resources, XML DTDs,
+`foreignObject`, embedded images, `use`, filters, and masks are rejected.
+CSS imports and escapes are rejected; resource references must be local `#id`
+fragments. Unsupported elements/attributes fail before an edit is committed.
+Fonts and some CSS/text details differ across renderers; convert text to paths
+when exact typography matters. Upgrade all clients and the server before syncing
+SVG objects; older versions do not understand the new shape.
 
 ## First diagram
 
@@ -113,13 +163,17 @@ Object fields:
 | Field | Meaning / default |
 | --- | --- |
 | `object` | Stable ID, generated UUID if omitted on creation. |
-| `shape` | Required: `rect`, `ellipse`, `text`, `arrow`. |
+| `shape` | Required: `rect`, `ellipse`, `text`, `arrow`, or `svg`. |
+| `svg` | Required for SVG objects: embedded static SVG source. See the import profile above. |
 | `layer`, `page` | `base`, `0` (diagram chooses its new layer). |
-| `x`, `y`, `w`, `h` | Logical coordinates; defaults `0,0,160,80`. Rect/ellipse/text dimensions must be positive. |
+| `x`, `y`, `w`, `h` | Logical coordinates; defaults `0,0,160,80` (SVG size comes from source). All non-arrow dimensions must be positive. |
 | `color`, `width` | Signed ARGB color, default -16777216 (black); width 1–100, default 3. |
 | `fill` | Optional signed ARGB fill; omitted means transparent. |
 | `text`, `fontSize` | Plain label, default empty; font size 1–500, default 24. |
 | `from`, `to` | Optional arrow attachment IDs. Unattached end uses `(x,y)` or `(x+w,y+h)`. |
+
+SVG styling and text come from the embedded source; the object's generic
+`color`, `width`, `fill`, `text`, and `fontSize` do not override it.
 
 Pages are numbered 0–10000 in the protocol/CLI; the app shows page numbers starting
 at 1. Fixed and infinite documents display page 0. Coordinates are document units,

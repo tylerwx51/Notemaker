@@ -10,7 +10,9 @@ javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-36/android.jar:bu
 find build/classes -name '*.class' > build/classes.list
 "$sdk_tools/d8" --min-api 26 --lib "$ANDROID_HOME/platforms/android-36/android.jar" --output build/dex @build/classes.list build/androidsvg.jar
 cp build/base.apk build/notemaker-unsigned.apk
-(cd build/dex && zip -q ../notemaker-unsigned.apk classes.dex)
+mkdir -p build/dex/assets/licenses
+cp licenses/androidsvg.txt build/dex/assets/licenses/androidsvg.txt
+(cd build/dex && zip -q ../notemaker-unsigned.apk classes.dex assets/licenses/androidsvg.txt)
 "$sdk_tools/zipalign" -f 4 build/notemaker-unsigned.apk build/notemaker.apk
 if [ ! -f build/debug.keystore ]; then
   keytool -genkeypair -keystore build/debug.keystore -storepass android -keypass android -alias debug -dname 'CN=NoteMaker Development' -keyalg RSA -validity 10000 >/dev/null 2>&1

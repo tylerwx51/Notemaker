@@ -62,7 +62,7 @@ class DebugSocket:
         assert 'exceptionDetails' not in result, result
         return result['result'].get('value')
 
-def check_browser(out, port, expected_cursor, debug_port=19222):
+def check_browser(out, port, expected_cursor, debug_port=19222, svg_exports=False):
     directory = out / 'chromium-profile'
     browser = subprocess.Popen(['chromium', '--headless', '--no-sandbox', '--disable-gpu', f'--remote-debugging-port={debug_port}', '--remote-allow-origins=*', f'--user-data-dir={directory}', f'http://127.0.0.1:{port}/?document=integration'], stdout=(out / 'chromium.log').open('w'), stderr=subprocess.STDOUT)
     debug = None
@@ -86,6 +86,21 @@ def check_browser(out, port, expected_cursor, debug_port=19222):
                 break
             time.sleep(.5)
         assert result['cursor'] == expected_cursor and 'Connected' in result['status'], result
+        if svg_exports:
+            deadline=time.monotonic()+20
+            while not debug.evaluate('svgImages.size>0&&Array.from(svgImages.values()).every(i=>i.complete&&i.naturalWidth>0)'):
+                assert time.monotonic()<deadline,'SVG image did not load'
+                time.sleep(.2)
+            debug.evaluate('render()')
+            pixel=debug.evaluate('Array.from(ctx.getImageData(105,1105,1,1).data)')
+            assert max(pixel[:3])<40,pixel
+            for name,mime in [('android-cli.png','image/png'),('desktop-svg.png','image/png'),('desktop-svg.svg','image/svg+xml')]:
+                data=base64.b64encode((out/name).read_bytes()).decode()
+                expression='''new Promise((resolve,reject)=>{let i=new Image();i.onerror=()=>reject('image failed');i.onload=()=>{let c=document.createElement('canvas');c.width=1000;c.height=1400;let g=c.getContext('2d');g.drawImage(i,0,0);resolve(Array.from(g.getImageData(105,1105,1,1).data))};i.src='data:'''+mime+';base64,'+data+"'})"
+                result=debug.request('Runtime.evaluate',dict(expression=expression,returnByValue=True,awaitPromise=True))
+                assert 'exceptionDetails' not in result,result
+                pixel=result['result']['value'];assert max(pixel[:3])<40 and pixel[3]==255,(name,pixel)
+            print('PASS SVG pixels in Android/JVM PNG, SVG export, and live browser',flush=True)
         # Force-visible layer must appear checked and disabled even after locally hiding it.
         assert debug.evaluate('hidden.add("test-layer");render();Array.from(document.querySelectorAll("#layers input")).some(x=>x.disabled&&x.checked)')
         png = debug.evaluate('canvas.toDataURL("image/png")')

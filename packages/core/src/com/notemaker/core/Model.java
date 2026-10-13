@@ -47,7 +47,8 @@ public final class Model {
                 id(o,"stroke");drawing(o);List<Object> points=list(o.get("points"));require(points.size()>0&&points.size()<=10000,"Invalid points");
                 for(Object p:points){List<Object> xyz=list(p);require(xyz.size()==3,"Point needs x, y, pressure");for(Object n:xyz)require(n instanceof Number&&Double.isFinite(((Number)n).doubleValue())&&Math.abs(((Number)n).doubleValue())<=1000000,"Invalid point");double pressure=((Number)xyz.get(2)).doubleValue();require(pressure>=0&&pressure<=1,"Invalid pressure");}break;
             case "object":
-                id(o,"object");drawing(o);String shape=string(o,"shape");require(Arrays.asList("rect","ellipse","text","arrow").contains(shape),"Unknown shape");
+                id(o,"object");drawing(o);String shape=string(o,"shape");require(Arrays.asList("rect","ellipse","text","arrow","svg").contains(shape),"Unknown shape");
+                if(shape.equals("svg"))SvgAsset.validate(string(o,"svg"));
                 for(String key:Arrays.asList("x","y","w","h"))range(o,key,-1000000,1000000);
                 if(!shape.equals("arrow")){require(number(o,"w")>0&&number(o,"h")>0,"Positive object dimensions required");}
                 if(o.containsKey("text")){require(string(o,"text").length()<=10000,"Text too long");range(o,"fontSize",1,500);}

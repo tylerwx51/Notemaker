@@ -53,7 +53,7 @@ public final class LocalProxy implements Closeable {
             Map<String,Object> body=map(parse(new String(bytes,StandardCharsets.UTF_8)));
             List<Object> raw=list(body.get("args"));Model.require(!raw.isEmpty(),"Missing command");List<String> args=new ArrayList<>();
             for(Object value:raw){Model.require(value instanceof String,"Arguments must be strings");String arg=(String)value;Model.require(!arg.startsWith("--"),"Proxy options belong in document/actor fields");args.add(arg);}
-            Model.require(Arrays.asList("document","inspect","status","log","diagram","apply","layer","object","stroke","undo","redo","sync").contains(args.get(0)),"Unsupported proxy command");
+            Model.require(Arrays.asList("document","inspect","status","log","diagram","svg","apply","layer","object","stroke","undo","redo","sync").contains(args.get(0)),"Unsupported proxy command");
             String doc=(String)body.getOrDefault("document","notes"),actor=(String)body.getOrDefault("actor","cli");
             List<String> local=new ArrayList<>(Arrays.asList("--state",directory.getAbsolutePath(),"--document",doc,"--actor",actor));local.addAll(args);
             Main.proxyInput.set(body.get("input"));Main.inProxy.set(true);

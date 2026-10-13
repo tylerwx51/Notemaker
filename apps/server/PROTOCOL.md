@@ -70,7 +70,16 @@ New operation kinds:
 | `object-active` | `object`, `active` | Last-operation-wins object erasure/restoration, independent of geometry. |
 | `layer-active` | `layer`, `active` | Shared layer erasure/restoration. Base layer cannot be deactivated. |
 
-`shape` is `rect`, `ellipse`, `text`, or `arrow`. Rect/ellipse/text dimensions are
+`shape` is `rect`, `ellipse`, `text`, `arrow`, or `svg`. SVG objects require an
+additional `svg` string containing a self-contained static SVG (up to 256 KiB).
+The `x,y,w,h` rectangle is its clipped viewport; the SVG's `preserveAspectRatio`
+controls fitting, defaulting to centered meet. Source is embedded in every
+snapshot, including undo history; no asset URL or separate upload is involved.
+See [the import profile](../cli/README.md#place-a-generated-svg) for supported
+elements. The server validates that profile before accepting a batch. SVGs use
+the same layer/page, active-state, ordering, and actor history as other objects.
+
+Rect/ellipse/text/SVG dimensions are
 positive; arrows use `(x,y)` and `(x+w,y+h)` as fallback endpoints. Optional `from`
 and `to` reference node centers, with endpoints intersected at node boundaries;
 connectors follow current node geometry. `color`/`fill` are signed 32-bit ARGB;

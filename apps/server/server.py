@@ -9,6 +9,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+from svg_asset import validate_svg
 
 LOCK = threading.Lock()
 DB = None
@@ -28,8 +29,10 @@ def validate(op, nested=False):
     elif kind == 'object':
         if not all(isinstance(op.get(k), str) and 0 < len(op[k]) <= 200 for k in ('object', 'layer')):
             raise ValueError('Invalid object identity')
-        if op.get('shape') not in ('rect', 'ellipse', 'text', 'arrow'):
+        if op.get('shape') not in ('rect', 'ellipse', 'text', 'arrow', 'svg'):
             raise ValueError('Invalid shape')
+        if op['shape'] == 'svg':
+            validate_svg(op.get('svg'))
         for k in ('x', 'y', 'w', 'h', 'width', 'page', 'color'):
             if type(op.get(k)) not in (int, float) or not math.isfinite(op[k]):
                 raise ValueError('Invalid object number: ' + k)

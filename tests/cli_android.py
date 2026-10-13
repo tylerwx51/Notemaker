@@ -106,6 +106,15 @@ try:
         assert state['model']['layerActive']['architecture'] is True
         tablet('redo')
         print('PASS actor-specific atomic diagram undo/redo offline',flush=True)
+        svg_source=ROOT/'apps/cli/examples/placed.svg'
+        adb('push',str(svg_source),'/data/local/tmp/placed.svg')
+        placement=OUT/'svg-placement.json';placement.write_text(json.dumps({'object':'tablet-svg','x':100,'y':1100,'w':400,'h':200}))
+        adb('push',str(placement),'/data/local/tmp/svg-placement.json')
+        state=tablet('svg','add','/data/local/tmp/placed.svg','/data/local/tmp/svg-placement.json')
+        assert state['model']['objects'][-1]['svg']==svg_source.read_text()
+        state=tablet('undo');assert state['model']['objectActive']['tablet-svg'] is False
+        state=tablet('redo');assert state['model']['objectActive']['tablet-svg'] is True
+        print('PASS Android SVG file placement and atomic undo/redo offline',flush=True)
         tablet('export','/data/user/0/com.notemaker/files/agent-export.png')
         data=subprocess.check_output(['adb','-s',SERIAL,'exec-out','run-as','com.notemaker','cat','files/agent-export.png'])
         assert data.startswith(b'\x89PNG')
@@ -124,7 +133,7 @@ try:
         wait(lambda:urllib.request.urlopen(f'http://127.0.0.1:{PORT}/api/info',timeout=2).status==200)
         wait(lambda:not replica()['pending'])
         desktop('sync',f'http://127.0.0.1:{PORT}')
-        assert len(desktop('inspect')['objects'])==8
+        assert len(desktop('inspect')['objects'])==9
         desktop('object','update','cli','-',value={'text':'Desktop agent','x':580})
         desktop('layer','put','-',value={'layer':'test-layer','name':'Forced layer','force':True})
         desktop('sync',f'http://127.0.0.1:{PORT}')
@@ -143,7 +152,9 @@ try:
         assert state['model']==desktop('inspect')
         assert state['model']['objectActive']['app'] is False
         print('PASS restart/reconnect merges move and erase without resurrection',flush=True)
-        stats=check_browser(OUT,PORT,state['cursor'],debug_port=19224)
+        desktop('export',str(OUT/'desktop-svg.png'))
+        desktop('export',str(OUT/'desktop-svg.svg'))
+        stats=check_browser(OUT,PORT,state['cursor'],debug_port=19224,svg_exports=True)
         assert stats['pixels']>5000,stats
         print('PASS browser renders synchronized diagram objects',flush=True)
         adb('shell','am','force-stop','com.notemaker')

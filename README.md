@@ -177,6 +177,7 @@ nix-shell
 apps/cli/build.sh --android
 apps/cli/notemaker --help
 apps/cli/notemaker --state .test-artifacts/my-replica --document demo --actor agent-1 diagram add apps/cli/examples/diagram.json
+apps/cli/notemaker --state .test-artifacts/my-replica --document demo --actor agent-1 svg add apps/cli/examples/placed.svg
 apps/cli/notemaker --state .test-artifacts/my-replica --document demo inspect
 apps/cli/notemaker --state .test-artifacts/my-replica --document demo export .test-artifacts/demo.png
 apps/cli/notemaker --state .test-artifacts/my-replica --document demo sync http://localhost:8765
@@ -193,6 +194,14 @@ On Android use **Notes → Edit diagram objects…** to edit geometry/labels or
 erase/restore an object. The app and browser render the same object model.
 A diagram is one atomic, undoable action for its actor. Concurrent geometry
 changes resolve in server commit order; erasure is independent of geometry.
+
+Generated SVGs can be placed with `svg add FILE.svg [PLACEMENT.json]`. Optional
+placement JSON specifies `x`, `y`, `w`, `h`, `layer`, `page`, and `object` ID.
+Each SVG remains a vector asset embedded in one movable, resizable, undoable
+object, available offline on both CLI runtimes. See the [SVG import profile and
+examples](apps/cli/README.md#place-a-generated-svg). Nix fetches the hash-pinned
+JSVG and AndroidSVG libraries, which are bundled into the CLI/APK. Rebuild and
+upgrade the app, CLI, and server together before synchronizing SVG objects.
 
 The installed Android APK includes the CLI. `MainActivity.startCli(args)` launches
 it as a child process under the app's UID and supplies its private state directory

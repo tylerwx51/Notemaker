@@ -10,6 +10,7 @@ public final class Actions {
     public interface Build { List<Object> create(Model model); }
     public static String id(){return UUID.randomUUID().toString();}
     public static Map<String,Object> drawing(Map<String,Object> input,String layer){
+        if("svg".equals(input.get("shape"))){input=map(copy(input));double[] size=SvgAsset.validate(string(input,"svg"));input.putIfAbsent("w",size[0]);input.putIfAbsent("h",size[1]);}
         Map<String,Object> o=map(copy(input));o.put("kind","object");o.putIfAbsent("object",id());o.putIfAbsent("layer",layer);o.putIfAbsent("page",0);o.putIfAbsent("color",-16777216);o.putIfAbsent("width",3);o.putIfAbsent("fontSize",24);o.putIfAbsent("text","");o.putIfAbsent("x",0);o.putIfAbsent("y",0);o.putIfAbsent("w",160);o.putIfAbsent("h",80);Model.validate(o);return o;
     }
     public static List<Object> diagram(Model model,Map<String,Object> input){

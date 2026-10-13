@@ -13,5 +13,7 @@ if [ "${1:-}" = --android ]; then
   javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-36/android.jar:build/androidsvg.jar" -d build/android ../../packages/core/src/com/notemaker/core/*.java src/com/notemaker/cli/*.java android/com/notemaker/cli/*.java
   find build/android -name '*.class' > build/android.list
   "$ANDROID_HOME/build-tools/36.0.0/d8" --min-api 26 --lib "$ANDROID_HOME/platforms/android-36/android.jar" --output build/dex @build/android.list build/androidsvg.jar
-  (cd build/dex && zip -q ../notemaker-android.jar classes.dex)
+  mkdir -p build/dex/assets/licenses
+  cp ../android/licenses/androidsvg.txt build/dex/assets/licenses/androidsvg.txt
+  (cd build/dex && zip -q ../notemaker-android.jar classes.dex assets/licenses/androidsvg.txt)
 fi

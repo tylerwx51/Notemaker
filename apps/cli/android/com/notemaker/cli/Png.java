@@ -5,6 +5,7 @@ import java.io.*;
 import java.util.Collections;
 
 public final class Png implements Render.Surface {
+    private static final java.util.Map<String,com.caverock.androidsvg.SVG> SVGS=new java.util.LinkedHashMap<String,com.caverock.androidsvg.SVG>(16,.75f,true){protected boolean removeEldestEntry(java.util.Map.Entry<String,com.caverock.androidsvg.SVG> e){return size()>16;}};
     private final Canvas canvas;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     public Png(Canvas canvas){this.canvas=canvas;paint.setStrokeCap(Paint.Cap.ROUND);}
@@ -26,4 +27,11 @@ public final class Png implements Render.Surface {
     public void line(double x,double y,double ex,double ey,int color,double width){paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)width);canvas.drawLine((float)x,(float)y,(float)ex,(float)ey,paint);}
     public void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse){RectF r=new RectF((float)x,(float)y,(float)(x+w),(float)(y+h));if(fill!=null){paint.setColor(fill);paint.setStyle(Paint.Style.FILL);if(ellipse)canvas.drawOval(r,paint);else canvas.drawRect(r,paint);}if(width>0){paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)width);if(ellipse)canvas.drawOval(r,paint);else canvas.drawRect(r,paint);}}
     public void text(double x,double y,String text,int color,double size){paint.setColor(color);paint.setStyle(Paint.Style.FILL);paint.setTextSize((float)size);canvas.drawText(text,(float)x,(float)y,paint);}
+    public void svg(double x,double y,double w,double h,String source){
+        synchronized(SVGS){
+            com.caverock.androidsvg.SVG svg=SVGS.get(source);
+            if(svg==null){try{svg=com.caverock.androidsvg.SVG.getFromString(SvgAsset.viewport(source));}catch(com.caverock.androidsvg.SVGParseException e){throw new IllegalArgumentException("Could not render SVG",e);}SVGS.put(source,svg);}
+            canvas.save();try{canvas.translate((float)x,(float)y);canvas.clipRect(0,0,(float)w,(float)h);svg.renderToCanvas(canvas,new RectF(0,0,(float)w,(float)h));}finally{canvas.restore();}
+        }
+    }
 }

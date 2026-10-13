@@ -10,6 +10,7 @@ public final class Render {
         void line(double x,double y,double x2,double y2,int color,double width);
         void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse);
         void text(double x,double baseline,String text,int color,double size);
+        void svg(double x,double y,double w,double h,String source);
     }
     public static void draw(Model m,int page,Set<String> hidden,Surface c){
         for(Map.Entry<String,Map<String,Object>> layer:m.layers.entrySet()){
@@ -27,6 +28,7 @@ public final class Render {
     }
     public static void drawObject(Model m,Map<String,Object> o,Surface c){
         double x=number(o,"x"),y=number(o,"y"),w=number(o,"w"),h=number(o,"h"),width=number(o,"width");int color=((Number)o.get("color")).intValue();String shape=string(o,"shape");
+        if(shape.equals("svg")){c.svg(x,y,w,h,string(o,"svg"));return;}
         if(shape.equals("arrow")){
             double[] ends=endpoints(m,o);x=ends[0];y=ends[1];double ex=ends[2],ey=ends[3];
             c.line(x,y,ex,ey,color,width);double angle=Math.atan2(ey-y,ex-x),length=Math.max(12,width*4);
@@ -55,6 +57,10 @@ public final class Render {
         public Svg(double x,double y,double w,double h){s.append("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"").append(w).append("\" height=\"").append(h).append("\" viewBox=\"").append(x).append(' ').append(y).append(' ').append(w).append(' ').append(h).append("\"><rect x=\"").append(x).append("\" y=\"").append(y).append("\" width=\"").append(w).append("\" height=\"").append(h).append("\" fill=\"white\"/>");}
         private String color(int c){return String.format(Locale.ROOT,"#%06x",c&0xffffff);}
         private double alpha(int c){return (c>>>24)/255.0;}
+        public void svg(double x,double y,double w,double h,String source){
+            String data=Base64.getEncoder().encodeToString(SvgAsset.viewport(source).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            s.append("<image x=\"").append(x).append("\" y=\"").append(y).append("\" width=\"").append(w).append("\" height=\"").append(h).append("\" preserveAspectRatio=\"none\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href=\"data:image/svg+xml;base64,").append(data).append("\"/>");
+        }
         public void line(double x,double y,double ex,double ey,int color,double width){s.append("<line x1=\"").append(x).append("\" y1=\"").append(y).append("\" x2=\"").append(ex).append("\" y2=\"").append(ey).append("\" stroke=\"").append(color(color)).append("\" stroke-opacity=\"").append(alpha(color)).append("\" stroke-width=\"").append(width).append("\" stroke-linecap=\"round\"/>");}
         public void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse){s.append(ellipse?"<ellipse cx=\"":"<rect x=\"").append(ellipse?x+w/2:x).append(ellipse?"\" cy=\"":"\" y=\"").append(ellipse?y+h/2:y).append(ellipse?"\" rx=\"":"\" width=\"").append(ellipse?w/2:w).append(ellipse?"\" ry=\"":"\" height=\"").append(ellipse?h/2:h).append("\" stroke=\"").append(color(color)).append("\" stroke-opacity=\"").append(alpha(color)).append("\" stroke-width=\"").append(width).append("\" fill=\"").append(fill==null?"none":color(fill)).append("\" fill-opacity=\"").append(fill==null?1:alpha(fill)).append("\"/>");}
         public void text(double x,double y,String text,int color,double size){s.append("<text x=\"").append(x).append("\" y=\"").append(y).append("\" fill=\"").append(color(color)).append("\" fill-opacity=\"").append(alpha(color)).append("\" font-family=\"sans-serif\" font-size=\"").append(size).append("\">").append(text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")).append("</text>");}

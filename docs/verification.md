@@ -1,5 +1,66 @@
 # Verification
 
+## SVG placement — 2026-10-13
+
+Executed through the root Nix environment:
+
+```sh
+nix-shell --run 'apps/cli/build.sh --android && apps/android/build.sh'
+nix-shell --run 'python3 tests/cli_checks.py'
+nix-shell --run 'python3 tests/proxy_checks.py'
+nix-shell --run 'python3 tests/server_checks.py'
+nix-shell --run 'python3 tests/cli_android.py'
+```
+
+JVM CLI, Android DEX CLI, and signed APK builds passed. The final CLI suite passed
+14 checks, proxy suite 6, and server suite 3 (CLI/proxy suites also inherit the
+server checks). Actual CLI processes exercised SVG file and raw-stdin import,
+structured placement, page/layer targeting, intrinsic dimensions, prefixed XML,
+source persistence, movement, actor-specific undo/redo, duplicate-ID rejection,
+proxy file transfer, and synchronization to a second replica. Malformed XML,
+invalid geometry, oversized source, scripts, external references, XML entities,
+and processing instructions failed without partial edits. The valid SVG profile
+was accepted by both Java and Python validators.
+
+The isolated API 36 emulator check passed app-spawned SVG file import through
+the local proxy while offline, undo/redo, desktop/tablet convergence, and app
+restart persistence. A fixture with a nonzero viewBox origin, gradient, transformed
+group, curved path, circle, and text rendered at the expected position. Chromium
+pixel probes checked Android CLI PNG, JVM PNG, embedded SVG export, and the live
+browser canvas. Artifacts are in `.test-artifacts/cli-android/`. Existing concurrent
+pen input, object editor, history, and reconnect checks passed in the same run.
+
+No remote deployment, personal-document edit, or physical BOOX installation was
+performed. E Ink behavior and physical-tablet SVG rendering remain untested.
+Font metrics and CSS details may vary across rendering engines; this is a static
+SVG subset, documented in the CLI README and ADR 0005.
+
+### Physical BOOX follow-up — 2026-10-13
+
+Investigated the physical BOOX's reported desynchronization after placing the
+generated SVG in the live `notes` document. Its configured URL was
+`http://127.0.0.1:8765`, but `adb reverse --list` was empty. The installed APK was
+also the October 12 build, before SVG support. At inspection, its cursor was 256
+with 57 pending operations. Its pinned server identity matched the live server.
+
+Stopped the app and backed up its files/preferences and installed APK under
+`.test-artifacts/boox-svg-sync/`. Restored `adb -s eac89823 reverse tcp:8765 tcp:8765`.
+An explicit sync using the old installed CLI then failed with `Unknown shape`,
+confirming that connectivity alone could not resolve the backlog. Installed the
+tested current APK using `adb install -r`, preserving app data, and reopened it.
+
+The upgraded app reached cursor 418 with zero pending operations. All 301
+operation IDs from the stopped-app backup, including the 57 previously pending
+operations, were present in committed events; actor histories were unchanged.
+The BOOX and server-synchronized desktop models matched exactly (56 strokes and
+one SVG object at that checkpoint). The physical device screenshot showed
+**Connected** and the mountain illustration rendered on the canvas. No fatal app
+exception appeared in the collected logs. This verifies physical-device SVG
+rendering and synchronization, but not stylus latency or E Ink refresh quality.
+The USB tunnel still needs recreation after a USB/ADB connection reset.
+
+## Earlier application verification
+
 Executed locally on 2026-10-09–10 through the root Nix development environment.
 
 ## Commands

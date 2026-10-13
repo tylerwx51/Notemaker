@@ -17,6 +17,7 @@ public final class Main {
         + "--proxy-file FILE          Send commands to a local proxy descriptor\nserve [PORT [SERVER_URL]]   Start local replica proxy (default port 8766)\n"
         + "document create [fixed|pages|infinite] | document list\ninspect | status | log\n"
         + "diagram add FILE|-         Atomic new layer and editable diagram objects\n"
+        + "svg add FILE.svg|- [PLACEMENT.json]   Place SVG; optional {x,y,w,h,layer,page,object}\n"
         + "layer put FILE|-           {layer,name,force} (create or update)\nlayer hide ID | layer show ID\n"
         + "object put FILE|-          Create/replace an editable object\n"
         + "object update ID FILE|-    Patch geometry, label or styling\n"
@@ -41,7 +42,8 @@ public final class Main {
         if(proxy!=null){
             Map<String,Object> descriptor=map(parse(new String(Files.readAllBytes(Paths.get(proxy)),StandardCharsets.UTF_8)));
             Object value=null;String cmd=a.get(0);
-            if(cmd.equals("apply")||cmd.equals("diagram")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke"))&&(a.contains("put")||a.contains("update")))){
+            if(cmd.equals("svg")){value=svgInput(a.subList(1,a.size()));a=new ArrayList<>(Arrays.asList("svg","add","-"));}
+            else if(cmd.equals("apply")||cmd.equals("diagram")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke"))&&(a.contains("put")||a.contains("update")))){
                 int last=a.size()-1;value=input(a.get(last));a.set(last,"-");
             }
             if(cmd.equals("export"))remoteModel=Model.fromJson(map(LocalProxy.request(descriptor,doc,actor,Arrays.asList("inspect"),null)));
@@ -71,6 +73,10 @@ public final class Main {
             case "watch":arity(a,1);while(true){try{System.out.println(write(store.sync(a.get(0))));}catch(Exception e){System.err.println(write(object("error",e.getMessage(),"retrying",true)));}Thread.sleep(1000);}
             case "undo":case "redo":arity(a,0);return store.history(actor,command.equals("redo"));
             case "diagram":arity(a,2);require(a.get(0).equals("add"),"diagram add FILE|-");Map<String,Object> diagram=map(input(a.get(1)));return store.commit(actor,m->Actions.diagram(m,diagram));
+            case "svg":{
+                Map<String,Object> raw=svgInput(a);raw.put("shape","svg");Map<String,Object> drawing=Actions.drawing(raw,"base");
+                return store.commit(actor,m->{require(!m.objects.containsKey(drawing.get("object")),"Object ID already exists; use object update");return Arrays.asList(drawing);});
+            }
             case "apply":arity(a,1);List<Object> ops=list(input(a.get(0)));return store.commit(actor,m->ops);
             case "layer":case "object":case "stroke":{
                 require(!a.isEmpty(),"Missing subcommand");String sub=a.remove(0);String kind=command;
@@ -88,9 +94,20 @@ public final class Main {
         }
     }
     private static void arity(List<String>a,int n){require(a.size()==n,"Expected "+n+" arguments; see --help");}
+    private static Map<String,Object> svgInput(List<String> a)throws IOException{
+        require((a.size()==2||a.size()==3)&&a.get(0).equals("add"),"svg add FILE.svg|- [PLACEMENT.json]");
+        if(Boolean.TRUE.equals(inProxy.get())){arity(a,2);return map(input(a.get(1)));}
+        require(a.size()!=3||!a.get(1).equals("-")||!a.get(2).equals("-"),"SVG and placement cannot both read stdin");
+        Map<String,Object> placement=a.size()==3?map(input(a.get(2))):object();
+        for(String key:placement.keySet())require(Arrays.asList("x","y","w","h","layer","page","object").contains(key),"Unknown SVG placement field: "+key);
+        placement.put("svg",readInput(a.get(1)));return placement;
+    }
     private static Object input(String path) throws IOException {
         if(Boolean.TRUE.equals(inProxy.get())){require(path.equals("-")&&proxyInput.get()!=null,"Proxy input must be supplied in the input field with FILE=-");return copy(proxyInput.get());}
 
-        byte[] bytes;if(path.equals("-")){ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=System.in.read(buffer))!=-1){b.write(buffer,0,n);require(b.size()<=3000000,"Input exceeds 3 MB");}bytes=b.toByteArray();}else{require(Files.size(Paths.get(path))<=3000000,"Input exceeds 3 MB");bytes=Files.readAllBytes(Paths.get(path));}return parse(new String(bytes,StandardCharsets.UTF_8));
+        return parse(readInput(path));
+    }
+    private static String readInput(String path)throws IOException{
+        byte[] bytes;if(path.equals("-")){ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=System.in.read(buffer))!=-1){b.write(buffer,0,n);require(b.size()<=3000000,"Input exceeds 3 MB");}bytes=b.toByteArray();}else{require(Files.size(Paths.get(path))<=3000000,"Input exceeds 3 MB");bytes=Files.readAllBytes(Paths.get(path));}return new String(bytes,StandardCharsets.UTF_8);
     }
 }

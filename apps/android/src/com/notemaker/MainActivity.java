@@ -149,7 +149,9 @@ public class MainActivity extends Activity {
     void editObject(String id){synchronized(lock){
         Map<String,Object> original=model.objects.get(id);if(original==null)return;
         LinearLayout form=new LinearLayout(this);form.setOrientation(1);form.setPadding(24,12,24,12);Map<String,EditText> fields=new LinkedHashMap<>();
-        String[] keys={"text","x","y","w","h","fontSize"},labels={"Label","X position","Y position","Width","Height","Font size"};
+        boolean svg="svg".equals(original.get("shape"));
+        String[] keys=svg?new String[]{"x","y","w","h"}:new String[]{"text","x","y","w","h","fontSize"};
+        String[] labels=svg?new String[]{"X position","Y position","Width","Height"}:new String[]{"Label","X position","Y position","Width","Height","Font size"};
         for(int index=0;index<keys.length;index++){String key=keys[index];TextView label=new TextView(this);label.setText(labels[index]);form.addView(label);EditText field=new EditText(this);field.setText(String.valueOf(original.getOrDefault(key,key.equals("text")?"":24)));if(!key.equals("text"))field.setInputType(8194|4096);form.addView(field);fields.put(key,field);}
         new AlertDialog.Builder(this).setTitle("Edit object").setView(form).setPositiveButton("Save",(d,w)->{
             try{synchronized(lock){Map<String,Object> patch=Json.object();for(Map.Entry<String,EditText> f:fields.entrySet())patch.put(f.getKey(),f.getKey().equals("text")?f.getValue().getText().toString():Double.parseDouble(f.getValue().getText().toString()));
