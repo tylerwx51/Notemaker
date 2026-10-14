@@ -1,6 +1,6 @@
 # NoteMaker CLI
 
-The CLI edits a durable local replica. It never needs the server for drawing,
+The CLI sends edits to a selected proxy owning a durable local replica. It never needs the server for drawing,
 inspection, undo/redo, or export. Use one replica directory per device/server
 workspace, shared by local users/agents, and separate directories across devices.
 Do not put the replica on a network filesystem: locking and atomic rename depend
@@ -35,20 +35,24 @@ apps/cli/notemaker --state /path/to/replica --document notes --actor diagram-age
 
 - `--state`: defaults to `$NOTEMAKER_STATE`, or `$XDG_STATE_HOME/notemaker`, or
   `~/.local/state/notemaker`. The Android launcher supplies app-private storage.
+- `--proxy-file`: selected running proxy descriptor, default `$NOTEMAKER_PROXY_FILE`.
+  Required for writes and synchronization. Without it, `--state` opens a read-only
+  replica; `serve` acquires exclusive ownership of that directory.
 - `--document`: shared case-sensitive document name, default `notes`.
 - `--actor`: stable editing session identity, default `$NOTEMAKER_ACTOR` or `cli`. Give distinct agents
   distinct IDs. The Android UI uses `human`. Calls with the same ID share history.
 
 Successful commands return JSON on stdout (except `--help`); errors return JSON
-on stderr and exit 1. `watch` emits successive JSON results and retries errors.
+on stderr and exit 1.
 Input may be a JSON file or `-` for stdin. Do not pass JSON through a shell when
 launching from an application: use argument arrays and write stdin.
 
 Mutations return an operation ID and, where applicable, generated object/layer IDs.
 Mutations are local transactions, not idempotent requests: if a caller loses the
 result, inspect `log` before retrying. Synchronization retries are idempotent.
-No command silently contacts an AI provider or a server. `sync` and `watch` are
-explicit network actions; server URL/credentials are not embedded in source.
+No command contacts an AI provider. Proxy commands contact the selected proxy,
+which synchronizes configured documents automatically; upstream addresses and
+credentials are not embedded in source.
 The current trusted-LAN server has no authentication.
 
 ## Actions
@@ -72,8 +76,11 @@ The current trusted-LAN server has no authentication.
 | `apply FILE\|-` | Atomic array of layer/object/stroke/active operations; no document creation or nested batches. |
 | `undo` / `redo` | Compensating action for the selected actor. |
 | `export FILE.svg\|FILE.png [PAGE [X Y WIDTH HEIGHT]]` | Render a page/viewport; page is zero-based. Default viewport 0,0,1000,1400. |
-| `sync URL` | One upload batch and complete paginated catch-up; repeat while `pending` is nonzero. |
-| `watch URL` | Retry synchronization once per second until interrupted. |
+| `sync [UPSTREAM]` | Request a rate-limited proxy synchronization pass; optional URL or proxy descriptor path configures its sole upstream. A receipt from an intermediate proxy leaves actions pending until the main server commits them. |
+| `configure UPSTREAM` | Set the sole upstream URL or descriptor path (on the proxy host); empty string disconnects. |
+| `snapshot` | Materialized model plus revision, pending/event counts and local editor preferences. |
+| `append FILE\|-` | Append one raw protocol action with a generated ID; used for editor strokes with editor-managed undo. |
+| `settings FILE\|-` | Local editor metadata: hidden, undo, redo string arrays, selected layer and page. Never replicated upstream. |
 
 Inspection retains erased entities for recovery; use the active maps and layer
 membership to determine what is currently visible. Export ignores UI-local hiding
@@ -89,6 +96,9 @@ initialization uses framework APIs, verified on API 36; BOOX firmware still need
 a hardware check. Ordinary app rendering retains the system's full font fallback.
 
 ## Place a generated SVG
+
+These examples require a running proxy selected by `NOTEMAKER_PROXY_FILE`; see
+[First diagram](#first-diagram) for startup.
 
 Run inside `nix-shell` after building the CLI:
 
@@ -136,6 +146,13 @@ when exact typography matters. Upgrade all clients and the server before syncing
 SVG objects; older versions do not understand the new shape.
 
 ## First diagram
+
+Start `notemaker --state /path/to/replica --document demo serve 8766` in a
+separate Nix shell. In the client shell, set
+`export NOTEMAKER_PROXY_FILE=/path/to/replica/proxy.json` before the editing
+examples in this document. Stop the proxy with Ctrl-C. Reads can instead use
+`env -u NOTEMAKER_PROXY_FILE notemaker --state /path/to/replica inspect`.
+
 
 ```sh
 apps/cli/notemaker --document demo --actor agent-1 diagram add apps/cli/examples/diagram.json
@@ -195,21 +212,23 @@ new String[]{"--actor", "agent-session-17", "diagram", "add", "-"}
 The launcher runs `/system/bin/app_process /system/bin com.notemaker.cli.Main`,
 sets `CLASSPATH` to the installed APK, and supplies the current document and app's
 private replica proxy descriptor. The child uses the app's authenticated
-localhost proxy. No root, writable executable extraction, or Termux is required.
+selected proxy (the device's localhost proxy by default). No root, writable executable extraction, or Termux is required.
 Android may stop the app and its children; durable pending edits survive this and
 synchronize when the app next runs. The local service synchronizes while Android
 permits it to run. Force-stop ends the service. Desktop users run `serve` with an
-upstream URL or `watch` for continuous synchronization.
+upstream URL or proxy descriptor for continuous synchronization.
 
 `tests/cli_android.py` invokes this launcher through instrumentation in the actual
 Activity; it does not substitute `adb shell` for the app-spawned CLI process.
 
 ## Conflict and history semantics
 
-Concurrent local writers acquire a per-document lock, catch up new journal
-records into cached state, and append a durable transaction. A separate lock serializes sync workers. Network
-I/O never holds the local editing lock. Upload acknowledgements remove only the
-operations sent by that worker, preserving new local edits made during its request.
+Only the proxy writes document state. It holds the replica-directory ownership
+lock and serializes durable document transactions. Direct readers take the
+document lock and see complete snapshots; they do not repair journal tails.
+The proxy recovers incomplete tails. Its single sync worker never holds the
+document lock during network I/O. Pending actions survive intermediate receipts
+and are removed only as their main-server commits are durably applied.
 
 The server establishes a total order. Geometry snapshots use last committed
 operation wins; erasure uses its own active-state register. Offline optimistic
@@ -226,32 +245,44 @@ Prefer a new agent-owned layer for independent contributions.
 
 ## Local proxy
 
-`--proxy-file FILE` selects the connection descriptor written by a running local
-proxy. Use `notemaker --state DIR --document NAME serve [PORT [SERVER_URL]]` to
-start the JVM service (default port 8766). An optional upstream URL synchronizes
-the selected document automatically; `sync URL` is also available through the
-proxy. Other documents can be accessed locally and explicitly synchronized.
+Use `notemaker --state DIR --document NAME serve [PORT [UPSTREAM]]` to start
+the owner (default port 8766). UPSTREAM is a main-server URL or private descriptor
+path for another durable proxy. No upstream is needed for editing. One proxy
+owns a directory; a second owner fails. `--proxy-file FILE` or
+`NOTEMAKER_PROXY_FILE` selects it for clients. Standalone mutations and the old
+`watch` command are no longer supported.
 
-The descriptor is private JSON `{"url":"http://127.0.0.1:8766","token":"…"}`.
-It changes on service restart. The listener binds to loopback only. Requests use
-`POST /command`, `Authorization: Bearer <token>` and `Content-Type: application/json`:
+The private descriptor is `{"url":"http://127.0.0.1:8766","token":"…","id":"…"}`.
+Identity and token survive restart in `proxy-config.json`, which also persists
+the upstream and pinned main-server identity. Back up this file with the replica.
+The listener binds to loopback; use ADB/SSH forwarding for another device.
+New proxy links validate the ancestor chain and reject cycles (maximum 64 hops).
+Proxy ancestors must be reachable to validate a new link; an existing link can
+remain configured while disconnected. Each proxy has one upstream for all its
+locally opened documents.
+
+Commands use `POST /command`, `Authorization: Bearer <token>` and JSON:
 
 ```json
 {"document":"notes","actor":"agent-1","args":["object","update","app","-"],"input":{"x":150,"text":"Updated"}}
 ```
 
-Responses are `{"result": ...}` or HTTP 400 `{"error": ...}`. Mutation responses
-follow journal fsync. Each diagram/batch remains one atomic action, and actor
-histories stay separate. `inspect`, `status`, `log`, `document`, `diagram`, `apply`,
-`layer`, `object`, `stroke`, `undo`, `redo`, and `sync` are accepted. Request bodies
-are capped at 4 MB; action limits are unchanged. Use the `input` field and `-`
-for JSON input; the service does not open caller-supplied input paths. The CLI
-reads input files on the client and sends their parsed contents. CLI `export`
-fetches the effective model and writes the image locally in the calling process.
-`serve` and `watch` are local process commands rather than proxy RPC commands.
+Responses are `{"result": ...}` or HTTP 400 `{"error": ...}`. Successful mutations
+follow journal fsync. Each diagram/batch is atomic and actor histories remain
+separate. All action/read commands above except `serve` and `export` are accepted.
+CLI export fetches the effective model and writes the image in the client process.
+Input files are read by the client; the proxy receives their contents in `input`.
+Request bodies are capped at 4 MB.
 
-App writes and proxy writes use the same cached Store boundary. Standalone
-`--state` clients remain supported and catch up journal changes under the same
-lock; they reconstruct their model once per process. Read full state with `log`.
-A migrated replica's old JSON file is only its baseline: preserve its journal
-sibling when backing up, and stop writers or hold its lock for a consistent copy.
+The first pending action starts a 500 ms timer that later actions do not reset.
+One upload is in flight per proxy, request starts are at least 500 ms apart,
+and each batch has at most 100 actions and approximately 3 MB of action JSON.
+Failures retry with exponential backoff capped at 30 seconds. SSE
+`GET /api/stream` notifications wake catch-up; 15-second heartbeats do not poll
+document state. Durable cursors recover all changes after reconnection.
+See [replication protocol](../server/PROTOCOL.md#version-3-durable-proxy-trees).
+
+Direct `--state` readers can read while the proxy runs or after it stops. They
+reconstruct their model once per process and observe complete journal records.
+Preserve each baseline and journal together for backup under the document lock
+or with writers stopped. Never run older standalone writers against this state.

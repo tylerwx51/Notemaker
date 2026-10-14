@@ -33,6 +33,13 @@ public final class Json {
         if(v instanceof List){List<Object> out=new ArrayList<>();for(Object item:list(v))out.add(copy(item));return out;}
         return v;
     }
+    /** JSON numbers have value semantics across Java and wire representations. */
+    public static boolean equivalent(Object a,Object b) {
+        if(a instanceof Number&&b instanceof Number)return new java.math.BigDecimal(a.toString()).compareTo(new java.math.BigDecimal(b.toString()))==0;
+        if(a instanceof Map&&b instanceof Map){Map<String,Object> x=map(a),y=map(b);if(!x.keySet().equals(y.keySet()))return false;for(String k:x.keySet())if(!equivalent(x.get(k),y.get(k)))return false;return true;}
+        if(a instanceof List&&b instanceof List){List<Object> x=list(a),y=list(b);if(x.size()!=y.size())return false;for(int i=0;i<x.size();i++)if(!equivalent(x.get(i),y.get(i)))return false;return true;}
+        return Objects.equals(a,b);
+    }
     public static String write(Object value) {
         if (value==null) return "null";
         if (value instanceof String) {

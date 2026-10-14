@@ -185,3 +185,4 @@ class Chats:
             self.cv.notify_all()
         for _, thread in workers:
             thread.join(timeout=8)
+        self.harnesses['pi'].close()

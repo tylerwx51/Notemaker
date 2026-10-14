@@ -146,9 +146,9 @@ final class EditorUi {
         setText(title, app.document);
         setText(subtitle, app.type.equals("pages") ? "NOTEBOOK  /  PAGE " + (app.page + 1)
                 : app.type.equals("infinite") ? "INFINITE CANVAS" : "SINGLE PAGE");
-        setText(connection, app.saveError!=null ? "Save failed" : app.saving>0 ? "Saving on device…" : app.connected
+        setText(connection, app.saveError!=null ? "Save failed" : app.saving>0 ? (app.replica.remote()?"Saving to proxy…":"Saving on device…") : app.connected
                 ? app.pendingCount == 0 ? "●  Connected" : "●  Syncing changes"
-                : "○  Offline · saved on device");
+                : app.replica.remote()?"○  Proxy unavailable · last snapshot":"○  Offline · saved on device");
         String mode = app.erase ? "eraser" : app.pan ? "move" : "pen";
         for (Map.Entry<String, Tool> entry : tools.entrySet()) entry.getValue().active(entry.getKey().equals(mode));
 

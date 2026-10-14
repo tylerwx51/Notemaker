@@ -157,6 +157,7 @@ class ChatChecks(unittest.TestCase):
 
     def test_sandbox_cli_and_network(self):
         harness = PiHarness(ROOT, self.data / 'sandbox', 'pi', self.url)
+        self.addCleanup(harness.close)
         chat = {'id': str(uuid.uuid4()), 'provider': 'openai', 'model': 'gpt-6-luna', 'effort': 'medium'}
         command = harness.command(chat)
         command = command[:command.index(shutil.which('node'))]
@@ -179,6 +180,16 @@ for tail in [['document','create','fixed'], ['layer','put','-'], ['sync',%r], ['
         rows = self.get('/api/events?document=sandbox-check')['events']
         self.assertEqual(len(rows), 2)
         self.assertIn('Agent layer', result.stdout)
+
+    def test_reuse_agent_proxy_after_server_restart(self):
+        first=PiHarness(ROOT,self.data/'adopt','pi',self.url)
+        self.addCleanup(first.close)
+        first.ensure_proxy()
+        descriptor=json.loads((first.data/'replica/proxy.json').read_text())
+        resumed=PiHarness(ROOT,first.data,'pi',self.url)
+        resumed.ensure_proxy()
+        self.assertIsNone(resumed.proxy)
+        self.assertEqual(json.loads((first.data/'replica/proxy.json').read_text()),descriptor)
 
 
 if __name__ == '__main__':

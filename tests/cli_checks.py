@@ -8,15 +8,29 @@ import subprocess
 import tempfile
 import unittest
 import server_checks
+import threading
+from topology_support import Proxy
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / 'apps/cli/notemaker'
 EXAMPLE = json.loads((ROOT / 'apps/cli/examples/diagram.json').read_text())
 
 class CliChecks(server_checks.ServerChecks):
+    def test_editor_commands_and_snapshot(self):
+        self.cli('append','-',value={'kind':'document','type':'pages'},actor='human')
+        stroke={'kind':'stroke','stroke':'pen','layer':'base','page':1,'color':-16777216,'width':3,'points':[[10,20,.5]]}
+        result=self.cli('append','-',value=stroke,actor='human')
+        self.assertIn('operation',result)
+        self.cli('settings','-',value={'page':1,'hidden':['guides'],'undo':['pen'],'redo':[],'selected':'base'})
+        snapshot=self.cli('snapshot')
+        self.assertEqual(snapshot['pendingCount'],2)
+        self.assertEqual(snapshot['effectiveModel'],self.cli('inspect'))
+        self.assertEqual(snapshot['page'],1)
+        self.cli('settings','-',value={'pending':[]},ok=False)
+
     def test_environment_actor_and_explicit_override(self):
         env = dict(os.environ, NOTEMAKER_ACTOR='chat-agent')
-        args = [str(CLI), '--state', str(self.directory / 'env'), '--document', self.document]
+        args = [str(CLI), '--proxy-file', str(self.proxy('env').descriptor_path), '--document', self.document]
         result = subprocess.run(args + ['layer', 'put', '-'], env=env,
             input=json.dumps({'layer':'env-layer','name':'Environment actor','force':False}),
             text=True, capture_output=True, timeout=30)
@@ -54,7 +68,7 @@ class CliChecks(server_checks.ServerChecks):
         self.cli('sync',self.url);self.cli('sync',self.url,replica='b')
         self.assertEqual(self.cli('inspect'),self.cli('inspect',replica='b'))
         self.cli('svg','add',str(source),str(placement),ok=False)  # no accidental replacement
-        raw = subprocess.run([str(CLI),'--state',str(self.directory/'stdin'),'--document',self.document,'svg','add','-'],input=source.read_text(),text=True,capture_output=True,timeout=30)
+        raw = subprocess.run([str(CLI),'--proxy-file',str(self.proxy('stdin').descriptor_path),'--document',self.document,'svg','add','-'],input=source.read_text(),text=True,capture_output=True,timeout=30)
         self.assertEqual(raw.returncode,0,raw.stderr)
         self.assertEqual(self.cli('inspect',replica='stdin')['objects'][0]['w'],200)
 
@@ -97,17 +111,26 @@ class CliChecks(server_checks.ServerChecks):
         self.cli('sync',self.url)
 
     def setUp(self):
+        self.proxies = {}
+        self.proxy_lock = threading.Lock()
         self.local = tempfile.TemporaryDirectory()
         self.directory = Path(self.local.name)
         self.document = self.id().split('.')[-1]
 
     def tearDown(self):
+        for proxy in self.proxies.values(): proxy.stop()
         self.local.cleanup()
 
+    def proxy(self, replica):
+        with self.proxy_lock:
+            if replica not in self.proxies: self.proxies[replica]=Proxy(self.directory/replica,self.document)
+            return self.proxies[replica]
+
     def cli(self, *args, replica='a', actor='agent', value=None, ok=True):
-        p = subprocess.run([str(CLI), '--state', str(self.directory / replica), '--document', self.document,
+        p = subprocess.run([str(CLI), '--proxy-file', str(self.proxy(replica).descriptor_path), '--document', self.document,
                             '--actor', actor, *args], input=json.dumps(value) if value is not None else None,
                            text=True, capture_output=True, timeout=30)
+        if args[0]=='sync': self.proxy(replica).command('configure','')
         if ok:
             self.assertEqual(p.returncode, 0, p.stderr)
             return json.loads(p.stdout)
@@ -202,14 +225,15 @@ class CliChecks(server_checks.ServerChecks):
         lose_ack = [False]
         class Proxy(BaseHTTPRequestHandler):
             def do_GET(self):
-                if self.path.startswith('/api/events'):
-                    entered.set()
-                    assert release.wait(10)
+                if self.path.startswith('/api/stream'):
+                    self.send_error(404);return
                 data=urllib.request.urlopen(upstream+self.path,timeout=5).read()
                 self.send_response(200);self.end_headers();self.wfile.write(data)
             def do_POST(self):
                 body=self.rfile.read(int(self.headers['Content-Length']))
                 data=urllib.request.urlopen(urllib.request.Request(upstream+self.path,data=body,headers={'Content-Type':'application/json'}),timeout=5).read()
+                entered.set()
+                assert release.wait(10)
                 if lose_ack[0]:
                     self.close_connection=True
                     return
@@ -242,14 +266,13 @@ class CliChecks(server_checks.ServerChecks):
         self.cli('object','update','app-state','-',value={'to':'missing'},ok=False)
         self.cli('object','update','app','-',value={'shape':'arrow'},ok=False)
         self.cli('sync',self.url)
-        path=next((self.directory/'a').glob('document-*.json'))
-        state=self.cli("log");state['serverId']='different-database';path.write_text(json.dumps(state));Path(str(path)+".journal").unlink()
         self.cli('object','update','app','-',value={'x':222})
+        path=next((self.directory/'a').glob('document-*.json'))
+        state=self.cli("log");self.proxy("a").stop();state['serverId']='different-database';path.write_text(json.dumps(state));Path(str(path)+".journal").unlink()
         count=len(self.read(self.document))
-        error=self.cli('sync',self.url,ok=False)
-        self.assertIn('database differs',error['error'])
+        with self.assertRaisesRegex(AssertionError,'different server databases'): self.proxy('a').start()
         self.assertEqual(len(self.read(self.document)),count)
-        self.assertEqual(self.cli('status')['pending'],1)
+        self.assertEqual(self.proxy('a').cli('status',direct=True)['pending'],1)
 
     def test_pagination_and_legacy_replica_migration(self):
         for start in range(0,1100,100):

@@ -18,6 +18,7 @@ OUT.mkdir(exist_ok=True)
 SERIALS = ['emulator-5580', 'emulator-5582']
 processes = []
 server = None
+completed = False
 
 def command(args, **kwargs):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, **kwargs)
@@ -74,7 +75,6 @@ def converged(strokes=None):
     saved = []
     for serial in SERIALS:
         doc = json.loads((OUT / f'{serial}-state.json').read_text())['document']
-        filename = 'files/document-' + str(uuid.UUID(bytes=hashlib.md5(doc.encode()).digest(), version=3)) + '.json'
         saved.append(read_replica(serial, doc))
     a, b = saved
     if a['pending'] or b['pending'] or a['cursor'] != b['cursor'] or a['events'] != b['events']:
@@ -204,16 +204,31 @@ try:
     report('PASS finger drawing merges with stylus drawing')
     # Verify partial strokes reach the other running app before finger-up.
     for serial in SERIALS:
+        adb(serial, 'shell', 'settings', 'put', 'system', 'screen_off_timeout', '2147483647')
+        adb(serial, 'shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')
+        adb(serial, 'shell', 'wm', 'dismiss-keyguard')
         adb(serial, 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
-    time.sleep(2)
+        def editor_ready():
+            adb(serial,'shell','uiautomator','dump','/data/local/tmp/integration-ready.xml')
+            hierarchy=adb(serial,'shell','cat','/data/local/tmp/integration-ready.xml')
+            return 'NOTE / MAKER' in hierarchy and 'text="infinite"' in hierarchy
+        wait_until(editor_ready,30)
+    wait_until(lambda: converged(2))
     baseline = {e['op'].get('stroke') for e in events('infinite') if e['op']['kind'] == 'stroke'}
+    # Observe the live proxy without repeatedly starting an ART VM during the
+    # timed gesture. Direct-file consistency is checked by converged() afterwards.
+    descriptor=json.loads(adb(SERIALS[1],'shell','run-as','com.notemaker','cat','files/proxy.json'))
+    forwarded=int(adb(SERIALS[1],'forward','tcp:0','tcp:8766').strip())
+    def observe(command):
+        request=urllib.request.Request(f'http://127.0.0.1:{forwarded}/command',data=json.dumps({'document':'infinite','actor':'observer','args':[command]}).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+descriptor['token']})
+        return json.load(urllib.request.urlopen(request,timeout=3))['result']
     swipe = subprocess.Popen(['adb', '-s', SERIALS[0], 'shell', 'input', 'swipe', '700', '1000', '1100', '1400', '8000'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    filename = 'files/document-' + str(uuid.UUID(bytes=hashlib.md5(b'infinite').digest(), version=3)) + '.json'
 
     def received_partial():
         assert swipe.poll() is None, 'Gesture ended before remote partial stroke arrived'
-        saved = read_replica(SERIALS[1], "infinite")
-        partial = [o for o in saved['events'] if o['kind'] == 'stroke' and o['stroke'] not in baseline]
+        saved = observe('snapshot')
+        partial = [o for o in saved['effectiveModel']['strokes'] if o['stroke'] not in baseline]
+        if not partial: report('Waiting for live stroke: '+json.dumps(observe('status')))
         return any(len(o['points']) >= 2 for o in partial)
 
     wait_until(received_partial, 7)
@@ -228,6 +243,7 @@ try:
     report('PASS live partial stroke reaches the second running app before finger-up')
     # Open an existing multipage document with the default fixed-page creation choice.
     pages_file = 'files/document-' + str(uuid.UUID(bytes=hashlib.md5(b'pages').digest(), version=3)) + '.json'
+    adb(SERIALS[1], 'shell', 'am', 'force-stop', 'com.notemaker')
     adb(SERIALS[1], 'shell', 'run-as', 'com.notemaker', 'rm', pages_file, pages_file+'.journal')
     instrument(SERIALS[1], 'configure', document='pages', host='http://10.0.2.2:18765', type='fixed')
 
@@ -242,10 +258,18 @@ try:
     assert b'NoteMaker live viewer' in viewer and b'canvas' in viewer
     report('PASS browser viewer served; existing document type retained')
     report('ALL INTEGRATION CHECKS PASSED')
+    completed = True
 finally:
     if server is not None and server.poll() is None:
         server.terminate();server.wait(timeout=10)
     for serial, process in processes:
+        if not completed:
+            try:
+                (OUT / (serial+'-failure-logcat.txt')).write_text(adb(serial,'logcat','-d','-s','NoteMaker','AndroidRuntime'))
+                with (OUT / (serial+'-failure.png')).open('wb') as image:
+                    subprocess.run(['adb','-s',serial,'exec-out','screencap','-p'],stdout=image,timeout=10)
+            except Exception:
+                pass
         try:
             adb(serial, 'emu', 'kill')
         except Exception:

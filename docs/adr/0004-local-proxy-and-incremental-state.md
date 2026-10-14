@@ -1,6 +1,7 @@
 # ADR 0004: Local replica proxy, incremental state, and asynchronous ink
 
-Status: accepted, 2026-10-12. Supersedes ADR 0003's full JSON replacement,
+Status: accepted, 2026-10-12. Proxy ownership and synchronization updated by
+[ADR 0007](0007-durable-proxy-trees.md). Supersedes ADR 0003's full JSON replacement,
 per-edit replay, Activity-owned synchronization and absence of a local service.
 
 ## Context

@@ -15,6 +15,7 @@ import hashlib
 import uuid
 from browser import check_browser
 from replica import read_replica
+from topology_support import Proxy
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'.test-artifacts/cli-android'
@@ -79,11 +80,11 @@ def tablet(*args,value=None,concurrent=False):
     return instrument('cli-concurrent' if concurrent else 'cli',**kwargs)
 
 def desktop(*args,value=None):
-    p=subprocess.run([str(CLI),'--state',str(OUT/'desktop'),'--document','integration','--actor','desktop-agent',*args],input=json.dumps(value) if value is not None else None,text=True,capture_output=True,timeout=30)
+    p=subprocess.run([str(CLI),'--proxy-file',str(desktop_proxy.descriptor_path),'--document','integration','--actor','desktop-agent',*args],input=json.dumps(value) if value is not None else None,text=True,capture_output=True,timeout=30)
     assert p.returncode==0,p.stderr
     return json.loads(p.stdout)
 
-server=None;emulator=None
+server=None;emulator=None;desktop_proxy=None
 try:
     assert SERIAL not in command('adb','devices'),'Reserved emulator already running'
     with socket.socket() as s:s.bind(('127.0.0.1',PORT))
@@ -127,8 +128,7 @@ try:
         state=tablet('inspect');assert state['model']['objectActive']['app'] is True
         print('PASS object editor erasure and human undo visible to CLI',flush=True)
         # Reset only the reserved desktop test replica by assigning a fresh state directory.
-        desktop_dir=OUT/'desktop';desktop_dir.mkdir(exist_ok=True)
-        for f in desktop_dir.glob('document-*'):f.unlink()
+        desktop_proxy=Proxy(Path(temp)/'desktop','integration')
         server=subprocess.Popen(['python3',str(ROOT/'apps/server/server.py'),'--host','127.0.0.1','--port',str(PORT),'--database',temp+'/server.sqlite3'],stdout=(OUT/'server.log').open('w'),stderr=subprocess.STDOUT)
         wait(lambda:urllib.request.urlopen(f'http://127.0.0.1:{PORT}/api/info',timeout=2).status==200)
         wait(lambda:not replica()['pending'])
@@ -160,8 +160,28 @@ try:
         adb('shell','am','force-stop','com.notemaker')
         state=instrument('state');assert state['model']==desktop('inspect')
         print('PASS replica and pending/history survive app restart',flush=True)
+        # Select another durable proxy as the editor's writer and read source.
+        adb('reverse',f'tcp:{desktop_proxy.port}',f'tcp:{desktop_proxy.port}')
+        state=instrument('configure',document='integration',host=f'http://10.0.2.2:{PORT}',
+                         proxyUrl=f'http://127.0.0.1:{desktop_proxy.port}',proxyToken=desktop_proxy.descriptor['token'])
+        assert state['model']==desktop('inspect')
+        before=len(desktop('inspect')['strokes'])
+        instrument('draw',shift='150')
+        wait(lambda:len(desktop('inspect')['strokes'])==before+1)
+        tablet('object','update','cli','-',value={'text':'Selected proxy'})
+        assert next(o for o in desktop('inspect')['objects'] if o['object']=='cli')['text']=='Selected proxy'
+        desktop('object','update','cli','-',value={'text':'SSE update'})
+        wait(lambda:next(o for o in instrument('state')['model']['objects'] if o['object']=='cli')['text']=='SSE update')
+        print('PASS app and spawned CLI use selected proxy; SSE refreshes remote editor',flush=True)
+        state=instrument('configure',document='remote-pages',type='pages',proxyUrl=f'http://127.0.0.1:{desktop_proxy.port}',proxyToken=desktop_proxy.descriptor['token'])
+        assert state['type']=='pages',state
+        instrument('page',page=1)
+        state=instrument('draw')
+        assert state['model']['strokes'][0]['page']==1,state
+        print('PASS selected proxy creates and renders a multipage document',flush=True)
         adb('emu','kill');emulator.wait(timeout=20);emulator=None
 finally:
+    if desktop_proxy:desktop_proxy.stop()
     if server:server.terminate();server.wait(timeout=10)
     if emulator:
         try:(OUT/'failure-logcat.txt').write_text(adb('logcat','-d','-s','NoteMaker','AndroidRuntime'))

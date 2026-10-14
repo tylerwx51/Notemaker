@@ -1,5 +1,141 @@
 # Verification
 
+## Tiered automated test framework — 2026-10-13
+
+Added `tests/run.py` with independent local, emulator, hardware and network
+tiers, streamed suite logs, JSON pass/fail/skip reports and resource-required
+mode. Local is the default and neither discovers nor requires external devices.
+The physical-tablet workflow is in `tests/tablet_checks.py`; installation and
+USB port mapping are explicit options. `tests/network_checks.py` verifies
+existing proxy trees using uniquely named test documents. See ADR 0008 and the
+README's automated test tiers section for commands and resource requirements.
+
+Executed through Nix:
+
+```sh
+nix-shell --run 'python3 tests/run.py'
+nix-shell --run 'python3 tests/run.py --tier local --suite framework_checks --no-build'
+nix-shell --run 'python3 tests/run.py --tier local --tier emulator --list'
+nix-shell --run 'python3 tests/run.py --tier hardware --serial eac89823 --no-build'
+```
+
+The complete default local run passed its CLI build and all six suites. The
+final framework-only run passed 11 checks, including additional simulated ADB
+upgrade tests: backup precedes install, changed private data and a mismatched
+APK fail verification, and failed installs relaunch the app. Other checks cover
+skip/required-resource exit codes, failed subprocess reporting, missing/changed
+actions, actor history, wrong root rejection before network edits, and the actual
+network harness against an isolated two-proxy chain. The local topology suite
+passed all eight checks including 25 generated histories. Python compilation
+and `git diff --check` passed.
+
+The selected physical tablet was available, but its smoke check **failed** with
+zero pending actions and an upstream connection error. Read-only inspection
+confirmed its USB mapping remained intact while no desktop server was listening
+on port 8765. This was reported independently from the passing local tier.
+The check did not reinstall the app, edit notes, or restart the external server.
+The retained report is under
+`.test-artifacts/runs/20261013-210329-405506/`. Failure screenshot/log collection
+was subsequently added and exercised through the simulated-device failure tests.
+
+No multi-computer lab was available for this run; the external-network harness
+was verified on real local proxy processes. The existing emulator suites were
+registered and their selection plan checked, without repeating the previously
+recorded emulator runs. The new optional upgrade command was exercised with a
+strict fake ADB; the equivalent physical upgrade performed earlier is recorded
+below. Physical pen/E Ink performance remains outside these smoke checks.
+
+## Durable proxy topology — 2026-10-13
+
+Implemented protocol 3 durable proxy trees with one upstream per proxy,
+exclusive replica ownership, proxy-only mutations, consistent direct reads,
+offline provisional actions, root final ordering, durable acknowledgements,
+SSE catch-up, and bounded/rate-limited uploads. See [ADR 0007](adr/0007-durable-proxy-trees.md).
+
+Executed through the root Nix environment:
+
+```sh
+nix-shell --run 'apps/cli/build.sh --android && apps/android/build.sh'
+nix-shell --run 'python3 tests/topology_properties.py'
+nix-shell --run 'python3 tests/cli_checks.py'
+nix-shell --run 'python3 tests/proxy_checks.py'
+nix-shell --run 'python3 tests/server_checks.py'
+nix-shell --run 'python3 tests/chat_checks.py'
+nix-shell --run 'python3 tests/integration.py'
+nix-shell --run 'python3 tests/cli_android.py'
+nix-shell --run 'python3 tests/performance.py'
+```
+
+The JVM/DEX CLI and APK builds passed. The topology suite passed 25 generated
+real-process histories plus targeted checks for cycles, exclusive ownership,
+offline proxy chains, server identities, 500 ms first-action batching, upload
+spacing/concurrency, bounded backlogs and idle behavior. The additional
+existing-document wake-up regression passed separately. Generated histories
+include up to five proxies, concurrent object/stroke/diagram actions, network
+partitions, duplicate deliveries, lost responses, proxy crashes and main-server
+restarts. Assertions check acknowledged-action retention, consistent atomic
+diagram snapshots, unique final commits and model convergence under the main
+server's final order.
+
+CLI (16), proxy (6), server (3), and chat (7) checks passed, including actual
+CLI processes, read-only direct access, actor history, SVG exports, legacy
+replica migration and reuse of a surviving chat proxy after server restart.
+Python source compilation and whitespace checks passed.
+
+The complete two-emulator integration suite passed: simultaneous pressure-bearing
+drawing, layer visibility, erasure and undo/redo, offline edits, app/server
+restarts, browser/native image comparison, multipage and infinite documents,
+live partial strokes before finger-up, and reopening an existing document.
+The timed gesture observes the running proxy through an ADB-forwarded snapshot
+endpoint, avoiding repeated ART startup during its seven-second window;
+convergence checks still use the CLI's direct local reads. The harness also
+wakes/unlocks the test devices and waits for the editor before gesture injection.
+
+The full Android CLI suite passed app-spawned CLI/pen concurrency while offline,
+actor-specific atomic undo/redo, SVG placement/export, desktop/tablet convergence,
+app and server restarts, external selected-proxy writes by both app and CLI,
+remote snapshot/SSE refresh, and creation/rendering of a multipage document
+through the selected external proxy.
+
+The 1,000-stroke emulator performance suite passed all absolute latency and
+growth limits, incremental/replayed model equivalence, cached/uncached rendering,
+and recovery of all 1,000 strokes with 50 points each after process restart.
+Across the three measured windows, maximum p95 handler/dispatch/input-to-draw/
+frame times were 1.36/17.24/16.83/21.41 ms. The save queue was empty at every
+stroke-boundary sample; final drain took 773 ms and no ink-cache rebuild occurred.
+Metrics and logs are in `.test-artifacts/performance/`. These are emulator
+measurements, not physical stylus or E Ink latency results.
+
+No physical BOOX installation, personal-document changes, live-server upgrade,
+or home-server deployment was performed for this architecture change.
+Protocol 3 requires upgrading the participating proxies and main server together.
+
+### Physical BOOX proxy upgrade — 2026-10-13
+
+Installed the verified protocol 3 APK on connected Note Air6 C `eac89823`
+with `adb install -r`. Before installation, stopped the app and backed up its
+installed APK, files and preferences in
+`.test-artifacts/boox-proxy-upgrade-20261013-205148/`. All 17 data/preference
+files were byte-identical immediately after installation. The installed APK
+matched build SHA-256
+`cc75f48e03951da36ef005f5bc052a6f462655b730d5e356f26544f09738c206`.
+
+The configured desktop server was already running protocol 3; no server restart
+was needed. Restored the missing `adb reverse tcp:8765 tcp:8765` mapping and
+launched the app. The tablet proxy reported connected, zero pending actions,
+no upstream error, and document cursor 411 at the verification checkpoint.
+All 325 pre-upgrade action IDs remained present and actor histories were
+unchanged. The screenshot showed the saved drawing and Connected status;
+the running app log contained no fatal exception.
+
+Read-only verification used the JVM CLI against the tablet proxy through a
+temporary ADB forward, removed afterwards. A separate `run-as app_process`
+CLI probe reached “Shutting down VM” but did not exit on this firmware;
+its test process was terminated. Standalone on-device CLI process shutdown
+therefore remains a hardware follow-up. This did not prevent the embedded
+proxy or editor from synchronizing. Physical pen latency and E Ink refresh
+quality were not measured.
+
 ## SVG placement — 2026-10-13
 
 Executed through the root Nix environment:

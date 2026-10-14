@@ -22,9 +22,8 @@ log record. Reusing an operation ID with different contents returns HTTP 400.
 
 Sequence numbers are global, strictly increasing, and may have gaps within a
 document. Reads return at most 1,000 events; continue with the last received
-sequence until a read returns fewer than 1,000. The browser polls at 200 ms;
-the local proxy waits 500 ms between synchronization passes. Do not
-remove acknowledged optimistic operations until catch-up has completed.
+sequence until a read returns fewer than 1,000. The legacy browser polls at 200 ms.
+Durable proxies use the version 3 protocol below; they do not poll documents while idle.
 
 Each operation requires an immutable `id`. Supported kinds:
 
@@ -98,3 +97,78 @@ operations in arrival order. Independent geometry and visibility registers mean 
 concurrent move and erase merge to a moved but hidden object. Same-register edits
 resolve to the last committed operation. Local pending actions are replayed after
 committed events until acknowledgement and full catch-up.
+
+## Version 3: durable proxy trees
+
+Upgrade server, proxies, CLI and app together. Legacy event endpoints remain
+available to the browser. The root database and operation payloads are unchanged.
+
+`GET /api/info` returns `protocol:3`, stable `id`, `kind:"server"|"proxy"`,
+`rootId` (null until known), locally opened `documents`, and proxy `lineage`.
+A server's rootId equals its id. Proxy requests require the descriptor's bearer
+token, including SSE. All proxy listeners remain loopback-only.
+
+A proxy has one upstream. Configure it using the proxy command
+`configure URL_OR_DESCRIPTOR`. The descriptor path is on the proxy host.
+An empty string disconnects. `GET /api/info?trail=ID,ID&validate=1` validates
+a proposed proxy edge by walking proxy ancestors, rejecting repeated stable
+IDs or more than 64 hops. Existing edges do not require reachable ancestors for
+ordinary reads or receipt of actions. A main-server identity is pinned for the
+replica; switching to a different database is rejected before upload.
+
+`POST /api/events` retains its request and response shape. At an intermediate
+proxy, an accepted ID means the action was durably received. Only the root
+assigns final commit order. Duplicate identical actions are acknowledged without
+reapplication; reuse of an ID with different contents fails atomically. A sender
+retains an action until it downloads the root commit, even after durable receipt
+by its parent. Forwarded receipt IDs avoid redundant uploads.
+
+Protocol 3 senders also include their known `rootId` in the upload envelope.
+An unbound receiving proxy pins that identity durably; an already bound proxy
+or server rejects a different identity before accepting actions. This prevents
+mixing server histories through a temporarily disconnected, unbound parent.
+
+`GET /api/replica?document=notes&after=0&pendingAfter=0` returns:
+
+```json
+{
+  "rootId": "main-server-database-id",
+  "events": [],
+  "after": 0,
+  "more": false,
+  "provisional": [],
+  "pendingAfter": 0,
+  "pendingMore": false
+}
+```
+
+`events` contains main-server-ordered operations. `after` is a **per-document
+operation count**, not the legacy SQLite global sequence. `provisional` is a
+page of the parent proxy's append-only ingress log; it may include operations
+already committed. Deduplicate by immutable operation ID. Its cursor belongs
+to that upstream proxy ID and resets if the upstream changes. At the main server,
+the provisional stream is empty and pendingAfter is zero. Each stream page
+contains at most 100 actions and approximately 3 MB; continue while either
+more flag is true. Apply whole actions and advance cursors atomically. Never
+treat a provisional receipt/order as a main-server commit.
+
+`GET /api/stream` keeps an SSE response open with `Content-Type: text/event-stream`.
+A `data: <generation>` event is a wake-up notification; it is not durable history.
+Each new connection immediately sends an event, followed by events on changes.
+Idle connections receive `: heartbeat` every 15 seconds. Clients reconnect with
+backoff and read from their **durable replication cursors**, including after a
+missed notification or peer restart. Generation values are process-local;
+Last-Event-ID is deliberately unnecessary for recovery.
+
+One worker per proxy handles upstream synchronization. The first pending local
+action starts a 500 ms upload timer; subsequent actions do not reset it. Upload
+starts are at least 500 ms apart across all documents, with only one in flight.
+Batches preserve whole actions and are capped at 100 actions and approximately
+3 MB of action JSON. Failure backoff grows from 500 ms to 30 seconds. Notifications
+can trigger downloads immediately without bypassing upload limits.
+
+The local command endpoint also accepts `snapshot` (materialized effectiveModel,
+revision, cursor, eventCount, pendingCount and editor preferences), `append -`
+(one raw editor action), and `settings -` (local hidden/undo/redo arrays, selected
+layer and page). Preferences do not replicate. Direct file readers are supported;
+direct file writers and standalone CLI sync workers are not.

@@ -7,5 +7,6 @@ apps/android/build/
 *.sqlite3-wal
 __pycache__/
 .test-artifacts/
+.hypothesis/
 .agent-data/
 apps/cli/build/

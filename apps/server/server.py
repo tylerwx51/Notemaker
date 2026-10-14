@@ -7,6 +7,7 @@ import threading
 import math
 import uuid
 import time
+import signal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -14,6 +15,8 @@ from svg_asset import validate_svg
 from agent.chats import Chats, ChatError
 
 LOCK = threading.Lock()
+CHANGES = threading.Condition(LOCK)
+GENERATION = 0
 DB = None
 CHATS = None
 
@@ -169,7 +172,53 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == '/api/info':
             with LOCK:
                 identity = DB.execute("SELECT value FROM metadata WHERE key='id'").fetchone()[0]
-            return self.reply(200, {'id': identity, 'protocol': 2})
+                documents = [r[0] for r in DB.execute('SELECT DISTINCT document FROM events')]
+            return self.reply(200, {'id': identity, 'rootId': identity, 'kind': 'server', 'protocol': 3, 'lineage': [], 'documents': documents})
+        if url.path == '/api/stream':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.connection.settimeout(20)
+            seen = -1
+            try:
+                while True:
+                    with CHANGES:
+                        if seen == GENERATION:
+                            CHANGES.wait(timeout=15)
+                        current = GENERATION
+                    # Always wake on connection: durable cursors, not notifications,
+                    # determine catch-up. Heartbeats do not cause document reads.
+                    message = f'data: {current}\n\n' if current != seen else ': heartbeat\n\n'
+                    self.wfile.write(message.encode()); self.wfile.flush()
+                    seen = current
+            except (OSError, TimeoutError):
+                pass
+            self.close_connection = True
+            return
+        if url.path == '/api/replica':
+            q = parse_qs(url.query)
+            try:
+                doc, after = q.get('document', ['notes'])[0], int(q.get('after', ['0'])[0])
+                if after < 0:
+                    raise ValueError('Invalid cursor')
+                with LOCK:
+                    identity = DB.execute("SELECT value FROM metadata WHERE key='id'").fetchone()[0]
+                    count = DB.execute('SELECT count(*) FROM events WHERE document=?', (doc,)).fetchone()[0]
+                    if after > count:
+                        raise ValueError('Invalid cursor')
+                    rows = DB.execute('SELECT payload FROM events WHERE document=? ORDER BY seq LIMIT 100 OFFSET ?', (doc, after)).fetchall()
+                events, size = [], 0
+                for (payload,) in rows:
+                    length = len(payload.encode())
+                    if events and size + length > 3_000_000:
+                        break
+                    events.append(json.loads(payload)); size += length
+                return self.reply(200, dict(events=events, after=after+len(events), more=after+len(events)<count,
+                                            provisional=[], pendingAfter=0, pendingMore=False, rootId=identity))
+            except ValueError as error:
+                return self.reply(400, {'error': str(error)})
         if url.path == '/api/events':
             q = parse_qs(url.query)
             try:
@@ -183,6 +232,7 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(404, {'error': 'Not found'})
 
     def do_POST(self):
+        global GENERATION
         if self.chat_request():
             return
         if urlparse(self.path).path != '/api/events':
@@ -198,12 +248,18 @@ class Handler(BaseHTTPRequestHandler):
             for op in ops:
                 validate(op)
             with LOCK, DB:
+                identity = DB.execute("SELECT value FROM metadata WHERE key='id'").fetchone()[0]
+                if body.get('rootId') is not None and body['rootId'] != identity:
+                    raise ValueError('Server database differs from this replica')
                 for op in ops:
                     existing = DB.execute('SELECT payload FROM events WHERE document=? AND operation=?', (doc, op['id'])).fetchone()
                     payload = json.dumps(op, sort_keys=True)
                     if existing and existing[0] != payload:
                         raise ValueError('Operation id reused with different contents')
                     DB.execute('INSERT OR IGNORE INTO events(document, operation, payload) VALUES(?,?,?)', (doc, op['id'], payload))
+            with CHANGES:
+                GENERATION += 1
+                CHANGES.notify_all()
             self.reply(200, {'accepted': [op['id'] for op in ops]})
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
             self.reply(400, {'error': str(e)})
@@ -236,6 +292,9 @@ def main():
                   json.loads(Path(args.chat_models).read_text()) if args.chat_models else None)
     print(f'NoteMaker listening on http://{args.host}:{args.port}', flush=True)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
+    def stop(signum, frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, stop)
     try:
         server.serve_forever()
     finally:

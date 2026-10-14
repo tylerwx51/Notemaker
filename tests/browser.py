@@ -63,6 +63,11 @@ class DebugSocket:
         return result['result'].get('value')
 
 def check_browser(out, port, expected_cursor, debug_port=19222, svg_exports=False):
+    # Replica protocol 3 uses per-document offsets; the legacy viewer retains
+    # SQLite's global sequence cursor. Verify the same committed action count.
+    rows=json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/api/events?document=integration'))['events']
+    assert len(rows)==expected_cursor, (len(rows),expected_cursor)
+    expected_cursor=rows[-1]['seq'] if rows else 0
     directory = out / 'chromium-profile'
     browser = subprocess.Popen(['chromium', '--headless', '--no-sandbox', '--disable-gpu', f'--remote-debugging-port={debug_port}', '--remote-allow-origins=*', f'--user-data-dir={directory}', f'http://127.0.0.1:{port}/?document=integration'], stdout=(out / 'chromium.log').open('w'), stderr=subprocess.STDOUT)
     debug = None

@@ -12,12 +12,14 @@ if needed, then **read `apps/cli/notemaker --help` before using the CLI**.
 Read `apps/cli/README.md` for JSON schemas and the root `README.md` for server
 startup, proxy access, and tablet connections; keep the server URL configurable.
 
-Use the intended local `--state` directory or `--proxy-file` descriptor, an
+Use the selected running `--proxy-file` descriptor (or `NOTEMAKER_PROXY_FILE`), an
 explicit `--document`, and a stable, distinct `--actor` for edits. All editing
-goes through shared local state and works offline; never mutate the server or
+goes through the selected proxy and works with its upstream offline; never mutate the server or
 its database directly. Keep whole diagrams atomic. Commands return JSON;
 check exit status and inspect `log` before retrying an uncertain mutation.
-`sync URL` uploads and downloads; repeat while `pending` is nonzero.
+`sync [UPSTREAM]` requests synchronization; the proxy also synchronizes automatically.
+Direct `--state` access is read-only. Start a proxy with `--state DIR serve PORT [UPSTREAM]`
+if needed. Never bypass an unavailable selected proxy by writing its files.
 `document list` only lists local documents. Do not infer remote deployment from
 a request to work locally.
 
@@ -28,8 +30,8 @@ Examples (inside `nix-shell`; substitute the intended replica, document and URL)
 apps/cli/notemaker --state /tmp/notemaker-example --document demo status
 
 # Add one atomic diagram locally, then synchronize it.
-apps/cli/notemaker --state /tmp/notemaker-example --document demo --actor agent-1 diagram add apps/cli/examples/diagram.json
-apps/cli/notemaker --state /tmp/notemaker-example --document demo sync http://127.0.0.1:8765
+apps/cli/notemaker --proxy-file /tmp/notemaker-example/proxy.json --document demo --actor agent-1 diagram add apps/cli/examples/diagram.json
+apps/cli/notemaker --proxy-file /tmp/notemaker-example/proxy.json --document demo sync http://127.0.0.1:8765
 ```
 
 Use a fresh example replica/document: the diagram file has fixed IDs and cannot

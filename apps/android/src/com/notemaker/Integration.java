@@ -32,8 +32,8 @@ public class Integration extends Instrumentation {
             runOnMainSync(()->{
                 synchronized(app.lock){
                     if(action.equals("configure")){
-                        app.save();app.document=arguments.getString("document","integration");app.host=arguments.getString("host","http://10.0.2.2:8765");app.load(arguments.getString("type","fixed"));
-                        app.configureProxy();app.getSharedPreferences("settings",0).edit().putString("host",app.host).putString("document",app.document).commit();
+                        app.save();app.document=arguments.getString("document","integration");app.host=arguments.getString("host","http://10.0.2.2:8765");app.proxyUrl=arguments.getString("proxyUrl","");app.proxyToken=arguments.getString("proxyToken","");app.load(arguments.getString("type","fixed"));
+                        app.configureProxy();app.getSharedPreferences("settings",0).edit().putString("host",app.host).putString("document",app.document).putString("proxyUrl",app.proxyUrl).putString("proxyToken",app.proxyToken).commit();
                     }
                     if(action.equals("draw")||action.equals("cli-concurrent")){
                         app.color=Integer.parseInt(arguments.getString("color","-16777216"));app.width=10;app.erase=false;app.pan=false;

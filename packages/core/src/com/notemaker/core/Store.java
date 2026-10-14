@@ -2,31 +2,34 @@ package com.notemaker.core;
 
 import java.io.*;
 import java.net.*;
-import java.nio.channels.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import static com.notemaker.core.Json.*;
 
 /** Per-document cached replica with durable journal transactions and shared process locks. */
 public final class Store {
-    private static final Map<String,Object> MONITORS=new ConcurrentHashMap<>();
     public final File file;
     public final String document;
-    public Store(File directory,String document) throws IOException {
+    private final boolean writable;
+    public Store(File directory,String document) throws IOException {this(directory,document,false);}
+    public static Store writer(File directory,String document) throws IOException {return new Store(directory,document,true);}
+    private Store(File directory,String document,boolean writable) throws IOException {
+        this.writable=writable;
         Model.require(!document.isEmpty()&&document.length()<=200,"Document name needs 1–200 characters");
-        Files.createDirectories(directory.toPath());this.document=document;
+        if(writable)Files.createDirectories(directory.toPath());this.document=document;
         file=new File(directory,"document-"+UUID.nameUUIDFromBytes(document.getBytes(StandardCharsets.UTF_8))+".json");
     }
     public interface Edit { void apply(Map<String,Object> state) throws Exception; }
-    private Map<String,Object> locked(Edit edit) throws Exception {return Journal.access(file,document,edit);}
-    public static Model model(Map<String,Object> state){return state instanceof Journal.State?new Model(((Journal.State)state).model):new Model(state);}
+    private Map<String,Object> locked(Edit edit) throws Exception {Model.require(edit==null||writable,"Writes require the selected proxy");return Journal.access(file,document,edit,writable);}
+    public static Model model(Map<String,Object> state){return state.containsKey("effectiveModel")?Model.fromJson(map(state.get("effectiveModel"))):state instanceof Journal.State?new Model(((Journal.State)state).model):new Model(state);}
     public Model model() throws Exception {return model(read());}
     public Map<String,Object> read() throws Exception {return locked(null);}
     public Map<String,Object> edit(Edit edit) throws Exception {return locked(edit);}
     public Map<String,Object> append(Map<String,Object> operation,String actor) throws Exception {
+        Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         Model.validate(operation);
+        Model.require(write(operation).getBytes(StandardCharsets.UTF_8).length<2999000,"Action exceeds 3 MB");
         return edit(state->{Map<String,Object> op=map(copy(operation));op.put("id",UUID.randomUUID().toString());op.put("actor",actor);list(state.get("pending")).add(op);});
     }
     public Map<String,Object> commit(String actor,Actions.Build build) throws Exception {
@@ -57,51 +60,73 @@ public final class Store {
             String id=UUID.randomUUID().toString();list(state.get("pending")).add(object("kind","batch","id",id,"actor",actor,"actions",copy(entry.get(redo?"forward":"inverse"))));result.put("operation",id);
         });return result;
     }
-    public Map<String,Object> sync(String url) throws Exception {
-        Model.require(url.startsWith("http://")||url.startsWith("https://"),"Server must be HTTP(S)");
-        // Serialize sync workers, but never hold the state lock over a network request.
-        String path=file.getCanonicalPath()+".sync.lock";
-        synchronized(MONITORS.computeIfAbsent(path,k->new Object())) {
-            try(RandomAccessFile syncFile=new RandomAccessFile(path,"rw");FileLock syncLock=syncFile.getChannel().tryLock()) {
-                if(syncLock==null)return object("busy",true);
-                Map<String,Object> initial=read();long after=((Number)initial.get("cursor")).longValue();
-                String serverId=string(http("GET",url+"/api/info",null),"id");
-                if(initial.containsKey("serverId"))Model.require(initial.get("serverId").equals(serverId),"Server database differs from this replica; use a separate state directory");
-                List<Object> batch=new ArrayList<>();int bytes=0;
-                for(Object v:list(initial.get("pending"))){int size=write(v).getBytes(StandardCharsets.UTF_8).length;if(batch.size()>=100||(!batch.isEmpty()&&bytes+size>3000000))break;batch.add(v);bytes+=size;}
-                Set<String> ack=new HashSet<>();
-                if(!batch.isEmpty())for(Object id:list(http("POST",url+"/api/events",object("document",document,"operations",batch)).get("accepted")))ack.add((String)id);
-                List<Object> received=new ArrayList<>();long last=after,savedCursor=after;int downloaded=0,receivedBytes=0;
-                while(true){
-                    List<Object> rows=list(http("GET",url+"/api/events?document="+URLEncoder.encode(document,"UTF-8")+"&after="+last,null).get("events"));
-                    for(Object row:rows){
-                        Map<String,Object> r=map(row),op=map(r.get("op"));long seq=((Number)r.get("seq")).longValue();Model.require(seq>last,"Invalid server cursor");Model.validate(op);
-                        int size=write(op).getBytes(StandardCharsets.UTF_8).length;
-                        if(!received.isEmpty()&&receivedBytes+size>3000000){receive(received,savedCursor,last,serverId);savedCursor=last;received=new ArrayList<>();receivedBytes=0;}
-                        received.add(op);receivedBytes+=size;last=seq;downloaded++;
-                    }
-                    if(rows.size()<1000)break;
-                }
-                if(!received.isEmpty())receive(received,savedCursor,last,serverId);
-                final long cursor=last;
-                // Remove acknowledgements only after complete catch-up. Interrupted downloads
-                // keep their durable cursor and outbox, so a retry is idempotent.
-                if(!ack.isEmpty()||!initial.containsKey("serverId"))edit(state->{
-                    Model.require(((Number)state.get("cursor")).longValue()==cursor,"Sync cursor changed");
-                    state.put("serverId",serverId);list(state.get("pending")).removeIf(v->ack.contains(map(v).get("id")));
-                });
-                return object("uploaded",ack.size(),"downloaded",downloaded,"cursor",last,"pending",list(read().get("pending")).size());
-            }
+    /** Immutable ingress log gives downstreams a resumable provisional order. */
+    public Map<String,Object> accept(List<Object> operations,Object root) throws Exception {
+        Map<String,Object> before=read();Map<String,Object> known=index(before);List<Object> fresh=new ArrayList<>();
+        Model.require(root==null||root instanceof String,"Invalid root identity");
+        Model.require(root==null||!before.containsKey("serverId")||root.equals(before.get("serverId")),"Server database differs from this replica");
+        for(Object value:operations){Map<String,Object> op=map(value);Model.validate(op);String id=string(op,"id");
+            Model.require(!id.isEmpty()&&id.length()<=200,"Invalid operation ID");
+            Model.require(write(op).getBytes(StandardCharsets.UTF_8).length<=3000000,"Action exceeds 3 MB");
+            if(known.containsKey(id))Model.require(equivalent(known.get(id),op),"Operation id reused with different contents");
+            else {known.put(id,op);fresh.add(op);}
         }
+        if(!fresh.isEmpty()||(root!=null&&!before.containsKey("serverId")))edit(state->{
+            Model.require(root==null||!state.containsKey("serverId")||root.equals(state.get("serverId")),"Server database differs from this replica");
+            if(root!=null)state.put("serverId",root);
+            Map<String,Object> current=index(state);for(Object op:fresh){String id=string(map(op),"id");if(current.containsKey(id))Model.require(equivalent(current.get(id),op),"Operation id reused with different contents");else {list(state.get("pending")).add(op);current.put(id,op);}}});
+        List<Object> accepted=new ArrayList<>();for(Object op:operations)accepted.add(map(op).get("id"));return object("accepted",accepted);
     }
-    private void receive(List<Object> operations,long after,long cursor,String serverId) throws Exception {
-        edit(state->{Model.require(((Number)state.get("cursor")).longValue()==after,"Sync cursor changed");list(state.get("events")).addAll(operations);state.put("cursor",cursor);state.put("serverId",serverId);});
+    private static Map<String,Object> index(Map<String,Object> state){Map<String,Object> out=new HashMap<>();for(String key:Arrays.asList("events","pending"))for(Object op:list(state.get(key)))out.put(string(map(op),"id"),op);return out;}
+    private static List<Object> relay(Map<String,Object> state){return list(state.getOrDefault("relay",Collections.emptyList()));}
+    public static List<Object> page(List<Object> values,int start){
+        Model.require(start>=0&&start<=values.size(),"Invalid replica cursor");List<Object> out=new ArrayList<>();int bytes=0;
+        for(int i=start;i<values.size()&&out.size()<100;i++){Object value=values.get(i);int size=write(value).getBytes(StandardCharsets.UTF_8).length;
+            if(!out.isEmpty()&&bytes+size>3000000)break;out.add(value);bytes+=size;}return out;
     }
-    private static Map<String,Object> http(String method,String url,Object body) throws Exception {
-        HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(2000);c.setReadTimeout(5000);c.setRequestMethod(method);
-        try{if(body!=null){c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");try(OutputStream out=c.getOutputStream()){out.write(write(body).getBytes(StandardCharsets.UTF_8));}}
-            int status=c.getResponseCode();if(status!=200)throw new IOException("Server HTTP "+status);
-            try(InputStream in=c.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);return map(parse(new String(out.toByteArray(),StandardCharsets.UTF_8)));}
-        }finally{c.disconnect();}
+    public Map<String,Object> replica(int after,int pendingAfter) throws Exception {
+        Map<String,Object> state=read();List<Object> events=list(state.get("events")),ingress=relay(state);
+        List<Object> committed=page(events,after),provisional=page(ingress,pendingAfter);
+        return object("events",committed,"after",after+committed.size(),"more",after+committed.size()<events.size(),
+            "provisional",provisional,"pendingAfter",pendingAfter+provisional.size(),"pendingMore",pendingAfter+provisional.size()<ingress.size(),"rootId",state.get("serverId"));
+    }
+    public boolean needsUpload(String peer) throws Exception {
+        Map<String,Object> s=read();Set<Object> sent=new HashSet<>();if(peer.equals(s.get("peerId")))sent.addAll(list(s.getOrDefault("forwarded",Collections.emptyList())));
+        for(Object op:list(s.get("pending")))if(!sent.contains(map(op).get("id")))return true;return false;
+    }
+    public interface UploadGate {void start() throws Exception;}
+    /** Called only by the proxy single sync worker; intermediate receipt is not final commit. */
+    public Map<String,Object> sync(Endpoint upstream,Map<String,Object> info,boolean upload,UploadGate gate) throws Exception {
+        String peer=string(info,"id");Object root=info.get("rootId");Map<String,Object> initial=read();
+        if(root!=null&&initial.containsKey("serverId"))Model.require(root.equals(initial.get("serverId")),"Server database differs from this replica; use a separate state directory");
+        if(!peer.equals(initial.get("peerId")))edit(s->{s.put("peerId",peer);s.put("forwarded",new ArrayList<>());s.put("relayCursor",0);});
+        initial=read();Set<Object> sent=new HashSet<>(list(initial.getOrDefault("forwarded",Collections.emptyList())));List<Object> batch=new ArrayList<>();int bytes=0;
+        if(upload)for(Object op:list(initial.get("pending"))){if(sent.contains(map(op).get("id")))continue;int size=write(op).getBytes(StandardCharsets.UTF_8).length;if(batch.size()>=100||(!batch.isEmpty()&&bytes+size>3000000))break;batch.add(op);bytes+=size;}
+        if(!batch.isEmpty()){
+            gate.start();
+            List<Object> ack=list(upstream.request("/api/events",object("document",document,"operations",batch,"rootId",root==null?initial.get("serverId"):root)).get("accepted"));
+            Set<Object> submitted=new HashSet<>();for(Object op:batch)submitted.add(map(op).get("id"));Model.require(submitted.containsAll(ack),"Unexpected acknowledgement");
+            edit(s->{List<Object> forwarded=new ArrayList<>(list(s.getOrDefault("forwarded",Collections.emptyList())));for(Object id:ack)if(!forwarded.contains(id))forwarded.add(id);s.put("forwarded",forwarded);});
+        }
+        int downloaded=0;
+        while(true){
+            Map<String,Object> s=read();int after=list(s.get("events")).size(),pendingAfter=((Number)s.getOrDefault("relayCursor",0)).intValue();
+            Map<String,Object> response=upstream.request("/api/replica?document="+URLEncoder.encode(document,"UTF-8")+"&after="+after+"&pendingAfter="+pendingAfter,null);
+            Object identity=response.get("rootId");if(identity!=null&&s.containsKey("serverId"))Model.require(identity.equals(s.get("serverId")),"Server database differs from this replica");
+            List<Object> events=list(response.get("events")),provisional=list(response.get("provisional"));
+            Model.require(((Number)response.get("after")).intValue()==after+events.size(),"Invalid commit cursor");
+            for(Object op:events)Model.validate(map(op));for(Object op:provisional)Model.validate(map(op));
+            int next=((Number)response.get("pendingAfter")).intValue();Model.require(next==pendingAfter+provisional.size(),"Invalid relay cursor");
+            if(!events.isEmpty()||!provisional.isEmpty()||(identity!=null&&!identity.equals(s.get("serverId"))))edit(state->{
+                Map<String,Object> known=index(state);Set<Object> committed=new HashSet<>();for(Object op:list(state.get("events")))committed.add(map(op).get("id"));
+                for(Object op:events){String id=string(map(op),"id");Model.require(!committed.contains(id),"Duplicate committed operation");if(known.containsKey(id))Model.require(equivalent(known.get(id),op),"Operation id reused with different contents");list(state.get("events")).add(op);known.put(id,op);committed.add(id);}
+                List<Object> forwarded=new ArrayList<>(list(state.getOrDefault("forwarded",Collections.emptyList())));
+                for(Object op:provisional){String id=string(map(op),"id");if(known.containsKey(id))Model.require(equivalent(known.get(id),op),"Operation id reused with different contents");else {list(state.get("pending")).add(op);known.put(id,op);}if(!committed.contains(id)&&!forwarded.contains(id))forwarded.add(id);}
+                list(state.get("pending")).removeIf(op->committed.contains(map(op).get("id")));forwarded.removeIf(committed::contains);
+                state.put("forwarded",forwarded);state.put("relayCursor",next);state.put("cursor",after+events.size());if(identity!=null)state.put("serverId",identity);
+            });
+            downloaded+=events.size();if(!Boolean.TRUE.equals(response.get("more"))&&!Boolean.TRUE.equals(response.get("pendingMore")))break;
+        }
+        return object("uploaded",batch.size(),"downloaded",downloaded,"pending",list(read().get("pending")).size(),"cursor",read().get("cursor"));
     }
 }

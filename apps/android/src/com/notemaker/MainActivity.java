@@ -24,6 +24,8 @@ public class MainActivity extends Activity {
     HashMap<String, Boolean> active = new HashMap<>();
     HashSet<String> hidden = new HashSet<>();
     ArrayList<String> undo = new ArrayList<>(), redo = new ArrayList<>();
+    String proxyUrl="",proxyToken="";
+    AppReplica replica;
     String document="notes", host="", type="fixed", selected="base";
     long cursor=0;
     int page=0, color=Color.BLACK;
@@ -46,7 +48,7 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
         android.content.SharedPreferences prefs=getSharedPreferences("settings",0);
-        host=prefs.getString("host",host);document=prefs.getString("document",document);
+        host=prefs.getString("host",host);document=prefs.getString("document",document);proxyUrl=prefs.getString("proxyUrl","");proxyToken=prefs.getString("proxyToken","");
         load("fixed");
         agent=new AgentUi(this);
         editor=new EditorUi(this);
@@ -56,28 +58,42 @@ public class MainActivity extends Activity {
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         update();
         configureProxy();
-        localThread=new Thread(this::localLoop,"local-state");localThread.start();
+
     }
-    @Override public void onDestroy(){running=false;if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
+    @Override public void onDestroy(){running=false;if(replica!=null)replica.close();if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
     File stateFile(){return store.file;}
-    void configureProxy(){startService(new Intent(this,ReplicaService.class).putExtra("document",document).putExtra("host",host));}
-    interface Work {void run(Store target) throws Exception;}
-    void persist(Work work,String optimisticId){
-        final Store target=store;saving++;
+    void configureProxy(){
+        final AppReplica target=replica;final String targetType=type;
+        if(!target.remote())startService(new Intent(this,ReplicaService.class).putExtra("document",document).putExtra("host",host));
+        else ReplicaService.writes.execute(()->{try{
+            Map<String,Object> initial=target.read();
+            if(((Number)initial.get("eventCount")).intValue()==0&&((Number)initial.get("pendingCount")).intValue()==0)target.command(Arrays.asList("append","-"),Json.object("kind","document","type",targetType));
+            refreshFrom(target);
+        }catch(Exception e){runOnUiThread(()->{saveError=e.toString();update();});}});
+        if(localThread!=null)localThread.interrupt();
+        localThread=new Thread(()->localLoop(target),"local-state");localThread.start();
+    }
+    void persist(List<String> args,Object input,String optimisticId){
+        final AppReplica target=replica;saving++;
         ReplicaService.writes.execute(()->{
-            try{work.run(target);Map<String,Object> snapshot=target.read();runOnUiThread(()->{
-                saving--;if(target!=store)return;if(optimisticId!=null)optimistic.remove(optimisticId);
+            try{target.command(args,input);Map<String,Object> snapshot=target.read();runOnUiThread(()->{
+                saving--;if(target!=replica)return;saveError=null;if(optimisticId!=null)optimistic.remove(optimisticId);
                 try{refreshShared(snapshot);update();}catch(Exception e){saveError=e.toString();update();}
             });}catch(Exception e){android.util.Log.e("NoteMaker","Local save failed",e);runOnUiThread(()->{saving--;saveError=e.toString();update();Toast.makeText(this,"Could not save changes: "+e.getMessage(),Toast.LENGTH_LONG).show();});}
         });
     }
     void save(){
+        if(replica.remote()&&revision<0)return;
         final Map<String,Object> preferences=Json.object("hidden",new ArrayList<>(hidden),"undo",new ArrayList<>(undo),"redo",new ArrayList<>(redo),"selected",selected,"page",page);
-        persist(target->target.edit(state->state.putAll(preferences)),null);
+        persist(Arrays.asList("settings","-"),preferences,null);
     }
     void refreshShared(Map<String,Object> state) throws Exception {
         long next=((Number)state.get("revision")).longValue();if(next<revision)return;
-        revision=next;eventCount=Json.list(state.get("events")).size();pendingCount=Json.list(state.get("pending")).size();cursor=((Number)state.get("cursor")).longValue();
+        if(replica.remote()&&revision<0&&next>=0){
+            for(String key:Arrays.asList("hidden","undo","redo")){java.util.Collection<String> values=key.equals("hidden")?hidden:key.equals("undo")?undo:redo;values.clear();for(Object value:Json.list(state.getOrDefault(key,Collections.emptyList())))values.add((String)value);}
+            selected=(String)state.getOrDefault("selected","base");page=((Number)state.getOrDefault("page",0)).intValue();
+        }
+        revision=next;eventCount=state.containsKey("eventCount")?((Number)state.get("eventCount")).intValue():Json.list(state.get("events")).size();pendingCount=state.containsKey("pendingCount")?((Number)state.get("pendingCount")).intValue():Json.list(state.get("pending")).size();cursor=((Number)state.get("cursor")).longValue();
         model=Store.model(state);type=model.type;documentSeen=eventCount+pendingCount>0;
         LinkedHashMap<String,JSONObject> nextLayers=new LinkedHashMap<>(),nextStrokes=new LinkedHashMap<>();
         for(Map.Entry<String,Map<String,Object>> entry:model.layers.entrySet())nextLayers.put(entry.getKey(),entity("layer:",entry,layers));
@@ -93,12 +109,13 @@ public class MainActivity extends Activity {
     void load(String newType){synchronized(lock){
         eventCount=pendingCount=0;optimistic.clear();renderedEntities.clear();cursor=0;revision=-1;hidden.clear();undo.clear();redo.clear();selected="base";page=0;type=newType;
         try{
-            store=new Store(getFilesDir(),document);Map<String,Object> state=store.read();JSONObject saved=new JSONObject(state);
+            if(replica!=null)replica.close();replica=new AppReplica(this,document,proxyUrl,proxyToken);store=replica.local;Map<String,Object> state=replica.remote()?Json.object("effectiveModel",new Model().json(),"revision",-1,"cursor",0,"eventCount",0,"pendingCount",0):store.read();JSONObject saved=new JSONObject(state);
             JSONArray h=saved.optJSONArray("hidden");if(h!=null)for(int i=0;i<h.length();i++)hidden.add(h.getString(i));
             h=saved.optJSONArray("undo");if(h!=null)for(int i=0;i<h.length();i++)undo.add(h.getString(i));
             h=saved.optJSONArray("redo");if(h!=null)for(int i=0;i<h.length();i++)redo.add(h.getString(i));
             selected=saved.optString("selected","base");page=saved.optInt("page",0);refreshShared(state);
-            if(eventCount==0&&pendingCount==0)enqueue(obj("kind","document","type",newType));
+            if(replica.remote())type=newType;
+            if(!replica.remote()&&eventCount==0&&pendingCount==0)enqueue(obj("kind","document","type",newType));
         }catch(Exception e){throw new RuntimeException("Cannot read saved document",e);}
     }}
     void apply(JSONObject o){String kind=o.optString("kind");
@@ -111,7 +128,7 @@ public class MainActivity extends Activity {
     }
     void enqueue(JSONObject o){
         String token=id();optimistic.put(token,o);apply(o);
-        persist(target->target.append(Json.map(Json.parse(o.toString())),"human"),token);
+        persist(Arrays.asList("append","-"),Json.map(Json.parse(o.toString())),token);
     }
     void update(){synchronized(lock){
         if(editor==null)return;
@@ -122,26 +139,39 @@ public class MainActivity extends Activity {
     void documentDialog(){
         LinearLayout fields=new LinearLayout(this);fields.setOrientation(1);fields.setPadding(editor.dp(24),editor.dp(8),editor.dp(24),editor.dp(8));
         EditText server=new EditText(this);server.setSingleLine();server.setText(host);server.setHint("Server URL (optional), e.g. http://192.168.50.180:8765");fields.addView(server);
+        EditText endpoint=new EditText(this);endpoint.setSingleLine();endpoint.setText(proxyUrl);endpoint.setHint("Editing proxy URL (blank: this device)");fields.addView(endpoint);
+        EditText credential=new EditText(this);credential.setSingleLine();credential.setText(proxyToken);credential.setHint("Editing proxy token");credential.setInputType(129);fields.addView(credential);
         EditText name=new EditText(this);name.setSingleLine();name.setText(document);name.setHint("Document name (same on both clients)");fields.addView(name);
         Spinner types=new Spinner(this);types.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Fixed page","Multiple pages","Infinite canvas"}));types.setSelection(type.equals("pages")?1:type.equals("infinite")?2:0);fields.addView(types);
         new AlertDialog.Builder(this).setTitle("Open or create document").setMessage("Type is used when creating a new document. Existing documents retain their type.").setView(fields).setPositiveButton("Open",(d,w)->{
+            String selectedProxy=endpoint.getText().toString().trim().replaceAll("/+$",""),selectedToken=credential.getText().toString().trim();
+            if(!selectedProxy.isEmpty()&&(!(selectedProxy.startsWith("http://")||selectedProxy.startsWith("https://"))||selectedToken.isEmpty())){Toast.makeText(this,"Enter a proxy HTTP(S) URL and token",1).show();return;}
             String next=name.getText().toString().trim(),url=server.getText().toString().trim().replaceAll("/+$","");
             if(next.isEmpty()||!(url.isEmpty()||url.startsWith("http://")||url.startsWith("https://"))){Toast.makeText(this,"Enter a document name and an optional HTTP(S) URL",1).show();return;}
-            synchronized(lock){save();document=next;host=url;connected=false;load(new String[]{"fixed","pages","infinite"}[types.getSelectedItemPosition()]);canvas.zoom=1;canvas.offsetX=canvas.offsetY=0;}
-            getSharedPreferences("settings",0).edit().putString("host",host).putString("document",document).apply();configureProxy();update();
+            synchronized(lock){save();document=next;host=url;proxyUrl=selectedProxy;proxyToken=selectedToken;connected=false;load(new String[]{"fixed","pages","infinite"}[types.getSelectedItemPosition()]);canvas.zoom=1;canvas.offsetX=canvas.offsetY=0;}
+            getSharedPreferences("settings",0).edit().putString("host",host).putString("document",document).putString("proxyUrl",proxyUrl).putString("proxyToken",proxyToken).apply();configureProxy();update();
         }).setNegativeButton("Cancel",null).show();
     }
     void pageDialog(){if(!type.equals("pages"))return;EditText field=new EditText(this);field.setInputType(2);field.setText(""+(page+1));new AlertDialog.Builder(this).setTitle("Go to / create page").setView(field).setPositiveButton("Open",(d,w)->{try{page=Math.max(0,Math.min(10000,Integer.parseInt(field.getText().toString())-1));save();update();}catch(Exception ignored){}}).show();}
-    void history(boolean forward){synchronized(lock){ArrayList<String> from=forward?redo:undo,to=forward?undo:redo;if(from.isEmpty())return;String entry=from.remove(from.size()-1);to.add(entry);if(entry.equals("object-action")){persist(target->target.history("human",forward),null);save();update();return;}boolean erased=entry.startsWith("erase:");String stroke=erased?entry.substring(6):entry;enqueue(obj("kind","active","stroke",stroke,"active",erased?!forward:forward));save();update();}}
-    void localLoop(){while(running){try{
-        final Store target=store;final Map<String,Object> snapshot=target.read();
-        runOnUiThread(()->{if(target!=store)return;try{boolean wasConnected=connected;connected=ReplicaService.proxy!=null&&Boolean.TRUE.equals(ReplicaService.proxy.connected.get(document));if(((Number)snapshot.get("revision")).longValue()>revision){refreshShared(snapshot);update();}else if(wasConnected!=connected)update();}catch(Exception e){android.util.Log.e("NoteMaker","Refresh failed",e);}});
-        Thread.sleep(100);
-    }catch(InterruptedException e){return;}catch(Exception e){android.util.Log.e("NoteMaker","Local state reload failed",e);try{Thread.sleep(1000);}catch(InterruptedException stop){return;}}}}
+    void history(boolean forward){synchronized(lock){ArrayList<String> from=forward?redo:undo,to=forward?undo:redo;if(from.isEmpty())return;String entry=from.remove(from.size()-1);to.add(entry);if(entry.equals("object-action")){persist(Arrays.asList(forward?"redo":"undo"),null,null);save();update();return;}boolean erased=entry.startsWith("erase:");String stroke=erased?entry.substring(6):entry;enqueue(obj("kind","active","stroke",stroke,"active",erased?!forward:forward));save();update();}}
+    void refreshFrom(AppReplica target){
+        try{
+            Map<String,Object> snapshot=target.read();
+            runOnUiThread(()->{if(target!=replica)return;try{boolean wasConnected=connected;connected=target.remote()||(ReplicaService.proxy!=null&&Boolean.TRUE.equals(ReplicaService.proxy.connected.get(document)));if(((Number)snapshot.get("revision")).longValue()>revision){refreshShared(snapshot);update();}else if(wasConnected!=connected)update();}catch(Exception e){android.util.Log.e("NoteMaker","Refresh failed",e);}});
+        }catch(Exception e){throw new RuntimeException(e);}
+    }
+    void localLoop(AppReplica target){
+        long observed=-1,backoff=500;
+        while(running&&target==replica)try{
+            if(target.remote())target.listen(()->refreshFrom(target));
+            else {com.notemaker.cli.LocalProxy proxy=ReplicaService.ensure(this);observed=proxy.awaitChange(observed);refreshFrom(target);}
+            backoff=500;
+        }catch(InterruptedException e){return;}catch(Exception e){android.util.Log.e("NoteMaker","Local state refresh failed",e);runOnUiThread(()->{if(target==replica&&connected){connected=false;update();}});try{Thread.sleep(backoff);backoff=Math.min(30000,backoff*2);}catch(InterruptedException stop){return;}}
+    }
 
     /** Launches the compiled CLI under this app's UID, using the installed APK as classpath. */
     public java.lang.Process startCli(String... arguments) throws IOException {
-        ArrayList<String> command=new ArrayList<>(Arrays.asList("/system/bin/app_process","/system/bin","com.notemaker.cli.Main","--proxy-file",new File(getFilesDir(),"proxy.json").getAbsolutePath(),"--document",document));
+        ArrayList<String> command=new ArrayList<>(Arrays.asList("/system/bin/app_process","/system/bin","com.notemaker.cli.Main","--proxy-file",replica.descriptorFile.getAbsolutePath(),"--document",document));
         command.addAll(Arrays.asList(arguments));ProcessBuilder builder=new ProcessBuilder(command);builder.environment().put("CLASSPATH",getApplicationInfo().sourceDir);return builder.start();
     }
     void objectDialog(){synchronized(lock){
@@ -157,10 +187,10 @@ public class MainActivity extends Activity {
         for(int index=0;index<keys.length;index++){String key=keys[index];TextView label=new TextView(this);label.setText(labels[index]);form.addView(label);EditText field=new EditText(this);field.setText(String.valueOf(original.getOrDefault(key,key.equals("text")?"":24)));if(!key.equals("text"))field.setInputType(8194|4096);form.addView(field);fields.put(key,field);}
         new AlertDialog.Builder(this).setTitle("Edit object").setView(form).setPositiveButton("Save",(d,w)->{
             try{synchronized(lock){Map<String,Object> patch=Json.object();for(Map.Entry<String,EditText> f:fields.entrySet())patch.put(f.getKey(),f.getKey().equals("text")?f.getValue().getText().toString():Double.parseDouble(f.getValue().getText().toString()));
-                persist(target->target.commit("human",m->{Map<String,Object> next=Json.map(Json.copy(m.objects.get(id)));next.putAll(patch);return Arrays.asList(next);}),null);undo.add("object-action");redo.clear();save();update();}
+                persist(Arrays.asList("object","update",id,"-"),patch,null);undo.add("object-action");redo.clear();save();update();}
             }catch(Exception e){Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();}
         }).setNeutralButton(Boolean.FALSE.equals(model.objectActive.get(id))?"Restore":"Erase",(d,w)->{
-            try{synchronized(lock){persist(target->target.commit("human",m->Arrays.asList(Json.object("kind","object-active","object",id,"active",Boolean.FALSE.equals(m.objectActive.get(id))))),null);undo.add("object-action");redo.clear();save();update();}}catch(Exception e){Toast.makeText(this,e.getMessage(),1).show();}
+            try{synchronized(lock){persist(Arrays.asList("object",Boolean.FALSE.equals(model.objectActive.get(id))?"show":"hide",id),null,null);undo.add("object-action");redo.clear();save();update();}}catch(Exception e){Toast.makeText(this,e.getMessage(),1).show();}
         }).setNegativeButton("Cancel",null).show();
     }}
 

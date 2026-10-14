@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 import uuid
+import urllib.request
 
 
 class Cancelled(Exception):
@@ -37,6 +38,8 @@ class PiHarness:
     def __init__(self, root, data, executable, upstream):
         self.root, self.data = Path(root).resolve(), Path(data).resolve()
         self.executable, self.upstream = executable, upstream
+        self.proxy = None
+        self.proxy_lock = threading.Lock()
         self.config = self.data / 'pi-home'
         self.config.mkdir(parents=True, exist_ok=True, mode=0o700)
         # A dedicated writable credential copy permits OAuth refresh without exposing
@@ -48,6 +51,37 @@ class PiHarness:
                 shutil.copyfile(original, destination)
                 destination.chmod(0o600)
 
+    def ensure_proxy(self):
+        with self.proxy_lock:
+            if self.proxy is not None and self.proxy.poll() is None:
+                return
+            replica = self.data / 'replica'
+            # A proxy can outlive a killed main-server process. Reuse that owner
+            # instead of starting a second writer or abandoning its durable queue.
+            try:
+                descriptor=json.loads((replica / 'proxy.json').read_text())
+                request=urllib.request.Request(descriptor['url']+'/api/info',headers={'Authorization':'Bearer '+descriptor['token']})
+                with urllib.request.urlopen(request,timeout=2) as response:
+                    peer=json.load(response)
+                if peer.get('kind')=='proxy' and peer.get('id')==descriptor.get('id'):
+                    return
+            except (OSError, ValueError, KeyError):
+                pass
+            self.proxy = subprocess.Popen([str(self.root / 'apps/cli/notemaker'), '--state', str(replica),
+                                           'serve', '0', self.upstream], stdout=subprocess.PIPE,
+                                          stderr=subprocess.DEVNULL, text=True)
+            ready = self.proxy.stdout.readline()
+            self.proxy.stdout.close()
+            if not ready:
+                self.proxy.wait(timeout=5)
+                raise ValueError('Cannot start the agent replica proxy; build the CLI first')
+
+    def close(self):
+        with self.proxy_lock:
+            if self.proxy is not None and self.proxy.poll() is None:
+                self.proxy.terminate()
+                self.proxy.wait(timeout=10)
+
     def command(self, chat):
         pi = shutil.which(self.executable)
         if not pi:
@@ -55,6 +89,7 @@ class PiHarness:
         node, bwrap = shutil.which('node'), shutil.which('bwrap')
         if not node or not bwrap:
             raise ValueError('Run the server inside nix-shell (node and bubblewrap required)')
+        self.ensure_proxy()
         pi = Path(pi).resolve()
         package = pi.parent
         while package != package.parent and not (package / 'package.json').exists():
@@ -78,6 +113,7 @@ class PiHarness:
                'PI_OFFLINE': '1', 'PI_TELEMETRY': '0',
                'NOTEMAKER_EVENT_FILE': str(self.data / (chat['id'] + '.events.jsonl')),
                'NOTEMAKER_STATE': str(self.data / 'replica'),
+               'NOTEMAKER_PROXY_FILE': str(self.data / 'replica' / 'proxy.json'),
                'NOTEMAKER_ACTOR': 'agent-' + chat['id'],
                'NODE_EXTRA_CA_CERTS': str(Path('/etc/ssl/certs/ca-certificates.crt').resolve())}
         for key in ('SSL_CERT_FILE', 'NIX_SSL_CERT_FILE', 'NOTEMAKER_JSVG'):
@@ -89,10 +125,10 @@ class PiHarness:
             'You are the NoteMaker tablet assistant. Work in this repository. Use the '
             'notemaker-server skill and CLI documentation to read and edit notes without '
             'asking permission for edits. All document mutations must use the CLI local '
-            'replica, then sync; never modify server tables. NOTEMAKER_ACTOR and '
-            'NOTEMAKER_STATE are already set to your stable actor and shared replica. '
+            'proxy; never modify replica files or server tables. NOTEMAKER_ACTOR and '
+            'NOTEMAKER_PROXY_FILE are already set to your stable actor and selected proxy. '
             'Use these CLI defaults. If explicit flags are needed, use '
-            '--actor "$NOTEMAKER_ACTOR" --state "$NOTEMAKER_STATE"; never invent or '
+            '--actor "$NOTEMAKER_ACTOR" --proxy-file "$NOTEMAKER_PROXY_FILE"; never invent or '
             'retype the actor ID or replica path. '
             'The upstream is ' + self.upstream + '. Synchronize before reading and after '
             'editing each document. The host already launched you inside nix-shell, and '

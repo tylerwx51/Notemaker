@@ -19,9 +19,9 @@ public final class Main {
         + "                           $XDG_STATE_HOME/notemaker or ~/.local/state/notemaker\n"
         + "--document NAME            Case-sensitive document name (default: notes)\n"
         + "--actor ID                 Stable editing identity; default NOTEMAKER_ACTOR, otherwise cli\n"
-        + "--proxy-file FILE          Send commands to a local proxy descriptor\n"
+        + "--proxy-file FILE          Selected proxy; default NOTEMAKER_PROXY_FILE\n"
         + "--help                     Show this help without contacting a server\n\n"
-        + "serve [PORT [SERVER_URL]]   Start local replica proxy (default port 8766)\n"
+        + "serve [PORT [UPSTREAM]]     Start replica proxy; upstream URL or descriptor\n"
         + "document create [fixed|pages|infinite] | document list\ninspect | status | log\n"
         + "diagram add FILE|-         Atomic new layer and editable diagram objects\n"
         + "svg add FILE.svg|- [PLACEMENT.json]   Place SVG; optional {x,y,w,h,layer,page,object}\n"
@@ -31,39 +31,46 @@ public final class Main {
         + "object hide ID | object show ID\n"
         + "stroke put FILE|- | stroke hide ID | stroke show ID\n"
         + "apply FILE|-               Atomic JSON array of protocol actions\n"
+        + "append FILE|-              Append one raw action (editor stroke history)\n"
+        + "settings FILE|-            Update local editor preferences\n"
+        + "snapshot                   Materialized model and local editor metadata\n"
         + "undo | redo                History for the selected actor\n"
         + "export FILE.svg|FILE.png [PAGE [X Y WIDTH HEIGHT]]   Page is zero-based\n"
-        + "sync SERVER_URL            Upload one batch and fetch all remote pages; repeat if pending > 0\n"
-        + "watch SERVER_URL           Keep synchronizing until interrupted\n"
+        + "sync [UPSTREAM]            Request proxy synchronization (URL or proxy descriptor)\n"
+        + "configure UPSTREAM         Set sole upstream; empty string disconnects\n"
         + "FILE|- accepts JSON from a file or stdin (svg add reads raw SVG).\n"
-        + "Edits use local state and work offline; document list lists local documents only.\n"
+        + "Edits require a running selected proxy and work offline; document list lists local documents only.\n"
         + "JSON on stdout (except help); JSON errors on stderr and exit 1.\n"
         + "Mutations are not idempotent: inspect log before retrying a lost result.\n"
         + "sync retries are idempotent. See apps/cli/README.md for input schemas.\n\n"
         + "Examples:\n"
         + "  notemaker --document notes status\n"
-        + "  notemaker --document notes sync http://127.0.0.1:8765\n";
+        + "  notemaker --proxy-file /path/to/replica/proxy.json --document notes sync http://127.0.0.1:8765\n";
     public static void main(String[] args){try{Object result=run(args);if(result!=null)System.out.println(write(result));}catch(Exception e){Throwable cause=e;while(cause.getCause()!=null)cause=cause.getCause();System.err.println(write(object("error",cause.toString())));System.exit(1);}}
     public static Object run(String[] args) throws Exception {
         List<String>a=new ArrayList<>(Arrays.asList(args));
         if(a.isEmpty()||a.contains("--help")||(a.size()==1&&a.get(0).equals("help"))){System.out.print(HELP);return null;}
         String state=System.getenv("NOTEMAKER_STATE");if(state==null){String xdg=System.getenv("XDG_STATE_HOME");state=(xdg==null?System.getProperty("user.home")+"/.local/state":xdg)+"/notemaker";}
-        String doc="notes",actor=System.getenv("NOTEMAKER_ACTOR"),proxy=null;
+        String doc="notes",actor=System.getenv("NOTEMAKER_ACTOR"),proxy=System.getenv("NOTEMAKER_PROXY_FILE");
         if(actor==null||actor.isEmpty())actor="cli";
         while(!a.isEmpty()&&a.get(0).startsWith("--")){String flag=a.remove(0);require(!a.isEmpty(),"Missing "+flag+" value");String value=a.remove(0);switch(flag){case "--state":state=value;break;case "--document":doc=value;break;case "--actor":actor=value;break;case "--proxy-file":proxy=value;break;default:throw new IllegalArgumentException("Unknown option "+flag);}}
         require(!a.isEmpty(),"Missing command");
+        if(a.get(0).equals("serve"))proxy=null;
         Model remoteModel=null;
+        if(Boolean.TRUE.equals(inProxy.get()))proxy=null;
         if(proxy!=null){
             Map<String,Object> descriptor=map(parse(new String(Files.readAllBytes(Paths.get(proxy)),StandardCharsets.UTF_8)));
             Object value=null;String cmd=a.get(0);
             if(cmd.equals("svg")){value=svgInput(a.subList(1,a.size()));a=new ArrayList<>(Arrays.asList("svg","add","-"));}
-            else if(cmd.equals("apply")||cmd.equals("diagram")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke"))&&(a.contains("put")||a.contains("update")))){
+            else if(cmd.equals("append")||cmd.equals("settings")||cmd.equals("apply")||cmd.equals("diagram")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke"))&&(a.contains("put")||a.contains("update")))){
                 int last=a.size()-1;value=input(a.get(last));a.set(last,"-");
             }
             if(cmd.equals("export"))remoteModel=Model.fromJson(map(LocalProxy.request(descriptor,doc,actor,Arrays.asList("inspect"),null)));
             else return LocalProxy.request(descriptor,doc,actor,a,value);
         }
-        String command=a.remove(0);File directory=new File(state);Store store=remoteModel==null?new Store(directory,doc):null;
+        String command=a.remove(0);File directory=new File(state);Store store=remoteModel==null?(Boolean.TRUE.equals(inProxy.get())?Store.writer(directory,doc):new Store(directory,doc)):null;
+        boolean readOnly=Arrays.asList("inspect","snapshot","status","log","export","serve").contains(command)||(command.equals("document")&&a.equals(Arrays.asList("list")));
+        require(readOnly||Boolean.TRUE.equals(inProxy.get()),"Writes and synchronization require --proxy-file (or NOTEMAKER_PROXY_FILE); start the selected proxy with serve");
         final String actionActor=actor;
         switch(command){
             case "serve":{
@@ -81,10 +88,25 @@ public final class Main {
                 store.edit(s->{require(list(s.get("events")).isEmpty()&&list(s.get("pending")).isEmpty(),"Document already exists");op.put("id",Actions.id());op.put("actor",actionActor);list(s.get("pending")).add(op);});return object("document",doc,"type",type);
             }
             case "inspect":arity(a,0);return store.model().json();
+            case "snapshot":{
+                arity(a,0);Map<String,Object> s=store.read(),out=object("effectiveModel",Store.model(s).json(),"revision",s.get("revision"),"cursor",s.get("cursor"),"eventCount",list(s.get("events")).size(),"pendingCount",list(s.get("pending")).size());
+                for(String key:Arrays.asList("hidden","undo","redo","selected","page"))if(s.containsKey(key))out.put(key,s.get(key));return out;
+            }
+            case "append":{
+                arity(a,1);Map<String,Object> s=store.append(map(input(a.get(0))),actor);List<Object> pending=list(s.get("pending"));return object("operation",map(pending.get(pending.size()-1)).get("id"));
+            }
+            case "settings":{
+                arity(a,1);Map<String,Object> preferences=map(input(a.get(0)));
+                for(String key:preferences.keySet()){
+                    require(Arrays.asList("hidden","undo","redo","selected","page").contains(key),"Unknown local preference");
+                    if(Arrays.asList("hidden","undo","redo").contains(key))for(Object value:list(preferences.get(key)))require(value instanceof String,"Expected preference strings");
+                    if(key.equals("selected"))string(preferences,key);
+                    if(key.equals("page"))require(number(preferences,key)>=0&&number(preferences,key)<=10000&&number(preferences,key)==Math.rint(number(preferences,key)),"Invalid page");
+                }
+                store.edit(s->s.putAll(preferences));return object("saved",true);
+            }
             case "status":{arity(a,0);Map<String,Object>s=store.read();return object("document",doc,"cursor",s.get("cursor"),"pending",list(s.get("pending")).size(),"revision",s.get("revision"),"serverId",s.get("serverId"));}
             case "log":arity(a,0);return store.read();
-            case "sync":arity(a,1);return store.sync(a.get(0));
-            case "watch":arity(a,1);while(true){try{System.out.println(write(store.sync(a.get(0))));}catch(Exception e){System.err.println(write(object("error",e.getMessage(),"retrying",true)));}Thread.sleep(1000);}
             case "undo":case "redo":arity(a,0);return store.history(actor,command.equals("redo"));
             case "diagram":arity(a,2);require(a.get(0).equals("add"),"diagram add FILE|-");Map<String,Object> diagram=map(input(a.get(1)));return store.commit(actor,m->Actions.diagram(m,diagram));
             case "svg":{
