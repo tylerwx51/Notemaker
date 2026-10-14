@@ -9,4 +9,5 @@ __pycache__/
 .test-artifacts/
 .hypothesis/
 .agent-data/
+boox-notes-decompiled/
 apps/cli/build/

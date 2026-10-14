@@ -7,10 +7,16 @@ display tablet. Tablet applications may communicate with this development
 computer or the Phenom II home server. Keep application boundaries clear and
 share protocols and reusable code when there is an actual common need.
 
-The repository currently contains Android emulator tooling in `shell.nix` and
-usage instructions in `README.md`; application code and the monorepo layout
-have not yet been established. Choose languages, frameworks, and directory
-structure as concrete application requirements emerge.
+Applications live in `apps/android`, `apps/server`, and `apps/cli`. The shared
+Java replica, action model, and rendering traversal live in `packages/core`.
+Keep the CLI available on both the JVM (NixOS) and Android.
+
+Every new document/drawing action must also be exposed through the CLI, with
+structured input/output and appropriate verification using actual CLI calls.
+App and CLI edits go through shared local state; neither may bypass it with
+direct server mutations. Local editing must work with the server unavailable.
+Preserve actor-specific histories and atomic actions, including entire diagrams.
+Do not add AI agent orchestration unless requested.
 
 ## Development environment
 

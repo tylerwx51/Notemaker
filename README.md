@@ -64,6 +64,15 @@ The initial `nix-shell` downloads a large SDK and system image.
 References: [Nixpkgs Android tooling](https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/android.section.md),
 [BOOX Note Air6 C specifications](https://shop.boox.com/products/noteair6c).
 
+## Inspecting the BOOX Notes APK
+
+The Nix shell includes `jadx` (Java decompilation) and `apktool` (decoded
+resources and Smali bytecode). USB extraction requires the tablet to authorize
+this computer for USB debugging; check with `nix-shell --run 'adb devices -l'`.
+Local extracted APKs, assets, and code belong in `boox-notes-decompiled/`, which
+is excluded from version control. This folder's README records extraction
+details and decompilation limitations when extraction is complete.
+
 ## Applications
 
 The repository has three applications and a shared Java core:
