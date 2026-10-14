@@ -2,6 +2,10 @@
 
 Status: accepted, 2026-10-10.
 
+The permanent layer tray, selected-tool background, and original rail grouping
+are superseded by [ADR 0010](0010-anchored-editor-panels.md). Canvas stability,
+native vector icons and local-state editing remain applicable.
+
 ## Context
 
 The initial editor's two rows of full-width buttons took attention away from the

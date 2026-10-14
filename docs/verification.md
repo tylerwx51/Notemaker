@@ -1,5 +1,46 @@
 # Verification
 
+## BOOX-style editor organization and menus — 2026-10-14
+
+Reorganized the Android editor into a narrow left rail, top-bar drawing/history
+controls and anchored tool panels. Layers now opens a thumbnail list instead of
+covering the canvas with a permanent tray. White panels use black outlines,
+divided action rows, icon grids and selection dots. See ADR 0010.
+
+Passed through the Nix development environment:
+
+- `apps/android/build.sh` (the existing Java 8 bootstrap/deprecation warnings remain).
+- `python3 tests/ui_review.py emulator-5554`: real UI clicks, pen color, layer
+  creation/visibility/force rules, undo/redo, rectangle placement as one atomic
+  batch, panel touch isolation, unchanged canvas bounds, label preference after
+  restart and narrow-screen scrolling. Screenshots in `.test-artifacts/ui-review/`.
+- `python3 tests/drawing_android.py --tool-switch-only`: existing selection leases,
+  delayed acquisition/reselection and transform-preview cancellation regression
+  passed on an isolated emulator.
+- Python syntax validation of the updated UI review and `git diff --check`.
+
+A focused final-APK UI check also passed document-menu access and scrolling the
+narrow left rail to More; its screenshots are `documents-popup.png` and
+`narrow-more-popup.png` in the same artifact directory.
+
+The first UI run caught a test assertion that expected a standalone object event;
+the rectangle was correctly stored in an atomic batch. The review now asserts
+exactly one rectangle batch. Screenshot inspection also caught panel contents
+covering the rounded border; the shell now draws its outline after its contents.
+No document action or shared protocol was added or changed.
+
+Installed APK `51726b2291078de45d5712aab23584763670fe0cfd9e877638bb63676a424c18`
+on BOOX `eac89823` with `python3 tests/tablet_checks.py --serial eac89823 --install`
+through Nix. All 43 app-data files were byte-identical across installation, and
+the installed APK matched the build. The connected smoke check timed out because
+the configured upstream was unavailable. A separate read-only CLI check against
+the running tablet proxy verified all 484 existing actions and actor histories,
+including the same five pending actions before and after installation. The app
+opened with the new rail, with no fatal exceptions in its process log; its screen
+was captured and inspected. Artifacts, backup and offline verification report:
+`.test-artifacts/tablet/20261014-113915-173380/`. E Ink refresh and physical stylus
+ergonomics remain unverified for this build.
+
 ## Selection ends on tool change — 2026-10-14
 
 Tool changes now clear the selected entities, stop lease heartbeats, cancel

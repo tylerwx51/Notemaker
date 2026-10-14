@@ -115,8 +115,10 @@ the app or clearing its data removes locally stored notes and unsynced edits.
 
 ### Drawing and collaboration
 
-The left sidebar groups common actions into popups. Both finger and stylus draw.
-**Pen** opens brush profiles, presets, color swatches and width controls;
+The top bar holds **Notes**, **Pen**, **Erase**, and direct **Undo/Redo** controls.
+The narrow left rail groups **Template**, **Layers**, **Shapes**, **Fill**,
+**Select**, **Text**, **Insert**, **Move**, **Pages**, and **More**.
+Both finger and stylus draw. **Pen** opens brush profiles, presets, color swatches and width controls;
 stylus pressure varies width.
 **Shapes** opens an original monochrome palette for rectangles, ellipses, arrows,
 lines, triangles, diamonds, polygons, stars and 3D figures. Choose outline color,
@@ -130,22 +132,26 @@ in human undo/redo and remains available offline through the local proxy.
 **Erase** offers whole-stroke, partial, area and page erasing, plus optional
 scribble-to-erase. **Fill** colors native objects or enclosed drawing regions.
 **Select** provides transforms, copy/cut/paste, duplication and deletion, with
-15-second selection leases and live previews. **History → Undo/Redo** changes
-your own drawing/erasing actions and syncs the result; another editor's selection
+15-second selection leases and live previews. The top-bar **Undo/Redo** controls change
+your own drawing/erasing actions and sync the result; another editor's selection
 blocks conflicting operations. **Move** enables
 dragging/pinch zoom and offers **Reset view** and **Return to pen**.
 
-The right layer tray shows a diagram of the layers, topmost first, with previews,
-names, and visible/hidden states. Tap a card to select it or its eye to hide/show
-it locally. Use **New layer** to add a named layer. Each card's **…** menu offers
+**Layers** opens a list of layers, topmost first, with previews,
+names, and visible/hidden states. Tap a row to select it or its eye to hide/show
+it locally. Use **New layer** to add a named layer. Each row's **…** menu offers
 rename, duplicate, reorder, merge and archive controls, as well as
 **Force visible for everyone**, shown as a lock while enabled. Release it to
 restore each client's local visibility preference.
 
-The tray's top chevron collapses it to previews and eye controls; the opposite
-chevron expands it. This preference survives restart. The tray overlays the page,
-so toggling it preserves the canvas position and zoom. Collapse it to expose more
-of the drawing surface. Show a layer before drawing on it.
+Menus use white panels with thin black rounded borders, divided action rows,
+and black selection dots beneath visual choices. Opening or dismissing a panel
+preserves the canvas bounds, position and zoom. Panels scroll when the display
+is too short for their contents. Show a layer before drawing on it.
+**Insert** contains picture, SVG and text placement; **Template** contains page
+guides. **More** contains toolbar preferences, pen presets, history and Agent.
+**More → Toolbar preferences → Show tool labels** persists locally; accessible
+tool descriptions remain available with labels hidden.
 
 Documents can be a fixed page, multiple numbered pages, or an infinite canvas.
 Use **Pages** for previous/next/go-to actions in multipage documents. The document
@@ -190,9 +196,11 @@ hardware limitations are in [docs/verification.md](docs/verification.md).
 
 For a focused UI review, start an emulator with `boox-emulator-headless`, then run
 `nix-shell --run 'python3 tests/ui_review.py emulator-5554'` with its actual serial.
-This installs the built APK and resets only the reserved `Interface-review` test
-document. It exercises the sidebar popups and layer tray through Android's UI
-automation and saves screenshots in `.test-artifacts/ui-review/`.
+This emulator-only review installs the built APK, creates a unique
+`Interface-review-*` notebook, and exercises the toolbar and anchored panels
+through Android's UI automation. It temporarily overrides emulator size/density
+for narrow-screen checks and resets those overrides afterward. Test notes are
+retained; screenshots are saved in `.test-artifacts/ui-review/`.
 
 ### Agent CLI and editable diagrams
 

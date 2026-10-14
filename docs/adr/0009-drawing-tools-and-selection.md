@@ -16,7 +16,8 @@ All document actions enter the selected proxy, update its durable local store,
 and synchronize through the existing proxy tree to the main server. Android
 and CLI use the same commands and validation. A shape remains an editable
 object rather than being flattened to strokes. Android extends the existing
-sidebar and layer tray with grouped panels.
+editor chrome with grouped panels. Their current organization and styling are
+specified in [ADR 0010](0010-anchored-editor-panels.md).
 
 The accepted feature scope includes pens and presets, geometric shapes and
 3D figure drawings, text boxes, styling and enclosed-area fill, selection and

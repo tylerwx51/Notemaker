@@ -10,29 +10,30 @@ import android.widget.*;
 import org.json.JSONObject;
 import java.util.*;
 
-/** Editor chrome. The layer tray overlays the canvas so toggling it never moves ink. */
+/** Monochrome editor chrome. All tool panels overlay the unchanged canvas. */
 final class EditorUi {
-    private static final int INK = 0xff202521;
-    private static final int MUTED = 0xff636b65;
-    private static final int LINE = 0xffd8ddd7;
-    private static final int PAPER = 0xfff5f6f2;
+    private static final int INK = Color.BLACK;
+    private static final int MUTED = 0xff555555;
+    private static final int LINE = Color.BLACK;
+    private static final int PAPER = Color.WHITE;
     private final MainActivity app;
     private final Map<String, Tool> tools = new LinkedHashMap<>();
     private final ArrayList<LayerPreview> previews = new ArrayList<>();
-    private LinearLayout root, tray, layerList;
+    private LinearLayout root, layerList;
     private TextView title, subtitle, connection;
     private FrameLayout workspace;
     private PopupWindow popup;
-    private boolean expanded;
+    private Tool popupAnchor;
+    private Icon undoButton, redoButton;
+    private StrokeSample sample;
     private boolean showToolLabels=true;
     private String selectedTool = "pen";
-    private String trayState = "";
+    private String layerState = "";
     private long thumbnailTime;
     private int thumbnailRevision = -1;
 
     EditorUi(MainActivity app) {
         this.app = app;
-        expanded = app.getSharedPreferences("settings", 0).getBoolean("layerTrayExpanded", true);
         showToolLabels=app.getSharedPreferences("settings",0).getBoolean("showToolLabels",true);
     }
 
@@ -49,47 +50,53 @@ final class EditorUi {
 
         LinearLayout header = row();
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(22), 0, dp(24), 0);
-        TextView wordmark = text("NOTE / MAKER", 12, INK, true);
-        wordmark.setLetterSpacing(.13f);
-        header.addView(wordmark, new LinearLayout.LayoutParams(dp(154), -2));
+        header.setPadding(0, 0, dp(8), 0);
+        topTool(header, "document", "Notes", "Document actions");
         LinearLayout heading = column();
-        title = text("", 18, INK, true);
+        heading.setPadding(dp(12), 0, dp(8), 0);
+        title = text("", 18, INK, false);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         subtitle = text("", 11, MUTED, false);
         heading.addView(title);
         heading.addView(subtitle);
         header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
-        connection = text("", 12, MUTED, false);
-        connection.setGravity(Gravity.RIGHT);
+        connection = text("", 10, MUTED, false);
+        connection.setSingleLine(true);
+        connection.setEllipsize(TextUtils.TruncateAt.END);
         connection.setOnClickListener(v->{if(!app.conflicts.isEmpty())showConflictPanel();});
-        header.addView(connection);
-        header.addView(action("Prefs", () -> { dismissPopup(); showPopup(preferencesPanel(), tools.get("pen"), false); }));
-        header.addView(action("Agent", () -> { dismissPopup(); app.agent.show(); }));
-        root.addView(header, new LinearLayout.LayoutParams(-1, dp(70)));
+        heading.addView(connection);
+        topTool(header, "pen", "Pen", "Pen tools");
+        topTool(header, "eraser", "Erase", "Eraser tools");
+        View topRule=divider(); LinearLayout.LayoutParams ruleParams=new LinearLayout.LayoutParams(dp(1),dp(32));ruleParams.setMargins(dp(6),0,dp(6),0);header.addView(topRule,ruleParams);
+        undoButton=icon("undo","Undo",()->{dismissPopup();app.history(false);});
+        redoButton=icon("redo","Redo",()->{dismissPopup();app.history(true);});
+        header.addView(undoButton,new LinearLayout.LayoutParams(dp(48),dp(56)));
+        header.addView(redoButton,new LinearLayout.LayoutParams(dp(48),dp(56)));
+        root.addView(header, new LinearLayout.LayoutParams(-1, dp(72)));
         root.addView(divider(), new LinearLayout.LayoutParams(-1, dp(1)));
 
         LinearLayout body = row();
         root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout rail = column();
         rail.setGravity(Gravity.CENTER_HORIZONTAL);
-        rail.setPadding(dp(8), dp(14), dp(8), dp(12));
+        rail.setPadding(0, dp(8), 0, dp(8));
         rail.setBackgroundColor(PAPER);
-        body.addView(rail, new LinearLayout.LayoutParams(dp(76), -1));
-        tool(rail, "document", "Notes", "Document actions");
-        space(rail, 18);
-        tool(rail, "pen", "Pen", "Pen tools");
-        tool(rail, "eraser", "Erase", "Eraser tools");
+        ScrollView railScroll=new ScrollView(app);railScroll.setFillViewport(true);railScroll.setVerticalScrollBarEnabled(false);railScroll.addView(rail);
+        body.addView(railScroll, new LinearLayout.LayoutParams(dp(56), -1));
+        tool(rail, "template", "Template", "Page templates");
+        tool(rail, "layers", "Layers", "Layer actions");
         tool(rail, "shapes", "Shapes", "Shape tools");
         tool(rail, "fill", "Fill", "Enclosed area fill");
+        railRule(rail);
         tool(rail, "select", "Select", "Select and transform objects");
         tool(rail, "text", "Text", "Text placement");
+        tool(rail, "insert", "Insert", "Insert content");
         tool(rail, "move", "Move", "Canvas navigation");
-        space(rail, 18);
-        tool(rail, "history", "History", "Undo and redo");
-        rail.addView(new View(app), new LinearLayout.LayoutParams(1, 0, 1));
+        railRule(rail);
         tool(rail, "page", "Pages", "Page actions");
+        rail.addView(new View(app), new LinearLayout.LayoutParams(1, 0, 1));
+        tool(rail, "more", "More", "More tools");
         body.addView(divider(), new LinearLayout.LayoutParams(dp(1), -1));
 
         workspace = new FrameLayout(app);
@@ -97,8 +104,16 @@ final class EditorUi {
         app.canvas = app.new CanvasView(app);
         app.canvas.setContentDescription("Drawing canvas");
         workspace.addView(app.canvas, new FrameLayout.LayoutParams(-1, -1));
-        buildTray();
         return root;
+    }
+
+    private void topTool(LinearLayout header,String kind,String label,String description){
+        Tool tool=new Tool(kind,label,description);tool.top=true;tools.put(kind,tool);
+        header.addView(tool,new LinearLayout.LayoutParams(dp(54),-1));
+        tool.setOnClickListener(v->openTool(kind,tool));
+    }
+    private void railRule(LinearLayout rail){
+        LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(dp(24),dp(1));params.setMargins(0,dp(7),0,dp(7));rail.addView(divider(),params);
     }
 
     private LinearLayout column() { LinearLayout v = new LinearLayout(app); v.setOrientation(1); return v; }
@@ -121,28 +136,41 @@ final class EditorUi {
         return shape;
     }
     private TextView action(String label, Runnable callback) {
-        TextView button = text(label, 14, INK, true);
+        TextView button = text(label, 15, INK, false);
         button.setGravity(Gravity.CENTER_VERTICAL);
         button.setPadding(dp(14), dp(12), dp(14), dp(12));
         button.setMinHeight(dp(48));
-        button.setBackground(surface(PAPER, LINE, 8, 1));
+        button.setBackgroundColor(PAPER);
         button.setContentDescription(label);
         button.setOnClickListener(v -> callback.run());
         return button;
     }
     private void menuAction(LinearLayout parent, String label, boolean enabled, Runnable callback) {
-        TextView button = action(label, () -> { dismissPopup(); callback.run(); });
-        button.setEnabled(enabled);
-        button.setAlpha(enabled ? 1f : .4f);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.topMargin = dp(8);
-        parent.addView(button, params);
+        parent.addView(divider(),new LinearLayout.LayoutParams(-1,dp(1)));
+        LinearLayout button=row();button.setGravity(Gravity.CENTER_VERTICAL);button.setMinimumHeight(dp(52));
+        button.setContentDescription(label);button.setEnabled(enabled);button.setAlpha(enabled?1f:.4f);
+        button.addView(new Icon(actionIcon(label)),new LinearLayout.LayoutParams(dp(38),dp(38)));
+        TextView name=text(label,15,INK,false);name.setPadding(dp(10),dp(12),dp(4),dp(12));
+        button.addView(name,new LinearLayout.LayoutParams(0,-2,1));
+        button.setOnClickListener(v->{dismissPopup();callback.run();});
+        parent.addView(button,new LinearLayout.LayoutParams(-1,-2));
+    }
+    private String actionIcon(String label){
+        String s=label.toLowerCase(java.util.Locale.ROOT);
+        if(s.contains("undo"))return "undo";if(s.contains("redo"))return "redo";
+        if(s.contains("layer"))return "layers";if(s.contains("picture")||s.contains("artwork"))return "insert";
+        if(s.startsWith("pen")||s.contains(" pen")||s.contains("brush")||s.contains("preset"))return "pen";
+        if(s.contains("text"))return "text";if(s.contains("erase"))return "eraser";
+        if(s.contains("template")||s.equals("ruled")||s.equals("graph")||s.equals("dot grid"))return "template";
+        if(s.contains("page")||s.contains("document"))return "document";
+        if(s.contains("zoom")||s.contains("view"))return "move";
+        if(s.contains("select")||s.contains("cop")||s.contains("paste")||s.contains("transform"))return "select";
+        if(s.contains("done")||s.startsWith("ready"))return "check";return "more";
     }
     private void tool(LinearLayout rail, String icon, String label, String description) {
         Tool tool = new Tool(icon, label, description);
         tools.put(icon, tool);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(66));
-        params.bottomMargin = dp(7);
         rail.addView(tool, params);
         tool.setOnClickListener(v -> openTool(icon, tool));
     }
@@ -161,13 +189,16 @@ final class EditorUi {
         if(!app.conflicts.isEmpty())setText(connection,connection.getText()+"  ·  "+app.conflicts.size()+" conflict(s)");
         String mode = app.erase ? "eraser" : app.pan ? "move" : app.drawingShape!=null ? (app.drawingShape.equals("text")?"text":"shapes") : selectedTool;
         for (Map.Entry<String, Tool> entry : tools.entrySet()) entry.getValue().active(entry.getKey().equals(mode));
+        boolean ready=!app.objectHistoryPending();
+        undoButton.setEnabled(ready&&!app.undo.isEmpty());undoButton.setAlpha(undoButton.isEnabled()?1f:.3f);
+        redoButton.setEnabled(ready&&!app.redo.isEmpty());redoButton.setAlpha(redoButton.isEnabled()?1f:.3f);
 
         StringBuilder state = new StringBuilder(app.document).append('/').append(app.page).append('/').append(app.selected);
         for (Map.Entry<String, JSONObject> entry : app.layers.entrySet()) {
             state.append('|').append(entry.getKey()).append(entry.getValue().toString()).append(app.hidden.contains(entry.getKey())).append(app.model.layerActive.get(entry.getKey()));
         }
-        if (!state.toString().equals(trayState)) {
-            trayState = state.toString();
+        if (!state.toString().equals(layerState)) {
+            layerState = state.toString();
             rebuildLayers();
         }
         int revision = app.eventCount + app.pendingCount;
@@ -179,107 +210,47 @@ final class EditorUi {
         }
     }
 
-    private void buildTray() {
-        if (tray != null) workspace.removeView(tray);
-        tray = column();
-        tray.setClickable(true);
-        tray.setPadding(dp(8), dp(12), dp(8), dp(12));
-        tray.setBackground(surface(PAPER, LINE, 0, 1));
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(expanded ? 248 : 64), -1, Gravity.RIGHT);
-        workspace.addView(tray, params);
-        LinearLayout heading = row();
-        heading.setGravity(Gravity.CENTER_VERTICAL);
-        if (expanded) {
-            TextView label = text("LAYERS", 12, INK, true);
-            label.setLetterSpacing(.14f);
-            label.setPadding(dp(8), 0, 0, 0);
-            heading.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
-        }
-        Icon toggle = icon(expanded ? "collapse" : "expand", expanded ? "Collapse layer tray" : "Expand layer tray", () -> {
-            dismissPopup();
-            expanded = !expanded;
-            app.getSharedPreferences("settings", 0).edit().putBoolean("layerTrayExpanded", expanded).apply();
-            buildTray();
-        });
-        heading.addView(toggle, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        tray.addView(heading);
-        if (expanded) {
-            TextView hint = text("Top to bottom", 11, MUTED, false);
-            hint.setPadding(dp(8), 0, 0, dp(14));
-            tray.addView(hint);
-        }
-        ScrollView scroll = new ScrollView(app);
-        scroll.setFillViewport(false);
-        scroll.setVerticalScrollBarEnabled(false);
-        layerList = column();
-        scroll.addView(layerList);
-        tray.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        if (expanded) tray.addView(action("＋  New layer", this::newLayer));
-        else tray.addView(icon("plus", "New layer", this::newLayer), new LinearLayout.LayoutParams(-1, dp(48)));
+    private LinearLayout layersPanel() {
+        LinearLayout box=popupBody("Layers", "Topmost layer first");box.setTag(440);
+        TextView add=action("＋  New layer",()->{dismissPopup();newLayer();});
+        box.addView(add,new LinearLayout.LayoutParams(-1,dp(52)));
+        box.addView(divider(),new LinearLayout.LayoutParams(-1,dp(1)));
+        layerList=column();
+        ScrollView scroll=new ScrollView(app);scroll.setFillViewport(false);scroll.addView(layerList);
+        box.addView(scroll,new LinearLayout.LayoutParams(-1,dp(300)));
         rebuildLayers();
+        return box;
     }
 
     private void rebuildLayers() {
-        if (layerList == null) return;
-        synchronized (app.lock) {
-            layerList.removeAllViews();
-            previews.clear();
-            ArrayList<String> ids = new ArrayList<>(app.layers.keySet());
-            ids.removeIf(id -> Boolean.FALSE.equals(app.model.layerActive.get(id)));
-            Collections.reverse(ids);
-            for (int index = 0; index < ids.size(); index++) {
-                String id = ids.get(index);
-                JSONObject layer = app.layers.get(id);
-                boolean selected = app.selected.equals(id);
-                boolean forced = layer.optBoolean("force");
-                boolean visible = forced || !app.hidden.contains(id);
-                LinearLayout card = expanded ? row() : column();
-                card.setGravity(Gravity.CENTER_VERTICAL);
-                card.setPadding(dp(6), dp(8), dp(6), dp(8));
-                card.setBackground(surface(Color.WHITE, selected ? INK : LINE, 10, selected ? 2 : 1));
-                card.setContentDescription("Select layer " + layer.optString("name"));
-                card.setOnClickListener(v -> { synchronized (app.lock) { app.selected = id; app.save(); app.update(); } });
-                card.setOnLongClickListener(v -> { layerOptions(id, card); return true; });
-                LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2);
-                cardParams.bottomMargin = dp(10);
-                layerList.addView(card, cardParams);
-
-                LayerPreview preview = new LayerPreview(id, ids.size() - index, visible);
-                previews.add(preview);
-                card.addView(preview, new LinearLayout.LayoutParams(dp(expanded ? 48 : 34), dp(expanded ? 70 : 46)));
-                if (expanded) {
-                    LinearLayout details = column();
-                    details.setPadding(dp(10), 0, dp(2), 0);
-                    TextView name = text(layer.optString("name"), 13, INK, true);
-                    name.setMaxLines(2);
-                    name.setEllipsize(TextUtils.TruncateAt.END);
-                    details.addView(name);
-                    TextView state = text(forced ? "For everyone" : visible ? "Visible" : "Hidden", 11, MUTED, false);
-                    state.setPadding(0, dp(5), 0, 0);
-                    details.addView(state);
-                    if (selected) {
-                        TextView active = text("DRAWING LAYER", 9, INK, true);
-                        active.setPadding(0, dp(6), 0, 0);
-                        details.addView(active);
-                    }
-                    card.addView(details, new LinearLayout.LayoutParams(0, -2, 1));
-                }
-                LinearLayout controls = column();
-                Icon eye = icon(forced ? "lock" : visible ? "eye" : "hidden",
-                        (forced ? "Forced visible layer " : visible ? "Hide layer " : "Show layer ") + layer.optString("name"), () -> {
-                            synchronized (app.lock) {
-                                if (app.layers.get(id).optBoolean("force")) {
-                                    layerOptions(id, card);
-                                } else {
-                                    if (app.hidden.contains(id)) app.hidden.remove(id); else app.hidden.add(id);
-                                    app.save();
-                                    app.update();
-                                }
-                            }
-                        });
-                controls.addView(eye, new LinearLayout.LayoutParams(dp(expanded ? 36 : 34), dp(38)));
-                if (expanded) controls.addView(icon("more", "Options for layer " + layer.optString("name"), () -> layerOptions(id, card)), new LinearLayout.LayoutParams(dp(36), dp(34)));
-                card.addView(controls);
+        if(layerList==null)return;
+        synchronized(app.lock){
+            layerList.removeAllViews();previews.clear();
+            ArrayList<String> ids=new ArrayList<>(app.layers.keySet());
+            ids.removeIf(id->Boolean.FALSE.equals(app.model.layerActive.get(id)));Collections.reverse(ids);
+            for(int index=0;index<ids.size();index++){
+                String id=ids.get(index);JSONObject layer=app.layers.get(id);
+                boolean selected=app.selected.equals(id),forced=layer.optBoolean("force"),visible=forced||!app.hidden.contains(id);
+                LinearLayout card=row();card.setGravity(Gravity.CENTER_VERTICAL);card.setPadding(dp(8),dp(10),dp(8),dp(10));
+                card.setBackground(surface(Color.WHITE,INK,0,selected?2:0));
+                card.setContentDescription("Select layer "+layer.optString("name"));
+                card.setOnClickListener(v->{synchronized(app.lock){app.selected=id;app.save();app.update();}});
+                card.setOnLongClickListener(v->{layerOptions(id,tools.get("layers"));return true;});
+                Icon eye=icon(forced?"lock":visible?"eye":"hidden",
+                    (forced?"Forced visible layer ":visible?"Hide layer ":"Show layer ")+layer.optString("name"),()->{
+                        synchronized(app.lock){if(app.layers.get(id).optBoolean("force"))layerOptions(id,tools.get("layers"));
+                        else{if(app.hidden.contains(id))app.hidden.remove(id);else app.hidden.add(id);app.save();app.update();}}
+                    });
+                card.addView(eye,new LinearLayout.LayoutParams(dp(48),dp(60)));
+                LayerPreview preview=new LayerPreview(id,ids.size()-index,visible);previews.add(preview);
+                card.addView(preview,new LinearLayout.LayoutParams(dp(48),dp(66)));
+                LinearLayout details=column();details.setPadding(dp(14),0,dp(4),0);
+                TextView name=text(layer.optString("name"),16,INK,selected);name.setMaxLines(2);name.setEllipsize(TextUtils.TruncateAt.END);details.addView(name);
+                TextView state=text(forced?"For everyone":visible?"Visible":"Hidden",12,MUTED,false);state.setPadding(0,dp(6),0,0);details.addView(state);
+                card.addView(details,new LinearLayout.LayoutParams(0,-2,1));
+                card.addView(icon("more","Options for layer "+layer.optString("name"),()->layerOptions(id,tools.get("layers"))),new LinearLayout.LayoutParams(dp(48),dp(60)));
+                layerList.addView(card,new LinearLayout.LayoutParams(-1,-2));
+                layerList.addView(divider(),new LinearLayout.LayoutParams(-1,dp(1)));
             }
         }
     }
@@ -322,11 +293,11 @@ final class EditorUi {
         menuAction(box, "Archive layer", !id.equals("base"), () -> new AlertDialog.Builder(app).setTitle("Archive layer?").setMessage("This hides the layer and its contents. Undo restores it.").setNegativeButton("Cancel",null).setPositiveButton("Archive",(dialog,which)->app.layerCommand("hide",id,null)).show());
         menuAction(box, "Duplicate layer", true, () -> app.layerCommand("duplicate", id, null));
         ArrayList<String> order=new ArrayList<>(app.layers.keySet());int position=order.indexOf(id);
-        // The tray displays the highest order first, so visual up means a larger render order.
+        // The list displays the highest order first.
         menuAction(box, "Move layer up", position>=0&&position+1<order.size(), () -> app.layerCommand("reorder", id, String.valueOf(position+1)));
         menuAction(box, "Move layer down", position>0, () -> app.layerCommand("reorder", id, String.valueOf(position-1)));
         menuAction(box, "Merge into another layer…", order.size()>1, () -> chooseMergeTarget(id,order));
-        showPopup(box, anchor, true);
+        showPopup(box, anchor, false);
     }
 
     private void chooseMergeTarget(String source,ArrayList<String> ids){
@@ -337,9 +308,10 @@ final class EditorUi {
 
     private LinearLayout popupBody(String heading, String description) {
         LinearLayout box = column();
-        box.setPadding(dp(20), dp(20), dp(20), dp(20));
-        box.setBackground(surface(Color.WHITE, LINE, 14, 1));
-        box.addView(text(heading, 20, INK, true));
+        box.setPadding(dp(18), dp(16), dp(18), dp(12));
+        box.setTag(320);
+        box.setBackgroundColor(Color.WHITE);
+        TextView label=text(heading,18,INK,false);label.setPadding(0,0,0,dp(12));box.addView(label);
         if (!description.isEmpty()) {
             TextView help = text(description, 12, MUTED, false);
             help.setPadding(0, dp(6), 0, dp(10));
@@ -355,56 +327,25 @@ final class EditorUi {
         if(Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind))app.selecting=kind.equals("select");
         LinearLayout box;
         switch (kind) {
+            case "layers": box=layersPanel();break;
+            case "template": box=templatePanel();break;
+            case "insert":
+                box=popupBody("Insert", "");
+                menuAction(box,"Insert picture…",true,app::choosePicture);
+                menuAction(box,"Insert SVG artwork…",true,app::chooseSvgPicture);
+                menuAction(box,"Enter text…",true,app::textPlacementDialog);
+                break;
+            case "more":
+                box=popupBody("More", "");
+                menuAction(box,"Toolbar preferences…",true,()->showPopup(preferencesPanel(),tools.get("more"),false));
+                menuAction(box,"Pen presets…",true,()->showPopup(presetPanel(),tools.get("pen"),false));
+                menuAction(box,"Undo and redo",true,()->openTool("history",tools.get("more")));
+                menuAction(box,"Agent",true,()->app.agent.show());
+                if(!app.conflicts.isEmpty())menuAction(box,"Sync conflicts",true,this::showConflictPanel);
+                break;
             case "pen":
                 app.erase = false; app.pan = false; app.drawingShape=null;app.pendingText=null;if(app.canvas!=null)app.canvas.shapeDragging=false; app.update();
-                box = popupBody("Pen", "Pressure-sensitive ink");
-                menuAction(box, "Presets…", true, () -> { dismissPopup(); showPopup(presetPanel(), tools.get("pen"), false); });
-                TextView brushLabel = text("Brush type", 12, MUTED, true);
-                brushLabel.setPadding(0, dp(4), 0, dp(6));
-                box.addView(brushLabel);
-                LinearLayout brushKinds = row();
-                for (String brush : new String[]{"pen", "pencil", "marker", "brush"}) {
-                    String label=Character.toUpperCase(brush.charAt(0))+brush.substring(1);
-                    TextView choice=action(label,()->{app.brush=brush;app.update();});choice.setTextSize(11);brushKinds.addView(choice,new LinearLayout.LayoutParams(0,dp(42),1));
-                }
-                box.addView(brushKinds);
-                menuAction(box,"More brush types…",true,()->{dismissPopup();showPopup(brushPanel(),tools.get("pen"),false);});
-                LinearLayout swatches = row();
-                int[] colors = {Color.BLACK, 0xffbd2424, 0xff245dbd, 0xff247d38, 0xff7824aa, 0xffd06a00};
-                String[] names = {"Black", "Red", "Blue", "Green", "Purple", "Orange"};
-                for (int i = 0; i < colors.length; i++) {
-                    final int color = colors[i];
-                    View swatch = new View(app) {
-                        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-                        protected void onDraw(Canvas c) {
-                            p.setStyle(Paint.Style.FILL); p.setColor(color);
-                            c.drawCircle(getWidth()/2f, getHeight()/2f, dp(11), p);
-                            if (app.color == color) {
-                                p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(1.5f)); p.setColor(INK);
-                                c.drawCircle(getWidth()/2f, getHeight()/2f, dp(16), p);
-                            }
-                        }
-                    };
-                    swatch.setContentDescription(names[i] + " ink");
-                    swatch.setOnClickListener(v -> { app.color = color; app.update(); for (int j = 0; j < swatches.getChildCount(); j++) swatches.getChildAt(j).invalidate(); });
-                    swatches.addView(swatch, new LinearLayout.LayoutParams(0, dp(48), 1));
-                }
-                box.addView(swatches);
-                TextView widthLabel = text("Width  " + (int) app.width, 13, INK, true);
-                widthLabel.setPadding(0, dp(12), 0, dp(4));
-                box.addView(widthLabel);
-                SeekBar width = new SeekBar(app);
-                width.setContentDescription("Pen width");
-                width.setMax(29); width.setProgress((int) app.width - 1);
-                width.setProgressTintList(ColorStateList.valueOf(INK));
-                width.setThumbTintList(ColorStateList.valueOf(INK));
-                width.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                    public void onProgressChanged(SeekBar bar, int value, boolean user) { app.width = value + 1; widthLabel.setText("Width  " + (value + 1)); }
-                    public void onStartTrackingTouch(SeekBar bar) {}
-                    public void onStopTrackingTouch(SeekBar bar) {}
-                });
-                box.addView(width, new LinearLayout.LayoutParams(-1, dp(48)));
-                menuAction(box, "Done", true, () -> {});
+                box = penPanel();
                 break;
             case "eraser":
                 app.erase = true; app.pan = false; app.drawingShape=null;app.pendingText=null;if(app.canvas!=null)app.canvas.shapeDragging=false; app.update();
@@ -418,7 +359,7 @@ final class EditorUi {
                 menuAction(box, "Zoom out", true, () -> { app.canvas.zoom = Math.max(.2f, app.canvas.zoom / 1.25f); app.canvas.invalidate(); });
                 menuAction(box, "Zoom in", true, () -> { app.canvas.zoom = Math.min(5f, app.canvas.zoom * 1.25f); app.canvas.invalidate(); });
                 menuAction(box, "Reset view", true, () -> { app.canvas.zoom = 1; app.canvas.offsetX = app.canvas.offsetY = 0; app.canvas.invalidate(); });
-                menuAction(box, "Return to pen", true, () -> { app.pan = app.erase = false; app.update(); });
+                menuAction(box, "Return to pen", true, () -> { selectedTool="pen";app.pan = app.erase = false; app.update(); });
                 break;
             case "shapes":
                 app.pan=false;app.erase=false;app.pendingText=null;app.update();
@@ -456,12 +397,6 @@ final class EditorUi {
                 box = popupBody("Documents", "Open a note or start a new one.");
                 menuAction(box, "Open or create document…", true, app::documentDialog);
                 menuAction(box, "Edit diagram objects…", !app.model.objects.isEmpty(), app::objectDialog);
-                menuAction(box, "Insert picture…", true, app::choosePicture);
-                menuAction(box, "Insert SVG artwork…", true, app::chooseSvgPicture);
-                menuAction(box, "Page templates…", true, () -> { dismissPopup(); showPopup(templatePanel(), tools.get("document"), false); });
-                TextView server = text("Server\n" + app.host, 11, MUTED, false);
-                server.setPadding(0, dp(18), 0, 0);
-                box.addView(server);
                 break;
         }
         showPopup(box, anchor, false);
@@ -470,26 +405,94 @@ final class EditorUi {
     private void changePage(int page) { app.deselect();synchronized (app.lock) { app.resetDrawingGesture();app.page = page; app.save(); app.update(); } }
 
     private LinearLayout shapePanel(){
-        LinearLayout box=popupBody("Shapes","Choose a shape, then drag on the canvas.");
+        LinearLayout box=popupBody("Shapes", "Choose a shape, then drag on the canvas.");box.setTag(480);
+        box.addView(new StrokeSample(),new LinearLayout.LayoutParams(-1,dp(64)));
+        section(box,"Shapes");
         LinearLayout grid=column();
-        ArrayList<String> ids=new ArrayList<>(com.notemaker.core.ShapeCatalog.ids());ids.removeAll(Arrays.asList("circle","rectangle","rhombus","arrowLine","waveLine","regularHexagon"));
-        ids.remove("text");ids.remove("svg");ids.remove("image");
+        ArrayList<String> ids=new ArrayList<>(com.notemaker.core.ShapeCatalog.ids());
+        ids.removeAll(Arrays.asList("circle","rectangle","rhombus","arrowLine","waveLine","regularHexagon","text","svg","image"));
+        // Six columns on tablets, four on narrow displays, always at least 48dp targets.
+        int columns=app.getResources().getConfiguration().screenWidthDp<500?4:6;
         for(int i=0;i<ids.size();i++){
-            if(i%3==0){LinearLayout row=row();row.setGravity(Gravity.CENTER_VERTICAL);grid.addView(row,new LinearLayout.LayoutParams(-1,dp(64)));}
+            if(i%columns==0)grid.addView(row(),new LinearLayout.LayoutParams(-1,dp(58)));
             LinearLayout row=(LinearLayout)grid.getChildAt(grid.getChildCount()-1);
-            final String id=ids.get(i);LinearLayout item=column();item.setGravity(Gravity.CENTER);item.setPadding(dp(3),dp(3),dp(3),dp(3));item.setMinimumHeight(dp(60));item.setBackground(surface(Color.WHITE,LINE,7,1));
-            item.addView(new Icon(id),new LinearLayout.LayoutParams(dp(30),dp(30)));
-            String label=com.notemaker.core.ShapeCatalog.name(id);TextView name=text(label,10,INK,true);name.setGravity(Gravity.CENTER);name.setMaxLines(1);name.setEllipsize(TextUtils.TruncateAt.END);item.addView(name);
-            item.setContentDescription("Create "+label);item.setOnClickListener(v->{dismissPopup();app.setDrawingTool(id);});
-            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMargins(dp(2),dp(2),dp(2),dp(2));row.addView(item,p);
+            String id=ids.get(i),label=com.notemaker.core.ShapeCatalog.name(id);
+            View choice=choice(id,"Create "+label,()->id.equals(app.drawingShape),()->{dismissPopup();selectedTool="shapes";app.setDrawingTool(id);},false);
+            row.addView(choice,new LinearLayout.LayoutParams(0,-1,1));
         }
-        ScrollView shapeScroll=new ScrollView(app);shapeScroll.setVerticalScrollBarEnabled(false);shapeScroll.addView(grid);box.addView(shapeScroll,new LinearLayout.LayoutParams(-1,dp(208)));
-        box.addView(text("Outline color",11,MUTED,true));LinearLayout colors=row();int[] palette={Color.BLACK,0xffbd2424,0xff245dbd,0xff247d38,0xff7824aa,0xffd06a00};
-        for(int color:palette){TextView swatch=action("●",()->{app.color=color;if(app.objectFillColor!=Color.TRANSPARENT)app.objectFillColor=color;app.update();});swatch.setTextColor(color);swatch.setGravity(Gravity.CENTER);colors.addView(swatch,new LinearLayout.LayoutParams(0,dp(42),1));}box.addView(colors);
-        TextView widthLabel=text("Outline width  "+(int)app.width,12,INK,true);widthLabel.setPadding(0,dp(5),0,0);box.addView(widthLabel);
-        SeekBar width=new SeekBar(app);width.setMax(29);width.setProgress(Math.max(0,(int)app.width-1));width.setProgressTintList(ColorStateList.valueOf(INK));width.setThumbTintList(ColorStateList.valueOf(INK));width.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int v,boolean user){app.width=v+1;widthLabel.setText("Outline width  "+(v+1));}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});box.addView(width,new LinearLayout.LayoutParams(-1,dp(40)));
-        menuAction(box,app.objectFillColor==Color.TRANSPARENT?"Fill: off":"Fill: on",true,()->{app.objectFillColor=app.objectFillColor==Color.TRANSPARENT?app.color:Color.TRANSPARENT;dismissPopup();showPopup(shapePanel(),tools.get("shapes"),false);});
+        LinearLayout last=(LinearLayout)grid.getChildAt(grid.getChildCount()-1);
+        while(last.getChildCount()<columns)last.addView(new View(app),new LinearLayout.LayoutParams(0,-1,1));
+        box.addView(grid);
+        section(box,"Colors");box.addView(colorChoices(true));
+        section(box,"Line width");box.addView(widthControl());
+        CheckBox fill=new CheckBox(app);fill.setText("Shape fill");fill.setTextColor(INK);fill.setButtonTintList(ColorStateList.valueOf(INK));fill.setChecked(app.objectFillColor!=Color.TRANSPARENT);
+        fill.setOnCheckedChangeListener((button,checked)->app.objectFillColor=checked?app.color:Color.TRANSPARENT);box.addView(fill);
         return box;
+    }
+
+    private void section(LinearLayout box,String title){
+        LinearLayout.LayoutParams rule=new LinearLayout.LayoutParams(-1,dp(1));rule.setMargins(0,dp(12),0,dp(12));box.addView(divider(),rule);
+        TextView label=text(title,15,INK,false);label.setPadding(0,0,0,dp(8));box.addView(label);
+    }
+
+    private View choice(String kind,String description,java.util.function.BooleanSupplier selected,Runnable callback,boolean label){
+        LinearLayout item=new LinearLayout(app){
+            final Paint marker=new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override protected void dispatchDraw(Canvas canvas){super.dispatchDraw(canvas);if(selected.getAsBoolean()){marker.setColor(INK);canvas.drawCircle(getWidth()/2f,getHeight()-dp(5),dp(3),marker);}}
+        };
+        item.setOrientation(LinearLayout.VERTICAL);item.setGravity(Gravity.CENTER);item.setPadding(dp(2),dp(4),dp(2),dp(12));
+        item.setContentDescription(description);item.setTooltipText(description);
+        item.addView(new Icon(kind),new LinearLayout.LayoutParams(dp(40),dp(36)));
+        if(label){TextView name=text(description,11,INK,false);name.setGravity(Gravity.CENTER);name.setSingleLine(true);name.setEllipsize(TextUtils.TruncateAt.END);item.addView(name,new LinearLayout.LayoutParams(-1,-2));}
+        item.setOnClickListener(v->{callback.run();ViewParent parent=item.getParent();if(parent instanceof ViewGroup){ViewGroup group=(ViewGroup)parent;for(int i=0;i<group.getChildCount();i++)group.getChildAt(i).invalidate();}});
+        return item;
+    }
+
+    private LinearLayout colorChoices(boolean shape){
+        LinearLayout grid=column();
+        int[] colors={Color.BLACK,0xff555555,0xffaaaaaa,Color.WHITE,0xffbd2424,0xff245dbd,0xff247d38,0xff7824aa,0xffd06a00,0xffffe59a};
+        String[] names={"Black","Dark gray","Gray","White","Red","Blue","Green","Purple","Orange","Yellow"};
+        for(int i=0;i<colors.length;i++){
+            if(i%5==0)grid.addView(row(),new LinearLayout.LayoutParams(-1,dp(48)));
+            final int color=colors[i];View swatch=new View(app){
+                final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
+                protected void onDraw(Canvas c){float x=getWidth()/2f,y=dp(19);p.setStyle(Paint.Style.FILL);p.setColor(color);c.drawCircle(x,y,dp(13),p);p.setStyle(Paint.Style.STROKE);p.setColor(INK);p.setStrokeWidth(dp(1));c.drawCircle(x,y,dp(13),p);if(app.color==color){p.setStyle(Paint.Style.FILL);c.drawCircle(x,dp(40),dp(3),p);}}
+            };
+            swatch.setContentDescription(names[i]+" ink");swatch.setTooltipText(names[i]+" ink");
+            swatch.setOnClickListener(v->{app.color=color;if(sample!=null)sample.invalidate();if(selectedTool.equals("fill"))app.objectFillColor=color;if(shape&&app.objectFillColor!=Color.TRANSPARENT)app.objectFillColor=color;app.update();for(int r=0;r<grid.getChildCount();r++){ViewGroup row=(ViewGroup)grid.getChildAt(r);for(int c=0;c<row.getChildCount();c++)row.getChildAt(c).invalidate();}});
+            ((LinearLayout)grid.getChildAt(grid.getChildCount()-1)).addView(swatch,new LinearLayout.LayoutParams(0,-1,1));
+        }
+        return grid;
+    }
+
+    private View widthControl(){
+        LinearLayout row=row();row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView value=text(String.valueOf((int)app.width),15,INK,false);value.setGravity(Gravity.RIGHT);
+        SeekBar width=new SeekBar(app);width.setContentDescription("Pen width");width.setMax(29);width.setProgress(Math.max(0,(int)app.width-1));
+        width.setProgressTintList(ColorStateList.valueOf(INK));width.setProgressBackgroundTintList(ColorStateList.valueOf(0xffbbbbbb));width.setThumbTintList(ColorStateList.valueOf(INK));
+        width.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar bar,int v,boolean user){if(user){app.width=v+1;value.setText(String.valueOf(v+1));if(sample!=null)sample.invalidate();}}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});
+        row.addView(width,new LinearLayout.LayoutParams(0,dp(48),1));row.addView(value,new LinearLayout.LayoutParams(dp(40),-2));return row;
+    }
+
+    private final class StrokeSample extends View{
+        final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        StrokeSample(){super(app);sample=this;setContentDescription("Stroke preview");}
+        protected void onDraw(Canvas c){paint.setStyle(Paint.Style.STROKE);paint.setColor(app.color);paint.setStrokeWidth(dp(Math.max(1,Math.min(8,app.width))));paint.setStrokeCap(Paint.Cap.ROUND);Path path=new Path();float w=getWidth(),h=getHeight();path.moveTo(dp(12),h*.65f);path.cubicTo(w*.25f,-h*.1f,w*.28f,h*1.1f,w*.45f,h*.45f);path.cubicTo(w*.6f,0,w*.7f,h*.8f,w-dp(12),h*.5f);c.drawPath(path,paint);}
+    }
+
+    private LinearLayout penPanel(){
+        LinearLayout box=popupBody("Pen", "");box.setTag(480);
+        LinearLayout brushes=row();
+        for(String brush:new String[]{"pen","fountain","pencil","brush","marker"}){
+            String name=Character.toUpperCase(brush.charAt(0))+brush.substring(1);
+            brushes.addView(choice(brush,name,()->app.brush.equals(brush),()->{app.brush=brush;app.update();},true),new LinearLayout.LayoutParams(0,dp(70),1));
+        }
+        box.addView(brushes);box.addView(new StrokeSample(),new LinearLayout.LayoutParams(-1,dp(64)));
+        section(box,"Line width");box.addView(widthControl());
+        section(box,"Colors");box.addView(colorChoices(false));
+        menuAction(box,"More brush types…",true,()->showPopup(brushPanel(),tools.get("pen"),false));
+        menuAction(box,"Presets…",true,()->showPopup(presetPanel(),tools.get("pen"),false));
+        menuAction(box,"Done",true,()->{});return box;
     }
 
     private LinearLayout presetPanel() {
@@ -529,23 +532,16 @@ final class EditorUi {
 
     private LinearLayout preferencesPanel(){
         LinearLayout box=popupBody("Toolbar preferences","Keep controls readable on the monochrome display.");
-        CheckBox labels=new CheckBox(app);labels.setText("Show tool labels");labels.setTextColor(INK);labels.setChecked(showToolLabels);box.addView(labels);
+        CheckBox labels=new CheckBox(app);labels.setText("Show tool labels");labels.setTextColor(INK);labels.setButtonTintList(ColorStateList.valueOf(INK));labels.setChecked(showToolLabels);box.addView(labels);
         labels.setOnCheckedChangeListener((button,checked)->{showToolLabels=checked;app.getSharedPreferences("settings",0).edit().putBoolean("showToolLabels",checked).apply();for(Tool item:tools.values())item.label.setVisibility(checked?View.VISIBLE:View.GONE);});
-        menuAction(box,expanded?"Collapse layer tray":"Expand layer tray",true,()->{expanded=!expanded;app.getSharedPreferences("settings",0).edit().putBoolean("layerTrayExpanded",expanded).apply();buildTray();});
         menuAction(box,"Save current pen as preset…",true,()->savePenPreset());
         return box;
     }
 
     private LinearLayout fillPanel() {
         LinearLayout box = popupBody("Enclosed fill", "Choose a fill color, then fill a closed object or ink path.");
-        int[] palette = {Color.BLACK, 0xffbd2424, 0xff245dbd, 0xff247d38, 0xff7824aa, 0xffd06a00, 0xffdddddd, 0xffffe59a};
-        LinearLayout colors = row();
-        for (int color : palette) {
-            TextView swatch = action("●", () -> { app.objectFillColor = color; app.color = color; app.update(); });
-            swatch.setTextColor(color); swatch.setGravity(Gravity.CENTER);
-            colors.addView(swatch, new LinearLayout.LayoutParams(0, dp(42), 1));
-        }
-        box.addView(colors);
+        box.setTag(400);if(app.objectFillColor==Color.TRANSPARENT)app.objectFillColor=app.color;
+        box.addView(colorChoices(true));
         menuAction(box,"Tap enclosed area to fill",true,()->{app.fillTapMode=true;app.selecting=false;app.objectFillColor=app.objectFillColor==Color.TRANSPARENT?app.color:app.objectFillColor;dismissPopup();app.update();Toast.makeText(app,"Tap inside a closed area",Toast.LENGTH_SHORT).show();});
         menuAction(box, "Apply to a shape…", app.objectFillColor != Color.TRANSPARENT && !app.model.objects.isEmpty(), () -> {
             dismissPopup();
@@ -572,13 +568,17 @@ final class EditorUi {
 
     private LinearLayout eraserPanel() {
         LinearLayout box=popupBody("Eraser", "Erase ink on the selected layer. Each gesture saves as one action.");
-        for(String mode:new String[]{"stroke","partial","area","page"}){
-            String label=mode.equals("page")?"Erase page":Character.toUpperCase(mode.charAt(0))+mode.substring(1)+" erase";
-            menuAction(box,label, true,()->{if(mode.equals("page")){dismissPopup();app.applyErase("page",app.selected,app.page,new org.json.JSONArray(),app.eraserRadius);}else{app.eraserMode=mode;app.update();dismissPopup();showPopup(eraserPanel(),tools.get("eraser"),false);}});
+        box.setTag(400);
+        LinearLayout modes=row();
+        for(String mode:new String[]{"stroke","partial","area"}){
+            String label=Character.toUpperCase(mode.charAt(0))+mode.substring(1)+" erase";
+            modes.addView(choice("eraser",label,()->app.eraserMode.equals(mode),()->{app.eraserMode=mode;app.update();},true),new LinearLayout.LayoutParams(0,dp(72),1));
         }
-        CheckBox scribble=new CheckBox(app);scribble.setText("Scribble to erase");scribble.setChecked(app.scribbleToErase);scribble.setTextColor(INK);scribble.setOnCheckedChangeListener((button,checked)->{app.scribbleToErase=checked;app.getSharedPreferences("settings",0).edit().putBoolean("scribbleToErase",checked).apply();});box.addView(scribble);
+        box.addView(modes);section(box,"Options");
+        CheckBox scribble=new CheckBox(app);scribble.setText("Scribble to erase");scribble.setChecked(app.scribbleToErase);scribble.setTextColor(INK);scribble.setButtonTintList(ColorStateList.valueOf(INK));scribble.setOnCheckedChangeListener((button,checked)->{app.scribbleToErase=checked;app.getSharedPreferences("settings",0).edit().putBoolean("scribbleToErase",checked).apply();});box.addView(scribble);
         TextView radiusLabel=text("Eraser size  "+(int)app.eraserRadius,12,INK,true);radiusLabel.setPadding(0,dp(6),0,0);box.addView(radiusLabel);
         SeekBar radius=new SeekBar(app);radius.setMax(79);radius.setProgress(Math.max(0,(int)app.eraserRadius-1));radius.setProgressTintList(ColorStateList.valueOf(INK));radius.setThumbTintList(ColorStateList.valueOf(INK));radius.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int v,boolean user){app.eraserRadius=v+1;radiusLabel.setText("Eraser size  "+(v+1));}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});box.addView(radius,new LinearLayout.LayoutParams(-1,dp(42)));
+        menuAction(box,"Erase page",true,()->app.applyErase("page",app.selected,app.page,new org.json.JSONArray(),app.eraserRadius));
         menuAction(box,"Erase objects…",!app.model.objects.isEmpty(),app::objectDialog);
         return box;
     }
@@ -586,7 +586,7 @@ final class EditorUi {
     private LinearLayout selectionPanel(){
         LinearLayout box=popupBody("Selection","Selected objects are locked while you transform them.");
         TextView state=text(app.selectedEntities.size()+" selected · "+app.selectionSkipped+" skipped as locked",12,MUTED,false);state.setPadding(0,dp(4),0,dp(8));box.addView(state);
-        CheckBox lasso=new CheckBox(app);lasso.setText("Freeform lasso (off: rectangle)");lasso.setTextColor(INK);lasso.setChecked(app.freeformLasso);box.addView(lasso);lasso.setOnCheckedChangeListener((button,checked)->{app.freeformLasso=checked;app.getSharedPreferences("settings",0).edit().putBoolean("freeformLasso",checked).apply();app.update();});
+        CheckBox lasso=new CheckBox(app);lasso.setText("Freeform lasso (off: rectangle)");lasso.setTextColor(INK);lasso.setButtonTintList(ColorStateList.valueOf(INK));lasso.setChecked(app.freeformLasso);box.addView(lasso);lasso.setOnCheckedChangeListener((button,checked)->{app.freeformLasso=checked;app.getSharedPreferences("settings",0).edit().putBoolean("freeformLasso",checked).apply();app.update();});
         menuAction(box,"Choose objects and strokes…",true,()->chooseEntities());
         menuAction(box,"Select all unlocked on this page",true,app::selectAllVisible);
         menuAction(box,"Tap an item or draw a selection boundary",true,()->{});
@@ -689,6 +689,8 @@ final class EditorUi {
     }
 
     private void applyPenPreset(int color, int width, String brush) {
+        if(app.selecting||app.selectionSession!=null||!app.selectedEntities.isEmpty())app.deselect();
+        selectedTool="pen";app.erase=false;app.pan=false;app.fillTapMode=false;app.resetDrawingGesture();
         app.color = color;
         app.width = Math.max(1, Math.min(30, width));
         app.brush = brush;
@@ -724,21 +726,44 @@ final class EditorUi {
     private void showPopup(LinearLayout body, View anchor, boolean fromRight) {
         if(root.getWidth()<=0||!root.isAttachedToWindow()){root.post(()->showPopup(body,anchor,fromRight));return;}
         dismissPopup();
-        int popupWidth = Math.min(dp(300), root.getWidth() - dp(32));
+        int[] rootPosition = new int[2]; root.getLocationOnScreen(rootPosition);
+        int[] position = new int[2]; anchor.getLocationOnScreen(position);
+        boolean top=anchor instanceof Tool&&((Tool)anchor).top;
+        int left=rootPosition[0]+root.getPaddingLeft()+dp(8),right=rootPosition[0]+root.getWidth()-root.getPaddingRight()-dp(8);
+        int topLimit=rootPosition[1]+root.getPaddingTop()+dp(8),bottom=rootPosition[1]+root.getHeight()-root.getPaddingBottom()-dp(8);
+        int panelLeft=top?left:Math.max(left,position[0]+anchor.getWidth()+dp(8));
+        int requested=body.getTag() instanceof Integer?(Integer)body.getTag():320;
+        int popupWidth = Math.min(dp(requested), right-panelLeft);
+        if(popupWidth<dp(220)){panelLeft=left;popupWidth=Math.min(dp(requested),right-left);}
+        if(top)topLimit=Math.min(bottom-dp(48),position[1]+anchor.getHeight()+dp(8));
         body.measure(View.MeasureSpec.makeMeasureSpec(popupWidth, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        int naturalHeight=body.getMeasuredHeight(),maxHeight=Math.max(dp(160),root.getHeight()-root.getPaddingTop()-root.getPaddingBottom()-dp(32)),popupHeight=Math.min(naturalHeight,maxHeight);
+        int naturalHeight=body.getMeasuredHeight(),maxHeight=Math.max(dp(48),bottom-topLimit),popupHeight=Math.min(naturalHeight,maxHeight);
         View content=body;
         if(naturalHeight>maxHeight){ScrollView scroll=new ScrollView(app);scroll.setFillViewport(false);scroll.setVerticalScrollBarEnabled(true);scroll.addView(body,new ScrollView.LayoutParams(-1,-2));content=scroll;}
-        popup = new PopupWindow(content, popupWidth, popupHeight, true);
-        popup.setBackgroundDrawable(surface(Color.WHITE, LINE, 14, 1));
+        FrameLayout shell=new FrameLayout(app){
+            final Paint border=new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override protected void dispatchDraw(Canvas canvas){
+                super.dispatchDraw(canvas);border.setColor(INK);border.setStyle(Paint.Style.STROKE);border.setStrokeWidth(dp(1));
+                float inset=dp(1)/2f;canvas.drawRoundRect(inset,inset,getWidth()-inset,getHeight()-inset,dp(8),dp(8),border);
+            }
+        };
+        shell.setPadding(dp(1),dp(1),dp(1),dp(1));shell.setBackground(surface(Color.WHITE,INK,8,0));shell.setClipToOutline(true);shell.addView(content,new FrameLayout.LayoutParams(-1,-1));
+        popup = new PopupWindow(shell, popupWidth, popupHeight, true);
+        popup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(true);
-        popup.setElevation(dp(4));
+        popup.setElevation(0);
         popup.setAnimationStyle(0);
-        int[] position = new int[2]; anchor.getLocationOnScreen(position);
-        int[] rootPosition = new int[2]; root.getLocationOnScreen(rootPosition);
-        int x = fromRight ? position[0] - popupWidth - dp(12) : position[0] + anchor.getWidth() + dp(18);
-        x = Math.max(dp(12), Math.min(x, root.getWidth() - popupWidth - dp(12)));
-        int y = Math.max(rootPosition[1] + root.getPaddingTop() + dp(8), Math.min(position[1], rootPosition[1] + root.getHeight() - root.getPaddingBottom() - popupHeight - dp(12)));
+        int x=top?Math.max(left,Math.min(position[0]+anchor.getWidth()-popupWidth,right-popupWidth)):panelLeft;
+        int y=top?topLimit:Math.max(topLimit,Math.min(position[1],bottom-popupHeight));
+        popupAnchor=anchor instanceof Tool?(Tool)anchor:null;
+        if(popupAnchor!=null){popupAnchor.open=true;popupAnchor.invalidate();}
+        LinearLayout displayedLayers=layerList;
+        StrokeSample displayedSample=sample;
+        popup.setOnDismissListener(()->{
+            if(popupAnchor!=null){popupAnchor.open=false;popupAnchor.invalidate();popupAnchor=null;}
+            if(layerList==displayedLayers){layerList=null;previews.clear();}
+            if(sample==displayedSample)sample=null;
+        });
         popup.showAtLocation(root, Gravity.TOP | Gravity.LEFT, x, y);
     }
 
@@ -752,26 +777,31 @@ final class EditorUi {
     private final class Tool extends LinearLayout {
         final Icon icon;
         final TextView label;
-        boolean selected;
+        boolean selected,open,top;
+        final Paint marker=new Paint(Paint.ANTI_ALIAS_FLAG);
         Tool(String kind, String name, String description) {
             super(app);
             setOrientation(VERTICAL); setGravity(Gravity.CENTER);
             setContentDescription(description);
             icon = new Icon(kind);
-            label = text(name, 10, INK, true);
+            label = text(name, 11, INK, false);
             label.setGravity(Gravity.CENTER);
+            label.setSingleLine(true);label.setEllipsize(TextUtils.TruncateAt.END);
             label.setVisibility(showToolLabels?View.VISIBLE:View.GONE);
-            addView(icon, new LinearLayout.LayoutParams(dp(32), dp(32)));
-            addView(label);
-            setBackground(surface(PAPER, PAPER, 10, 0));
+            addView(icon, new LinearLayout.LayoutParams(dp(40), dp(40)));
+            addView(label,new LinearLayout.LayoutParams(-1,-2));
+            setPadding(dp(2),0,dp(2),dp(6));setBackgroundColor(PAPER);
+        }
+        @Override protected void dispatchDraw(Canvas canvas){
+            super.dispatchDraw(canvas);marker.setColor(INK);
+            if(selected)canvas.drawCircle(getWidth()/2f,getHeight()-dp(4),dp(2.5f),marker);
+            if(open){Path triangle=new Path();if(top){triangle.moveTo(getWidth()/2f-dp(5),getHeight());triangle.lineTo(getWidth()/2f,getHeight()-dp(6));triangle.lineTo(getWidth()/2f+dp(5),getHeight());}
+                else{triangle.moveTo(getWidth(),getHeight()/2f-dp(5));triangle.lineTo(getWidth()-dp(6),getHeight()/2f);triangle.lineTo(getWidth(),getHeight()/2f+dp(5));}triangle.close();canvas.drawPath(triangle,marker);}
         }
         void active(boolean value) {
             if (selected == value) return;
             selected = value;
-            setBackground(surface(value ? INK : PAPER, LINE, 10, 0));
-            icon.color = value ? Color.WHITE : INK;
-            icon.invalidate();
-            label.setTextColor(value ? Color.WHITE : INK);
+            setSelected(value);invalidate();
         }
     }
 
@@ -822,6 +852,16 @@ final class EditorUi {
             paint.setColor(color); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.7f);
             paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND);
             switch (kind) {
+                case "undo": path(canvas,8,5,3,10,8,15);path(canvas,3,10,14,10);canvas.drawArc(new RectF(9,10,21,22),270,150,false,paint);break;
+                case "redo": path(canvas,16,5,21,10,16,15);path(canvas,21,10,10,10);canvas.drawArc(new RectF(3,10,15,22),270,-150,false,paint);break;
+                case "check":path(canvas,4,12,10,18,21,5);break;
+                case "layers":path(canvas,2,10,12,3,22,10,12,17,2,10);path(canvas,3,15,12,22,21,15);break;
+                case "template":canvas.drawRect(3,3,21,21,paint);for(int y=8;y<22;y+=5)path(canvas,6,y,18,y);break;
+                case "insert":canvas.drawRect(3,3,21,21,paint);canvas.drawCircle(8,8,2,paint);path(canvas,4,19,11,12,15,16,19,11,21,13);break;
+                case "fountain":path(canvas,12,2,5,15,8,20,16,20,19,15,12,2);path(canvas,12,3,12,12);canvas.drawCircle(12,14,2,paint);break;
+                case "pencil":path(canvas,5,21,5,10,12,2,19,10,19,21,5,21);path(canvas,5,10,9,13,12,10,15,13,19,10);path(canvas,12,11,12,21);break;
+                case "marker":path(canvas,4,21,4,12,20,12,20,21,4,21);path(canvas,7,12,7,6,17,3,17,12);break;
+                case "brush":{Path brush=new Path();brush.moveTo(9,16);brush.cubicTo(2,11,13,8,11,2);brush.cubicTo(22,10,17,16,15,16);canvas.drawPath(brush,paint);canvas.drawRect(6,17,18,22,paint);break;}
                 case "pen": path(canvas, 4, 20, 6, 13, 16, 3, 21, 8, 11, 18, 4, 20); path(canvas, 14, 5, 19, 10); break;
                 case "eraser": path(canvas, 3, 14, 13, 4, 21, 12, 13, 20, 9, 20, 3, 14); path(canvas, 7, 10, 15, 18); path(canvas, 13, 20, 22, 20); break;
                 case "move": path(canvas, 12, 2, 12, 22); path(canvas, 2, 12, 22, 12); path(canvas, 8, 6, 12, 2, 16, 6); path(canvas, 8, 18, 12, 22, 16, 18); path(canvas, 6, 8, 2, 12, 6, 16); path(canvas, 18, 8, 22, 12, 18, 16); break;
