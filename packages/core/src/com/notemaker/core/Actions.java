@@ -11,6 +11,7 @@ public final class Actions {
     public static String id(){return UUID.randomUUID().toString();}
     public static Map<String,Object> drawing(Map<String,Object> input,String layer){
         if("svg".equals(input.get("shape"))){input=map(copy(input));double[] size=SvgAsset.validate(string(input,"svg"));input.putIfAbsent("w",size[0]);input.putIfAbsent("h",size[1]);}
+        if("image".equals(input.get("shape"))){input=map(copy(input));double[] size=ImageAsset.validate(string(input,"image"));input.putIfAbsent("w",size[0]);input.putIfAbsent("h",size[1]);}
         Map<String,Object> o=map(copy(input));o.put("kind","object");o.putIfAbsent("object",id());o.putIfAbsent("layer",layer);o.putIfAbsent("page",0);o.putIfAbsent("color",-16777216);o.putIfAbsent("width",3);o.putIfAbsent("fontSize",24);o.putIfAbsent("text","");o.putIfAbsent("x",0);o.putIfAbsent("y",0);o.putIfAbsent("w",160);o.putIfAbsent("h",80);Model.validate(o);return o;
     }
     public static List<Object> diagram(Model model,Map<String,Object> input){
@@ -33,12 +34,12 @@ public final class Actions {
         }
         for(Map<String,Object> o:model.objects.values())for(String key:Arrays.asList("from","to"))if(o.containsKey(key)){
             Map<String,Object> target=model.objects.get(o.get(key));
-            require("arrow".equals(o.get("shape"))&&target!=null&&!"arrow".equals(target.get("shape")),"Connector endpoint must be a non-arrow node");
+            require(Arrays.asList("arrow","arrowLine").contains(o.get("shape"))&&target!=null&&!Arrays.asList("arrow","arrowLine").contains(target.get("shape")),"Connector endpoint must be a non-arrow node");
             require(number(o,"page")==number(target,"page"),"Connector endpoints must be on the same page");
         }
     }
     public static Object inverse(Model model,Map<String,Object> op){
-        String k=string(op,"kind");String key=k.startsWith("object")?"object":k.startsWith("layer")?"layer":"stroke";
+        String k=string(op,"kind");if(k.equals("conflict-status"))return object("kind",k,"conflict",op.get("conflict"),"active",!Boolean.FALSE.equals(model.conflictActive.get(op.get("conflict"))));String key=k.startsWith("object")?"object":k.startsWith("layer")?"layer":"stroke";
         String id=op.containsKey(key)?string(op,key):"";
         if(k.equals("document"))throw new IllegalArgumentException("Document creation is not undoable");
         if(k.equals("object")||k.equals("stroke")||k.equals("layer")){

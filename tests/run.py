@@ -12,9 +12,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = {
-    'local': ['framework_checks', 'server_checks', 'cli_checks', 'proxy_checks',
+    'local': ['framework_checks', 'server_checks', 'cli_checks', 'drawing_checks', 'drawing_tools_checks', 'drawing_browser', 'selection_checks', 'conflict_checks', 'proxy_checks',
               'chat_checks', 'topology_properties'],
-    'emulator': ['integration', 'cli_android', 'chat_ui', 'performance'],
+    'emulator': ['integration', 'cli_android', 'drawing_android', 'chat_ui', 'performance'],
     'hardware': ['tablet_checks'],
     'network': ['network_checks'],
 }

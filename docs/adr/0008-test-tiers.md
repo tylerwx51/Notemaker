@@ -46,3 +46,10 @@ physical pen latency. Live paid-provider checks remain opt-in. External test
 documents are retained because there is no document deletion protocol. Private
 tablet backups and endpoint tokens must remain outside version control. Keep
 the selected tablet idle while checking exact actor-history preservation.
+
+The separate opt-in `tests/tablet_drawing.py --serial SERIAL` check exercises
+the installed editor using a uniquely named notebook and the embedded proxy.
+It restores the original notebook and connection settings and verifies existing
+actor histories afterward. Unlike the smoke tier, it creates test content;
+the test notebook is retained. ADB forwarding is refreshed after instrumentation
+restarts, since the embedded proxy publishes a new port for each process.

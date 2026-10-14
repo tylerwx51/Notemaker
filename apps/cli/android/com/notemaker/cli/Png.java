@@ -7,6 +7,7 @@ import java.util.Collections;
 public final class Png implements Render.Surface {
     private static final java.util.Map<String,com.caverock.androidsvg.SVG> SVGS=new java.util.LinkedHashMap<String,com.caverock.androidsvg.SVG>(16,.75f,true){protected boolean removeEldestEntry(java.util.Map.Entry<String,com.caverock.androidsvg.SVG> e){return size()>16;}};
     private final Canvas canvas;
+    private final java.util.Deque<Integer> transforms=new java.util.ArrayDeque<>();
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     public Png(Canvas canvas){this.canvas=canvas;paint.setStrokeCap(Paint.Cap.ROUND);}
     public static void export(Model m,int page,double x,double y,int w,int h,File out)throws Exception {
@@ -27,6 +28,19 @@ public final class Png implements Render.Surface {
     public void line(double x,double y,double ex,double ey,int color,double width){paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)width);canvas.drawLine((float)x,(float)y,(float)ex,(float)ey,paint);}
     public void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse){RectF r=new RectF((float)x,(float)y,(float)(x+w),(float)(y+h));if(fill!=null){paint.setColor(fill);paint.setStyle(Paint.Style.FILL);if(ellipse)canvas.drawOval(r,paint);else canvas.drawRect(r,paint);}if(width>0){paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)width);if(ellipse)canvas.drawOval(r,paint);else canvas.drawRect(r,paint);}}
     public void text(double x,double y,String text,int color,double size){paint.setColor(color);paint.setStyle(Paint.Style.FILL);paint.setTextSize((float)size);canvas.drawText(text,(float)x,(float)y,paint);}
+    public void styledText(double x,double y,String text,int color,double size,String family,boolean bold,boolean italic,boolean underline,String alignment){paint.setColor(color);paint.setStyle(Paint.Style.FILL);paint.setTextSize((float)size);int style=(bold?Typeface.BOLD:0)|(italic?Typeface.ITALIC:0);paint.setTypeface(Typeface.create("serif".equals(family)?"serif":"monospace".equals(family)?"monospace":"sans-serif",style));float drawX=(float)x-("center".equals(alignment)?paint.measureText(text)/2:"right".equals(alignment)?paint.measureText(text):0);canvas.drawText(text,drawX,(float)y,paint);if(underline){paint.setStyle(Paint.Style.STROKE);canvas.drawLine(drawX,(float)(y+2),(float)(drawX+paint.measureText(text)),(float)(y+2),paint);}}
+    public void image(double x,double y,double w,double h,String data){
+        Bitmap bitmap=null;
+        try{
+            int comma=data.indexOf(',');byte[] bytes=android.util.Base64.decode(data.substring(comma+1),android.util.Base64.DEFAULT);
+            BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);
+            if(bounds.outWidth<=0||bounds.outHeight<=0)throw new IllegalArgumentException("Could not decode image dimensions");
+            BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;
+            while(((bounds.outWidth+options.inSampleSize-1)/options.inSampleSize)*((bounds.outHeight+options.inSampleSize-1)/options.inSampleSize)>4*1024*1024)options.inSampleSize*=2;
+            bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);if(bitmap==null)throw new IllegalArgumentException("Could not decode image pixels");
+            canvas.drawBitmap(bitmap,null,new RectF((float)x,(float)y,(float)(x+w),(float)(y+h)),paint);
+        }catch(IllegalArgumentException e){throw e;}catch(Exception e){throw new IllegalArgumentException("Could not render image",e);}finally{if(bitmap!=null)bitmap.recycle();}
+    }
     public void svg(double x,double y,double w,double h,String source){
         synchronized(SVGS){
             com.caverock.androidsvg.SVG svg=SVGS.get(source);
@@ -34,4 +48,6 @@ public final class Png implements Render.Surface {
             canvas.save();try{canvas.translate((float)x,(float)y);canvas.clipRect(0,0,(float)w,(float)h);svg.renderToCanvas(canvas,new RectF(0,0,(float)w,(float)h));}finally{canvas.restore();}
         }
     }
+    public void saveTransform(double cx,double cy,double rotation,boolean flipX,boolean flipY){transforms.push(canvas.save());canvas.translate((float)cx,(float)cy);canvas.rotate((float)rotation);canvas.scale(flipX?-1:1,flipY?-1:1);canvas.translate((float)-cx,(float)-cy);}
+    public void restoreTransform(){canvas.restoreToCount(transforms.pop());}
 }

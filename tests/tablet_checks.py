@@ -133,7 +133,20 @@ def main():
                 str(ROOT / 'apps/cli/notemaker'), '--proxy-file', str(endpoint),
                 '--document', document, command], timeout=15))
         while time.monotonic() < deadline:
-            status = cli('status')
+            try:
+                status = cli('status')
+            except (subprocess.SubprocessError, ValueError) as error:
+                # The previous process's descriptor can survive an upgrade.
+                # Re-read it until the newly started proxy publishes its port.
+                last_error = type(error).__name__
+                descriptor = json.loads(call('shell', 'run-as', PACKAGE, 'cat', 'files/proxy.json'))
+                port = urllib.parse.urlparse(descriptor['url']).port
+                call('forward', '--remove', 'tcp:' + forwarded)
+                forwarded = call('forward', 'tcp:0', f'tcp:{port}').decode().strip()
+                descriptor['url'] = 'http://127.0.0.1:' + forwarded
+                endpoint.write_text(json.dumps(descriptor))
+                time.sleep(1)
+                continue
             report['proxy'] = status
             if status.get('connected') and status['pending'] == 0:
                 break

@@ -11,6 +11,11 @@ replace full-file saving and per-edit replay described below.
 platform-specific SVG rendering libraries; the local replica/core remains free
 of external Java dependencies.
 
+[ADR 0009](0009-drawing-tools-and-selection.md) extends the native shape catalog
+and Android creation tools, and records the accepted selection-lock and conflict
+preservation design. Its implementation status distinguishes those planned
+collaboration changes from the current snapshot ordering described here.
+
 ## Context
 
 Agents most commonly need to draw a labeled diagram on a new layer. App and CLI
@@ -104,6 +109,12 @@ Labels are plain text with explicit line breaks, no rich text or automatic layou
 The agent supplies diagram geometry. Raster text appearance depends on platform
 fonts. There is no drag-based object selection UI yet; objects are edited through
 Notes → Edit diagram objects or the CLI. No AI provider or orchestration is added.
+
+The drawing limitations in the preceding paragraph describe the initial
+implementation. [ADR 0009](0009-drawing-tools-and-selection.md) now supersedes
+them with styled text, box/lasso selection, leased transforms and causal conflict
+preservation. Storage was subsequently upgraded to the journal described in
+the later replica ADRs; existing actor histories are preserved.
 
 ## Verification
 

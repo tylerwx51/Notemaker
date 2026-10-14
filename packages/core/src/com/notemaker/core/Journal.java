@@ -50,7 +50,7 @@ final class Journal {
                 long start=log.getFilePointer();
                 if(log.length()-start<4){if(writable){log.setLength(start);log.getFD().sync();}break;}
                 int length=log.readInt();
-                if(length<0||length>16000000)throw new IOException("Invalid journal record at "+start);
+                if(length<0||length>40000000)throw new IOException("Invalid journal record at "+start);
                 if(log.length()-log.getFilePointer()<length+4L){if(writable){log.setLength(start);log.getFD().sync();}break;}
                 byte[] bytes=new byte[length];log.readFully(bytes);CRC32 crc=new CRC32();crc.update(bytes);
                 if((int)crc.getValue()!=log.readInt())throw new IOException("Journal checksum mismatch at "+start);
@@ -61,7 +61,7 @@ final class Journal {
             if(edit!=null){
                 State next=snapshot();edit.apply(next);
                 Map<String,Object> delta=difference(next);byte[] bytes=write(delta).getBytes(StandardCharsets.UTF_8);
-                Model.require(bytes.length<=16000000,"Local transaction exceeds 16 MB");CRC32 crc=new CRC32();crc.update(bytes);
+                Model.require(bytes.length<=40000000,"Local transaction exceeds 40 MB");CRC32 crc=new CRC32();crc.update(bytes);
                 log.seek(offset);log.writeInt(bytes.length);log.write(bytes);log.writeInt((int)crc.getValue());log.getFD().sync();
                 apply(delta);offset=log.getFilePointer();
             }
@@ -72,6 +72,8 @@ final class Journal {
         State out=new State();out.putAll(state);
         out.put("relay",new ArrayList<>(list(state.get("relay"))));
         out.put("events",new ArrayList<>(list(state.get("events"))));out.put("pending",new ArrayList<>(list(state.get("pending"))));
+        if(state.containsKey("leases"))out.put("leases",copy(state.get("leases")));
+        if(state.containsKey("activeSessions"))out.put("activeSessions",copy(state.get("activeSessions")));
         Map<String,Object> actors=object();
         // Copy mutable history stacks, sharing immutable action/geometry snapshots.
         for(Map.Entry<String,Object> entry:map(state.get("actors")).entrySet()){

@@ -232,11 +232,12 @@ class CliChecks(server_checks.ServerChecks):
             def do_POST(self):
                 body=self.rfile.read(int(self.headers['Content-Length']))
                 data=urllib.request.urlopen(urllib.request.Request(upstream+self.path,data=body,headers={'Content-Type':'application/json'}),timeout=5).read()
-                entered.set()
-                assert release.wait(10)
-                if lose_ack[0]:
-                    self.close_connection=True
-                    return
+                if self.path.startswith('/api/events'):
+                    entered.set()
+                    assert release.wait(10)
+                    if lose_ack[0]:
+                        self.close_connection=True
+                        return
                 self.send_response(200);self.end_headers();self.wfile.write(data)
             def log_message(self,*args):pass
         proxy=ThreadingHTTPServer(('127.0.0.1',0),Proxy)

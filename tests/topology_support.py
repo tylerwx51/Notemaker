@@ -4,6 +4,7 @@ import socket
 import subprocess
 import threading
 import time
+from urllib.parse import parse_qs, urlparse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -67,31 +68,42 @@ class Link:
         self.counter_lock=threading.Lock()
         self.active_uploads=0
         self.max_active_uploads=0
+        self.delayed_document=None
+        self.delay_seconds=0
+        self.delay_started=threading.Event()
+        self.delay_used=False
         link = self
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self): self.forward()
             def do_POST(self): self.forward()
             def log_message(self, *args): pass
             def forward(self):
-                uploading=False
+                uploading=False;event_upload=self.command=='POST' and self.path.split('?',1)[0]=='/api/events'
                 try:
                     if not link.online:
                         self.send_error(503); return
                     data = self.rfile.read(int(self.headers['Content-Length'])) if self.command == 'POST' else None
+                    if self.command=='GET' and self.path.split('?',1)[0]=='/api/replica':
+                        doc=parse_qs(urlparse(self.path).query).get('document',['notes'])[0]
+                        with link.counter_lock:
+                            delay=doc==link.delayed_document and not link.delay_used
+                            if delay:link.delay_used=True
+                        if delay:
+                            link.delay_started.set();time.sleep(link.delay_seconds)
                     headers = {'Content-Type': 'application/json'}
                     if link.token: headers['Authorization'] = 'Bearer '+link.token
                     request = urllib.request.Request(link.upstream+self.path, data=data, headers=headers)
-                    if data is not None:
+                    if event_upload:
                         with link.counter_lock:
                             uploading=True;link.active_uploads+=1
                             link.max_active_uploads=max(link.max_active_uploads,link.active_uploads)
                         link.uploads.append((time.monotonic(), json.loads(data), len(data)))
                         if link.duplicate:
                             urllib.request.urlopen(request, timeout=8).close()
-                    elif not self.path.startswith('/api/stream'):
+                    elif self.command=='GET' and self.path.split('?',1)[0]=='/api/events':
                         link.reads.append(self.path)
                     with urllib.request.urlopen(request, timeout=25) as response:
-                        if data is not None and link.drop:
+                        if event_upload and link.drop:
                             link.drop -= 1; self.close_connection = True; return
                         self.send_response(200); self.send_header('Content-Type', response.headers.get('Content-Type')); self.end_headers()
                         if self.path.startswith('/api/stream'):
@@ -114,6 +126,10 @@ class Link:
         self.path = Path(descriptor_path)
         # Token also identifies this as a proxy edge for recursive cycle checks.
         self.path.write_text(json.dumps(dict(url=self.url, token=token))) if token else None
+
+    def delay_next_replica(self,document,seconds):
+        with self.counter_lock:
+            self.delayed_document=document;self.delay_seconds=seconds;self.delay_used=False;self.delay_started.clear()
 
     @property
     def target(self): return str(self.path) if self.token else self.url

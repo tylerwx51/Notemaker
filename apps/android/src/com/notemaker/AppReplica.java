@@ -24,7 +24,7 @@ final class AppReplica {
     }
     boolean remote(){return descriptor!=null;}
     Map<String,Object> read() throws Exception {
-        return remote()?map(command(Arrays.asList("snapshot"),null)):local.read();
+        return map(command(Arrays.asList("snapshot"),null));
     }
     Object command(List<String> args,Object input) throws Exception {
         if(remote())return LocalProxy.request(descriptor,document,"human",args,input);

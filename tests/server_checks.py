@@ -73,5 +73,26 @@ class ServerChecks(unittest.TestCase):
         self.assertEqual(error.exception.code, 400)
         self.assertEqual(self.read('invalid'), [])
 
+    def test_editable_object_shapes_and_signed_line_bounds(self):
+        shapes = ('line', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star')
+        operations = []
+        for i, shape in enumerate(shapes):
+            operations.append(dict(id='shape-' + shape, kind='object', object='object-' + shape,
+                                   layer='base', shape=shape, x=10, y=20,
+                                   w=-30 if shape == 'line' else 30,
+                                   h=15 if shape == 'line' else 25,
+                                   width=3, page=0, color=-16777216, fill=-1))
+        self.post('shapes', operations)
+        actual = [event['op'] for event in self.read('shapes')]
+        self.assertEqual(actual, operations)
+
+    def test_polygon_bounds_must_be_positive(self):
+        invalid = dict(id='bad-polygon', kind='object', object='bad', layer='base', shape='triangle',
+                       x=0, y=0, w=-10, h=20, width=2, page=0, color=0)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post('bad-polygon', [invalid])
+        self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.read('bad-polygon'), [])
+
 if __name__ == '__main__':
     unittest.main()

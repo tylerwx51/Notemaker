@@ -69,7 +69,8 @@ New operation kinds:
 | `object-active` | `object`, `active` | Last-operation-wins object erasure/restoration, independent of geometry. |
 | `layer-active` | `layer`, `active` | Shared layer erasure/restoration. Base layer cannot be deactivated. |
 
-`shape` is `rect`, `ellipse`, `text`, `arrow`, or `svg`. SVG objects require an
+`shape` is `rect`, `ellipse`, `text`, `arrow`, `line`, `triangle`, `diamond`,
+`pentagon`, `hexagon`, `star`, or `svg`. SVG objects require an
 additional `svg` string containing a self-contained static SVG (up to 256 KiB).
 The `x,y,w,h` rectangle is its clipped viewport; the SVG's `preserveAspectRatio`
 controls fitting, defaulting to centered meet. Source is embedded in every
@@ -78,12 +79,20 @@ See [the import profile](../cli/README.md#place-a-generated-svg) for supported
 elements. The server validates that profile before accepting a batch. SVGs use
 the same layer/page, active-state, ordering, and actor history as other objects.
 
-Rect/ellipse/text/SVG dimensions are
-positive; arrows use `(x,y)` and `(x+w,y+h)` as fallback endpoints. Optional `from`
+Dimensions are positive except for lines/arrows, which use `(x,y)` and
+`(x+w,y+h)` as endpoints (fallback endpoints for attached arrows). Optional `from`
 and `to` reference node centers, with endpoints intersected at node boundaries;
 connectors follow current node geometry. `color`/`fill` are signed 32-bit ARGB;
 `width` is 1–100, `fontSize` 1–500, `text` at most 10,000 characters. Geometry is
 finite and within ±1,000,000 units. Page limits are unchanged.
+
+Native polygons use normalized catalog vertices mapped to the object's bounds,
+round outline joins, and optional ARGB fill. Their persisted representation is
+an editable object snapshot, not SVG source or pen strokes. CLI `shape list`
+exposes the catalog through the proxy without changing document history. New
+shape IDs require a coordinated upgrade of app, CLI, proxies, and main server;
+the replication protocol version is unchanged. Selection locks and conflict
+version retention are planned in ADR 0009 and are not yet protocol features.
 
 Absent active registers mean true. Deactivating a layer suppresses its strokes and
 objects even if force-visible. Layers composite in creation order; within a layer,
@@ -172,3 +181,34 @@ revision, cursor, eventCount, pendingCount and editor preferences), `append -`
 (one raw editor action), and `settings -` (local hidden/undo/redo arrays, selected
 layer and page). Preferences do not replicate. Direct file readers are supported;
 direct file writers and standalone CLI sync workers are not.
+
+## Selection coordination and causal drawing edits
+
+The transient `/api/locks?document=NAME` endpoint returns `leases` and `previews`.
+Proxies forward acquisition, renewal, release and preview requests through
+`POST /api/locks`. Entity keys include page, kind and ID. Leases identify an
+actor and session and expire after 15 seconds without renewal. A reachable
+authority accepts only one session per entity; the caller receives accepted and
+skipped entities. Clean disconnect releases the actor's selections. Delayed
+lease deliveries must not resurrect a released selection. Disconnected clients
+may hold local leases; reconciliation preserves conflicting offline versions.
+
+Previews are transient and do not become drawing operations. Consumers discard
+them on cancellation or lease expiry and render the last committed content.
+A completed transform replaces the affected entity snapshots in one batch.
+Locked entity dependencies also guard undo, bulk operations and inbound edits.
+
+New drawing actions have a `bases` object mapping `object:ID`/`stroke:ID` to the
+version on which the edit was based, plus `visibility` for that branch's active
+states. Empty base strings represent new entities. Existing actions without
+these fields retain legacy replay behavior. Deterministic replay preserves both
+snapshots when an action diverges from the current version, including same-actor
+offline edits. Later edits on a branch update its retained snapshot. A
+`conflict-status` operation has `{kind:"conflict-status",conflict:ID,active:false}`
+and participates in the same atomic batch as the chosen replacement snapshots;
+its inverse restores the conflict. Replicas do not upload derived conflict lists.
+
+Drawing extensions include text style fields, brush identifiers, embedded PNG
+and JPEG objects, optional object rotation/reflection and layer order. The same
+validation applies locally and at the main server. Upgrade all applications
+together before using the new operations.

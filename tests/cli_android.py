@@ -12,6 +12,7 @@ import urllib.request
 import re
 import xml.etree.ElementTree as ET
 import hashlib
+import shlex
 import uuid
 from browser import check_browser
 from replica import read_replica
@@ -43,7 +44,7 @@ def wait(fn,seconds=90):
 def instrument(action,**kwargs):
     args=['shell','am','instrument','-w','-e','action',action]
     for key,value in kwargs.items():args+=['-e',key,str(value)]
-    out=adb(*args,'com.notemaker/.Integration')
+    out=adb('shell',shlex.join(args[1:]+['com.notemaker/.Integration']))
     (OUT/f'{action}.txt').write_text(out)
     assert f'PASS {action}' in out,out
     state=json.loads(adb('shell','run-as','com.notemaker','cat','files/integration.json'))
@@ -74,6 +75,16 @@ def tap(value):
     left,top,right,bottom=map(int,re.findall(r'\d+',node.attrib['bounds']))
     adb('shell','input','tap',str((left+right)//2),str((top+bottom)//2));time.sleep(.3)
 
+def canvas_gesture():
+    adb('shell','uiautomator','dump','/data/local/tmp/cli-ui.xml')
+    tree=ET.fromstring(adb('shell','cat','/data/local/tmp/cli-ui.xml'))
+    node=next(n for n in tree.iter('node') if n.attrib.get('content-desc')=='Drawing canvas')
+    left,top,right,bottom=map(int,re.findall(r'\d+',node.attrib['bounds']))
+    # Left half avoids the layer tray overlay; coordinates follow actual layout.
+    x1=left+(right-left)//6;y1=top+(bottom-top)//4
+    x2=left+(right-left)//3;y2=top+(bottom-top)//3
+    adb('shell','input','swipe',str(x1),str(y1),str(x2),str(y2),'350')
+
 def tablet(*args,value=None,concurrent=False):
     kwargs={'cli':encoded(['--actor','tablet-agent',*args])}
     if value is not None:kwargs['input']=encoded(value)
@@ -87,13 +98,66 @@ def desktop(*args,value=None):
 server=None;emulator=None;desktop_proxy=None
 try:
     assert SERIAL not in command('adb','devices'),'Reserved emulator already running'
-    with socket.socket() as s:s.bind(('127.0.0.1',PORT))
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        s.bind(('127.0.0.1',PORT))
     # Unique directories keep prior artifacts and any personal state untouched.
     with tempfile.TemporaryDirectory(prefix='notemaker-cli-android-') as temp:
         env=dict(os.environ,ANDROID_AVD_HOME=temp+'/avd')
         emulator=subprocess.Popen(['boox-emulator-headless','-port','5584','-memory','1536','-cores','2','-wipe-data'],env=env,stdout=(OUT/'emulator.log').open('w'),stderr=subprocess.STDOUT)
         wait(lambda:adb('shell','getprop','sys.boot_completed').strip()=='1',240)
         adb('install','-r',str(ROOT/'apps/android/build/notemaker.apk'))
+        instrument('configure',document='drawing-ui',host='')
+        tap('Shape tools')
+        adb('shell','uiautomator','dump','/data/local/tmp/palette.xml')
+        assert 'Create Triangle' in adb('shell','cat','/data/local/tmp/palette.xml')
+        (OUT/'shape-palette.png').write_bytes(subprocess.check_output(['adb','-s',SERIAL,'exec-out','screencap','-p']))
+        tap('Create Triangle');canvas_gesture()
+        state=instrument('state')
+        assert len(state['model']['objects'])==1 and state['model']['objects'][0]['shape']=='triangle',state
+        tap('Text placement');tap('Enter text…');tap('Text to place')
+        adb('shell','input','text','Toolbar-text')
+        tap('Continue');canvas_gesture()
+        state=instrument('state')
+        assert state['model']['objects'][-1]['text']=='Toolbar-text',state
+        print('PASS shape palette and text dialog through real Android UI input',flush=True)
+        instrument('configure',document='drawing-tools',host='')
+        for shape in ('rect','ellipse','arrow','line','triangle','diamond','pentagon','hexagon','star'):
+            state=instrument('shape',shape=shape)
+            assert state['model']['objects'][-1]['shape']==shape,state
+        before=len(state['model']['objects'])
+        state=instrument('shape',shape='triangle',cancel='true')
+        assert len(state['model']['objects'])==before,'Canceled gesture was persisted'
+        state=instrument('shape',shape='line',x=400,y=300,w=-120,h=-80)
+        line=state['model']['objects'][-1]
+        assert all(abs(line[key]-expected)<.001 for key,expected in zip(('x','y','w','h'),(400,300,-120,-80))),line
+        state=instrument('undo');assert state['model']['objectActive'][line['object']] is False
+        state=instrument('redo');assert state['model']['objectActive'][line['object']] is True
+        state=instrument('text',text='Editable text')
+        text=state['model']['objects'][-1]
+        assert text['shape']=='text' and text['text']=='Editable text' and text['fontSize']==32,text
+        saved=read_replica(SERIAL,'drawing-tools')
+        actions=[op for op in saved['pending'] if op['kind']=='batch']
+        assert len(actions)==13,(len(actions),actions)  # 10 shapes + undo + redo + text
+        assert all(op['actor']=='human' for op in actions),actions
+        tablet('object','update',text['object'],'-',value={'text':'CLI edits Android text'})
+        state=instrument('state')
+        assert state['model']['objects'][-1]['text']=='CLI edits Android text'
+        adb('shell','am','force-stop','com.notemaker')
+        state=instrument('state')
+        assert len(state['model']['objects'])==11
+        print('PASS Android shape/text creation, cancellation, signed lines, atomic history and offline restart',flush=True)
+        instrument('configure',document='drawing-order',host='')
+        state=instrument('mixed-drawing')
+        objects=state['model']['objects'];strokes=state['model']['strokes']
+        assert len(objects)==len(strokes)==2,state
+        assert all(state['model']['objectActive'].get(o['object']) is not False for o in objects)
+        assert all(state['model']['strokeActive'].get(s['stroke']) is not False for s in strokes)
+        for key,entity,identity in [('strokeActive',strokes[1],'stroke'),('objectActive',objects[1],'object'),
+                                    ('strokeActive',strokes[0],'stroke'),('objectActive',objects[0],'object')]:
+            state=instrument('undo')
+            assert state['model'][key].get(entity[identity]) is False,('Undo order',key,entity,state)
+        print('PASS rapid interleaved shape/pen actions preserve undo order and block pending undo',flush=True)
         instrument('configure',document='integration',host=f'http://10.0.2.2:{PORT}')
         state=tablet('diagram','add','-',value=EXAMPLE,concurrent=True)
         assert len(state['model']['objects'])==8 and state['strokes']==1 and state['pending']>0,state
@@ -178,6 +242,12 @@ try:
         instrument('page',page=1)
         state=instrument('draw')
         assert state['model']['strokes'][0]['page']==1,state
+        state=instrument('shape',shape='star')
+        star=state['model']['objects'][-1]
+        assert star['shape']=='star' and star['page']==1,star
+        p=subprocess.run([str(CLI),'--proxy-file',str(desktop_proxy.descriptor_path),'--document','remote-pages','inspect'],text=True,capture_output=True,timeout=30)
+        assert p.returncode==0,p.stderr
+        assert json.loads(p.stdout)['objects'][-1]==star,'Android shape bypassed selected proxy'
         print('PASS selected proxy creates and renders a multipage document',flush=True)
         adb('emu','kill');emulator.wait(timeout=20);emulator=None
 finally:

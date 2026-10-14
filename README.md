@@ -116,14 +116,29 @@ the app or clearing its data removes locally stored notes and unsynced edits.
 ### Drawing and collaboration
 
 The left sidebar groups common actions into popups. Both finger and stylus draw.
-**Pen** opens color swatches and width controls; stylus pressure varies width.
-**Erase** removes whole strokes on the selected layer. **History → Undo/Redo**
-changes your own drawing/erasing actions and syncs the result. **Move** enables
+**Pen** opens brush profiles, presets, color swatches and width controls;
+stylus pressure varies width.
+**Shapes** opens an original monochrome palette for rectangles, ellipses, arrows,
+lines, triangles, diamonds, polygons, stars and 3D figures. Choose outline color,
+width and optional fill, select a shape, then drag on the canvas. The completed
+gesture saves one editable object through the selected proxy; canceling a shape
+gesture saves nothing. **Text → Enter text…** accepts text and font size, then a
+canvas tap places an editable text object. Use **Notes → Edit diagram objects…**
+to change an object's geometry or text afterward. Object creation participates
+in human undo/redo and remains available offline through the local proxy.
+
+**Erase** offers whole-stroke, partial, area and page erasing, plus optional
+scribble-to-erase. **Fill** colors native objects or enclosed drawing regions.
+**Select** provides transforms, copy/cut/paste, duplication and deletion, with
+15-second selection leases and live previews. **History → Undo/Redo** changes
+your own drawing/erasing actions and syncs the result; another editor's selection
+blocks conflicting operations. **Move** enables
 dragging/pinch zoom and offers **Reset view** and **Return to pen**.
 
 The right layer tray shows a diagram of the layers, topmost first, with previews,
 names, and visible/hidden states. Tap a card to select it or its eye to hide/show
 it locally. Use **New layer** to add a named layer. Each card's **…** menu offers
+rename, duplicate, reorder, merge and archive controls, as well as
 **Force visible for everyone**, shown as a lock while enabled. Release it to
 restore each client's local visibility preference.
 
@@ -208,10 +223,26 @@ Multiple local CLI processes can share one replica and use distinct `--actor`
 values. Give one agent session a stable actor ID across calls.
 
 Diagrams contain editable rectangles, ellipses, labels, and attached arrows.
+The same object model also supports lines, triangles, diamonds, pentagons,
+hexagons, and stars; `apps/cli/notemaker shape list` returns the supported IDs
+and names. Create and edit them using `object put` and `object update` through
+the selected proxy. Upgrade app, CLI/proxies, and server together for new shapes.
 On Android use **Notes → Edit diagram objects…** to edit geometry/labels or
 erase/restore an object. The app and browser render the same object model.
-A diagram is one atomic, undoable action for its actor. Concurrent geometry
-changes resolve in server commit order; erasure is independent of geometry.
+A diagram is one atomic, undoable action for its actor. Selection leases protect
+objects and ink across proxy connections; leases release on deselection or clean
+disconnect and expire after 15 seconds without renewal. Transforms preview live
+and commit as one action. Offline concurrent versions are preserved for the
+conflict comparison panel, including edits made under the same actor identity.
+
+The grouped Android panels include geometric and 3D shapes, text styling, pen
+profiles and presets, whole-stroke/partial/area/page erasing, enclosed fill,
+layer management, pictures, page templates and toolbar preferences. All content
+edits use the selected proxy and remain available offline. See the
+[drawing command schemas](apps/cli/README.md#drawing-tools-and-collaboration)
+and [ADR 0009](docs/adr/0009-drawing-tools-and-selection.md). Handwriting-to-text
+remains deferred. Pen profiles are original pressure-based renderings; the
+calligraphy profiles use stroke direction and a fixed nib angle, not stylus tilt.
 
 Generated SVGs can be placed with `svg add FILE.svg [PLACEMENT.json]`. Optional
 placement JSON specifies `x`, `y`, `w`, `h`, `layer`, `page`, and `object` ID.
@@ -341,7 +372,7 @@ computer; it never discovers or selects a physical tablet automatically.
 
 | Tier | Coverage | External resources |
 | --- | --- | --- |
-| `local` (default) | Framework, server, CLI, proxy, mock-chat, generated topology/failure tests | None; temporary local servers/proxies |
+| `local` (default) | Framework, server, CLI, drawing/export/browser, proxy, mock-chat, generated topology/failure tests | None; temporary local servers/proxies and Chromium |
 | `emulator` | Two-client integration, Android CLI, chat UI, 1,000-stroke performance | Local Android emulators; host graphics for performance |
 | `hardware` | Installed tablet app/proxy connectivity, drained queue, logs, screenshot; optional backed-up upgrade | Explicit ADB serial and reachable configured server |
 | `network` | Edits through multiple existing proxies, final server order and model convergence | Explicit server URL and at least two reachable proxy descriptors |
@@ -374,6 +405,22 @@ nix-shell --run 'python3 tests/run.py --tier hardware --serial SERIAL --require-
 # Explicit upgrade: stop app, back up APK/data, install, verify and reconnect.
 nix-shell --run 'python3 tests/run.py --tier hardware --serial SERIAL --install-tablet --reverse-port 8765 --require-resources'
 ```
+
+After installing the current APK, exercise drawing on the physical tablet with:
+
+```sh
+nix-shell --run 'python3 tests/tablet_drawing.py --serial SERIAL'
+```
+
+This opt-in offline check requires the embedded proxy with its upstream already
+unavailable and temporarily selects a new `Drawing-check-<timestamp>` notebook.
+It preserves the upstream configuration throughout the test. It tests
+shape/text UI input, atomic history, cancellation, CLI-to-app updates, and
+offline restart, then restores the previous notebook and connection settings.
+It retains the test notebook and private reports/screenshots under
+`.test-artifacts/tablet-drawing/`; it does not edit existing notebook content.
+Injected input and screenshots do not measure physical stylus feel or E Ink
+ghosting. Keep the tablet idle while the checks run.
 
 `--reverse-port` explicitly creates/leaves the USB mapping used by the running
 app; omit it for ordinary Wi-Fi access or an existing mapping. Upgrade checks

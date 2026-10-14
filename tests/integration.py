@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.parse
 import uuid
 from replica import read_replica
 
@@ -217,18 +218,28 @@ try:
     baseline = {e['op'].get('stroke') for e in events('infinite') if e['op']['kind'] == 'stroke'}
     # Observe the live proxy without repeatedly starting an ART VM during the
     # timed gesture. Direct-file consistency is checked by converged() afterwards.
-    descriptor=json.loads(adb(SERIALS[1],'shell','run-as','com.notemaker','cat','files/proxy.json'))
-    forwarded=int(adb(SERIALS[1],'forward','tcp:0','tcp:8766').strip())
-    def observe(command):
+    observers=[]
+    for serial in SERIALS:
+        descriptor=json.loads(adb(serial,'shell','run-as','com.notemaker','cat','files/proxy.json'))
+        forwarded=int(adb(serial,'forward','tcp:0','tcp:'+str(urllib.parse.urlparse(descriptor['url']).port)).strip())
+        observers.append((forwarded,descriptor))
+    def observe(command, index=1):
+        forwarded,descriptor=observers[index]
         request=urllib.request.Request(f'http://127.0.0.1:{forwarded}/command',data=json.dumps({'document':'infinite','actor':'observer','args':[command]}).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+descriptor['token']})
         return json.load(urllib.request.urlopen(request,timeout=3))['result']
+    # A visible Activity can precede its restarted proxy's upstream handshake.
+    # Establish readiness before timing delivery, without extending the budget.
+    wait_until(lambda: all(observe('status',i)['connected'] for i in range(2)),30)
     swipe = subprocess.Popen(['adb', '-s', SERIALS[0], 'shell', 'input', 'swipe', '700', '1000', '1100', '1400', '8000'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     def received_partial():
         assert swipe.poll() is None, 'Gesture ended before remote partial stroke arrived'
         saved = observe('snapshot')
         partial = [o for o in saved['effectiveModel']['strokes'] if o['stroke'] not in baseline]
-        if not partial: report('Waiting for live stroke: '+json.dumps(observe('status')))
+        if not partial:
+            source=observe('snapshot',0)
+            report('Waiting for live stroke: '+json.dumps(dict(source=observe('status',0),target=observe('status'),
+                source_points=[len(o['points']) for o in source['effectiveModel']['strokes'] if o['stroke'] not in baseline])))
         return any(len(o['points']) >= 2 for o in partial)
 
     wait_until(received_partial, 7)
@@ -264,6 +275,13 @@ finally:
         server.terminate();server.wait(timeout=10)
     for serial, process in processes:
         if not completed:
+            try:
+                pid=adb(serial,'shell','pidof','com.notemaker').strip()
+                if pid:
+                    (OUT / (serial+'-failure-threads.txt')).write_text(
+                        adb(serial,'shell','run-as','com.notemaker','debuggerd','-j',pid))
+            except Exception:
+                pass
             try:
                 (OUT / (serial+'-failure-logcat.txt')).write_text(adb(serial,'logcat','-d','-s','NoteMaker','AndroidRuntime'))
                 with (OUT / (serial+'-failure.png')).open('wb') as image:

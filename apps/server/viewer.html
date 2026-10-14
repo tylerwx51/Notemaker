@@ -2,11 +2,39 @@
 body{font:16px system-ui;margin:16px;background:#eee}button,input,select{font:inherit;padding:8px;margin:4px}canvas{background:white;border:1px solid #555;max-width:100%;touch-action:none}#layers label{display:inline-block;margin:8px}#status{margin:8px} </style></head><body>
 <h1>NoteMaker live viewer</h1><label>Document <input id="doc" value="notes"></label><button id="open">Open</button><label>Page <input id="page" type="number" min="1" value="1" style="width:60px"></label><span id="status"></span><div id="layers"></div><canvas id="canvas" width="1000" height="1400"></canvas><p>Scroll to zoom on infinite documents; drag to pan. Layer visibility is local unless “force visible” is enabled on a tablet.</p>
 <script>
-const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');let cursor=0,ops=[],hidden=new Set(),doc=new URLSearchParams(location.search).get('document')||'notes',type='fixed',zoom=1,panX=0,panY=0,generation=0;
-function render(){let layers=new Map([['base',{name:'Layer 1',force:false}]]),strokes=new Map(),objects=new Map(),active=new Map(),objectActive=new Map(),layerActive=new Map(),seen=false;function apply(o){if(o.kind==='batch'){o.actions.forEach(apply);return;}if(o.kind==='document'&&!seen){type=o.type;seen=true;}if(o.kind==='layer')layers.set(o.layer,o);if(o.kind==='stroke')strokes.set(o.stroke,o);if(o.kind==='active')active.set(o.stroke,o.active);if(o.kind==='object')objects.set(o.object,o);if(o.kind==='object-active')objectActive.set(o.object,o.active);if(o.kind==='layer-active')layerActive.set(o.layer,o.active)}ops.forEach(apply);
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');let cursor=0,ops=[],previews={},previewExpiryTimer=null,hidden=new Set(),doc=new URLSearchParams(location.search).get('document')||'notes',type='fixed',zoom=1,panX=0,panY=0,generation=0;const imageCache=new Map();
+function previewValues(){const now=Date.now();return Object.values(previews).filter(p=>p&&p.expires>now)}
+function applyPreviews(strokes,objects){
+ const page=type==='pages'?Number(document.querySelector('#page').value)-1:0;
+ for(const preview of previewValues()){
+  const entities=(preview.entities||[]).filter(e=>(e.page||0)===page),selectedObjects=new Set(entities.filter(e=>e.kind==='object').map(e=>e.id));
+  const selected=entities.map(e=>({entity:e,value:e.kind==='object'?objects.get(e.id):strokes.get(e.id)})).filter(v=>v.value);if(!selected.length)continue;
+  const s=preview.transform||{},scale=s.scale===undefined?1:s.scale,dx=s.dx||0,dy=s.dy||0,rotation=s.rotation||0,flipX=!!s.flipX,flipY=!!s.flipY;
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const {entity,value} of selected){if(entity.kind==='object'){
+    const attached=(value.shape==='arrow'||value.shape==='arrowLine')&&(value.from||value.to);
+    if(attached&&(selectedObjects.has(value.from)||selectedObjects.has(value.to)))continue;
+    let x=value.x,y=value.y,w=value.w,h=value.h;if(attached){const p=objectEndpoints(value,objects);x=p[0];y=p[1];w=p[2]-x;h=p[3]-y}
+    minX=Math.min(minX,x,x+w);maxX=Math.max(maxX,x,x+w);minY=Math.min(minY,y,y+h);maxY=Math.max(maxY,y,y+h);
+   }else for(const p of value.points){minX=Math.min(minX,p[0]);maxX=Math.max(maxX,p[0]);minY=Math.min(minY,p[1]);maxY=Math.max(maxY,p[1])}}
+  if(minX===Infinity)continue;const px=s.pivotX===undefined?(minX+maxX)/2:s.pivotX,py=s.pivotY===undefined?(minY+maxY)/2:s.pivotY,a=rotation*Math.PI/180,c=Math.cos(a),sn=Math.sin(a);
+  const point=(p)=>{const x=(p[0]-px)*(flipX?-1:1)*scale,y=(p[1]-py)*(flipY?-1:1)*scale;return [px+x*c-y*sn+dx,py+x*sn+y*c+dy]};
+  for(const {entity,value} of selected){if(entity.kind==='object'){
+    const attached=(value.shape==='arrow'||value.shape==='arrowLine')&&(value.from||value.to);
+    if(attached&&(selectedObjects.has(value.from)||selectedObjects.has(value.to)))continue;
+    const next={...value};if(attached){const p=objectEndpoints(value,objects);next.x=p[0];next.y=p[1];next.w=p[2]-p[0];next.h=p[3]-p[1];delete next.from;delete next.to}
+    const center=point([next.x+next.w/2,next.y+next.h/2]),w=next.w*scale,h=next.h*scale;next.x=center[0]-w/2;next.y=center[1]-h/2;next.w=w;next.h=h;
+    const oldRotation=value.rotation||0;next.rotation=(rotation+((flipX!==flipY)?-oldRotation:oldRotation))%360;next.flipX=!!value.flipX!==flipX;next.flipY=!!value.flipY!==flipY;if(value.fontSize!==undefined)next.fontSize=value.fontSize*scale;objects.set(entity.id,next);
+   }else{const next={...value,points:value.points.map(p=>{const q=point(p);return [q[0],q[1],p[2]]}),width:value.width*scale};strokes.set(entity.id,next)}}
+ }
+}
+function schedulePreviewExpiry(){clearTimeout(previewExpiryTimer);const expiries=Object.values(previews).map(p=>p&&p.expires).filter(t=>t>Date.now());if(expiries.length)previewExpiryTimer=setTimeout(()=>{render();schedulePreviewExpiry()},Math.max(1,Math.min(...expiries)-Date.now()+1))}
+function render(){let layers=new Map([['base',{name:'Layer 1',force:false}]]),strokes=new Map(),objects=new Map(),active=new Map(),objectActive=new Map(),layerActive=new Map(),seen=false;function apply(o){if(o.kind==='batch'){o.actions.forEach(apply);return;}if(o.kind==='document'&&!seen){type=o.type;seen=true;}if(o.kind==='layer')layers.set(o.layer,o);if(o.kind==='stroke')strokes.set(o.stroke,o);if(o.kind==='active')active.set(o.stroke,o.active);if(o.kind==='object')objects.set(o.object,o);if(o.kind==='object-active')objectActive.set(o.object,o.active);if(o.kind==='layer-active')layerActive.set(o.layer,o.active)}ops.forEach(apply);applyPreviews(strokes,objects);schedulePreviewExpiry();
 const box=document.querySelector('#layers');box.replaceChildren();for(const [id,l] of layers){if(layerActive.get(id)===false)continue;let label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=l.force||!hidden.has(id);check.disabled=l.force;check.onchange=()=>{check.checked?hidden.delete(id):hidden.add(id);render()};label.append(check,document.createTextNode(l.name+(l.force?' (forced visible)':'')));box.append(label)}
-ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='white';ctx.fillRect(0,0,1000,1400);if(type==='infinite')ctx.setTransform(zoom,0,0,zoom,panX,panY);for(const [id,l] of layers){if(layerActive.get(id)===false||(hidden.has(id)&&!l.force))continue;for(const [sid,s] of strokes){if(s.layer!==id||active.get(sid)===false||s.page!==(type==='pages'?Number(document.querySelector('#page').value)-1:0))continue;ctx.fillStyle='#'+(s.color&0xffffff).toString(16).padStart(6,'0');ctx.strokeStyle=ctx.fillStyle;ctx.lineCap='round';let prev=null;for(const p of s.points){let w=s.width*(.25+.75*p[2]);if(prev){ctx.lineWidth=(w+prev[3])/2;ctx.beginPath();ctx.moveTo(prev[0],prev[1]);ctx.lineTo(p[0],p[1]);ctx.stroke()}ctx.beginPath();ctx.arc(p[0],p[1],w/2,0,Math.PI*2);ctx.fill();prev=[...p,w]}}for(const [oid,o] of objects){if(o.layer===id&&objectActive.get(oid)!==false&&o.page===(type==='pages'?Number(document.querySelector('#page').value)-1:0))drawObject(o,objects)}}}
+ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='white';ctx.fillRect(0,0,1000,1400);if(type==='infinite')ctx.setTransform(zoom,0,0,zoom,panX,panY);for(const [id,l] of [...layers.entries()].sort((a,b)=>(a[1].order||0)-(b[1].order||0))){if(layerActive.get(id)===false||(hidden.has(id)&&!l.force))continue;for(const [sid,s] of strokes){if(s.layer!==id||active.get(sid)===false||s.page!==(type==='pages'?Number(document.querySelector('#page').value)-1:0))continue;let brush=s.brush||'pen',alpha=brush==='marker'?Math.min((s.color>>>24),128):(brush==='pencil'||brush==='charcoal')?Math.min((s.color>>>24),190):(s.color>>>24),factor=(brush==='marker'||brush==='neoBrush')?1.8:(brush==='brush'||brush==='charcoal')?1.35:(brush==='pencil'||brush==='fountain'||brush==='oily')?.82:(brush==='latinCalligraphy'||brush==='asiaCalligraphy')?1.5:1;ctx.fillStyle='#'+(s.color&0xffffff).toString(16).padStart(6,'0')+alpha.toString(16).padStart(2,'0');ctx.strokeStyle=ctx.fillStyle;ctx.lineCap='round';let prev=null;for(const p of s.points){let w=s.width*(.25+.75*p[2])*factor;if(prev){let segment=(w+prev[3])/2;if(brush==='latinCalligraphy'||brush==='asiaCalligraphy'){let nib=brush==='latinCalligraphy'?Math.PI/4:Math.PI/3,angle=Math.atan2(p[1]-prev[1],p[0]-prev[0]);segment*=.12+.88*Math.abs(Math.sin(angle-nib))}ctx.lineWidth=segment;ctx.beginPath();ctx.moveTo(prev[0],prev[1]);ctx.lineTo(p[0],p[1]);ctx.stroke()}ctx.beginPath();if(brush==='square'){ctx.fillRect(p[0]-w/2,p[1]-w/2,w,w)}else{ctx.arc(p[0],p[1],w/2,0,Math.PI*2);ctx.fill()}prev=[...p,w]}}for(const [oid,o] of objects){if(o.layer===id&&objectActive.get(oid)!==false&&o.page===(type==='pages'?Number(document.querySelector('#page').value)-1:0))drawObject(o,objects)}}}
 function argb(n){return '#'+(n&0xffffff).toString(16).padStart(6,'0')+((n>>>24)&255).toString(16).padStart(2,'0')}
+function boundary(n,x,y,tx,ty){if(!n||(x===tx&&y===ty))return [x,y];let dx=tx-x,dy=ty-y,a=(n.rotation||0)*Math.PI/180,c=Math.cos(a),s=Math.sin(a),lx=(dx*c+dy*s)*(n.flipX?-1:1),ly=(-dx*s+dy*c)*(n.flipY?-1:1),rx=n.w/2,ry=n.h/2,t=(n.shape==='ellipse'||n.shape==='circle')?1/Math.sqrt(lx*lx/(rx*rx)+ly*ly/(ry*ry)):Math.min(lx===0?Infinity:rx/Math.abs(lx),ly===0?Infinity:ry/Math.abs(ly)),fx=lx*t*(n.flipX?-1:1),fy=ly*t*(n.flipY?-1:1);return [x+fx*c-fy*s,y+fx*s+fy*c]}
+function objectEndpoints(o,objects){let x=o.x,y=o.y,ex=x+o.w,ey=y+o.h,a=objects.get(o.from),b=objects.get(o.to);if(a){x=a.x+a.w/2;y=a.y+a.h/2}if(b){ex=b.x+b.w/2;ey=b.y+b.h/2}return [...boundary(a,x,y,ex,ey),...boundary(b,ex,ey,x,y)]}
 const svgImages=new Map();
 function drawSvg(o){
  const key=JSON.stringify([o.svg,o.w,o.h]);let image=svgImages.get(key);
@@ -18,20 +46,37 @@ function drawSvg(o){
  }
  if(image.complete&&image.naturalWidth)ctx.drawImage(image,o.x,o.y,o.w,o.h);
 }
-function drawObject(o,objects){
- if(o.shape==='svg'){drawSvg(o);return;}
- let {x,y,w,h}=o;ctx.strokeStyle=argb(o.color);ctx.fillStyle=argb(o.color);ctx.lineWidth=o.width;ctx.lineCap='round';
+function drawObject(o,objects){if((o.shape==='arrow'||o.shape==='arrowLine')&&(o.from||o.to)){drawObjectContent(o,objects);return}const cx=o.x+o.w/2,cy=o.y+o.h/2;ctx.save();ctx.translate(cx,cy);ctx.rotate((o.rotation||0)*Math.PI/180);ctx.scale(o.flipX?-1:1,o.flipY?-1:1);ctx.translate(-cx,-cy);drawObjectContent(o,objects);ctx.restore()}
+function drawObjectContent(o,objects){
+ if(o.shape==='svg'){drawSvg(o);return;}if(o.shape==='image'){let image=imageCache.get(o.image);if(!image){image=new Image();image.onload=render;image.src=o.image;imageCache.set(o.image,image)}if(image.complete&&image.naturalWidth)ctx.drawImage(image,o.x,o.y,o.w,o.h);return;}
+ let {x,y,w,h}=o;ctx.strokeStyle=argb(o.color);ctx.fillStyle=argb(o.color);ctx.lineWidth=o.width;ctx.lineCap='round';ctx.lineJoin='miter';
  function line(x,y,ex,ey){ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(ex,ey);ctx.stroke()}
- if(o.shape==='arrow'){
-  let ex=x+w,ey=y+h,a=objects.get(o.from),b=objects.get(o.to);if(a){x=a.x+a.w/2;y=a.y+a.h/2}if(b){ex=b.x+b.w/2;ey=b.y+b.h/2}
-  function edge(n,x,y,tx,ty){if(!n||(x===tx&&y===ty))return [x,y];let dx=tx-x,dy=ty-y,rx=n.w/2,ry=n.h/2,t=n.shape==='ellipse'?1/Math.sqrt(dx*dx/(rx*rx)+dy*dy/(ry*ry)):Math.min(dx===0?Infinity:rx/Math.abs(dx),dy===0?Infinity:ry/Math.abs(dy));return [x+t*dx,y+t*dy]}
-  let start=edge(a,x,y,ex,ey),end=edge(b,ex,ey,x,y);[x,y]=start;[ex,ey]=end;line(x,y,ex,ey);let angle=Math.atan2(ey-y,ex-x),length=Math.max(12,o.width*4);for(let offset of [-.45,.45])line(ex,ey,ex-length*Math.cos(angle+offset),ey-length*Math.sin(angle+offset));x=(x+ex)/2;y=(y+ey)/2;
+ if(o.shape==='arrow'||o.shape==='arrowLine'){
+  let [sx,sy,ex,ey]=objectEndpoints(o,objects);x=sx;y=sy;line(x,y,ex,ey);let angle=Math.atan2(ey-y,ex-x),length=Math.max(12,o.width*4);for(let offset of [-.45,.45])line(ex,ey,ex-length*Math.cos(angle+offset),ey-length*Math.sin(angle+offset));x=(x+ex)/2;y=(y+ey)/2;
+ }else if(o.shape==='line'){
+  line(x,y,x+w,y+h);x+=w/2;y+=h/2;
  }else if(o.shape!=='text'){
-  ctx.beginPath();if(o.shape==='ellipse')ctx.ellipse(x+w/2,y+h/2,w/2,h/2,0,0,Math.PI*2);else ctx.rect(x,y,w,h);if(o.fill!==undefined){ctx.fillStyle=argb(o.fill);ctx.fill()}ctx.stroke();
+  ctx.beginPath();
+  if(o.shape==='ellipse'||o.shape==='circle')ctx.ellipse(x+w/2,y+h/2,w/2,h/2,0,0,Math.PI*2);
+  else if(['triangle','diamond','rhombus','pentagon','hexagon','regularHexagon','star','trapezoid','triangle45','triangle60','triangle90','regularPolygon','polyline'].includes(o.shape)){
+   ctx.lineJoin='round';
+   let points;
+   if(o.shape==='triangle'||o.shape==='triangle60')points=[[.5,0],[1,1],[0,1]];
+   else if(o.shape==='triangle45')points=[[0,1],[1,0],[1,1]];else if(o.shape==='triangle90')points=[[0,0],[0,1],[1,1]];
+   else if(o.shape==='diamond'||o.shape==='rhombus')points=[[.5,0],[1,.5],[.5,1],[0,.5]];
+   else if(o.shape==='trapezoid')points=[[.2,0],[.8,0],[1,1],[0,1]];
+   else if(o.shape==='polyline')points=[[0,1],[.3,.25],[.65,.7],[1,0]];
+   else if(o.shape==='star')points=Array.from({length:10},(_,i)=>{let a=-Math.PI/2+i*Math.PI/5,r=i%2===0?.5:.22;return [.5+Math.cos(a)*r,.5+Math.sin(a)*r]});
+   else {let n=o.shape==='pentagon'?5:(o.shape==='hexagon'||o.shape==='regularHexagon')?6:8;points=Array.from({length:n},(_,i)=>{let a=Math.PI*1.5+i*2*Math.PI/n;return [.5+.5*Math.cos(a),.5+.5*Math.sin(a)]})}
+   points.forEach(([u,v],i)=>{let px=x+u*w,py=y+v*h;if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py)});if(o.shape!=='polyline')ctx.closePath();
+  }else if(['cube','cylinder','cone','sphere','pyramid','wave','waveLine','curve'].includes(o.shape)){
+   let src={cube:'M50 4 92 27 92 73 50 96 8 73 8 27Z M50 4V50 M8 27 50 50 92 27 M50 50V96',pyramid:'M50 6 8 84 92 84Z M50 6 50 84 M8 84 50 65 92 84',cone:'M50 5 8 82 M50 5 92 82 M8 82 C15 98 85 98 92 82 M8 82 C28 68 72 68 92 82',cylinder:'M8 20 C8 2 92 2 92 20 V80 C92 98 8 98 8 80 Z M8 20 C8 38 92 38 92 20 M8 80 C8 62 92 62 92 80',sphere:'M5 50 C20 28 80 28 95 50 C80 72 20 72 5 50 M50 4 C22 25 22 75 50 96 M50 4 C78 25 78 75 50 96',wave:'M0 55 C16 5 34 5 50 55 S84 105 100 55',waveLine:'M0 55 C16 5 34 5 50 55 S84 105 100 55',curve:'M2 90 C15 5 62 5 98 10'}[o.shape];ctx.save();ctx.translate(x,y);ctx.scale(w/100,h/100);ctx.beginPath();ctx.ellipse(50,50,46,46,0,0,Math.PI*2);if(o.shape==='sphere')ctx.stroke();ctx.beginPath();ctx.strokeStyle=argb(o.color);ctx.lineWidth=o.width*100/Math.max(w,h);ctx.lineCap='round';ctx.lineJoin='round';let figure=new Path2D(src);if(o.fill!==undefined){ctx.fillStyle=argb(o.fill);ctx.fill(figure)}ctx.stroke(figure);ctx.restore();
+  }else ctx.rect(x,y,w,h);
+  if(o.fill!==undefined){ctx.fillStyle=argb(o.fill);ctx.fill()}ctx.stroke();
  }
- ctx.fillStyle=argb(o.color);let size=o.fontSize||24;ctx.font=size+'px sans-serif';if(o.shape==='ellipse'){x+=25;y+=h/2-size}(o.text||'').split('\n').forEach((text,i)=>ctx.fillText(text,x+(o.shape==='text'?0:10),y+size+i*size*1.2));
+ ctx.fillStyle=argb(o.color);let size=o.fontSize||24;ctx.font=(o.italic?'italic ':'')+(o.bold?'bold ':'')+size+'px '+(o.fontFamily||'sans-serif');ctx.textAlign=o.alignment||'left';if(o.shape==='ellipse'){x+=25;y+=h/2-size}(o.text||'').split('\n').forEach((text,i)=>{let tx=x+(o.alignment==='center'?w/2:o.alignment==='right'?w:0)+(o.shape==='text'?0:10);ctx.fillText(text,tx,y+size+i*size*1.2);if(o.underline){let width=ctx.measureText(text).width,ux=tx-(ctx.textAlign==='center'?width/2:ctx.textAlign==='right'?width:0);ctx.fillRect(ux,y+size+i*size*1.2+2,width,1)}});
 }
-async function poll(){let g=generation;try{let r=await fetch('/api/events?document='+encodeURIComponent(doc)+'&after='+cursor);if(!r.ok)throw Error();let data=await r.json();if(g!==generation)return;if(data.events.length){for(const e of data.events){ops.push(e.op);cursor=e.seq}render()}document.querySelector('#status').textContent='Connected · '+type+' · '+cursor+' events'}catch(e){document.querySelector('#status').textContent='Disconnected; retrying'}finally{setTimeout(poll,200)}}
-document.querySelector('#open').onclick=()=>{generation++;doc=document.querySelector('#doc').value;cursor=0;ops=[];hidden.clear();type='fixed';zoom=1;panX=panY=0;render()};document.querySelector('#page').onchange=render;
+async function poll(){let g=generation;try{let r=await fetch('/api/events?document='+encodeURIComponent(doc)+'&after='+cursor);if(!r.ok)throw Error();let data=await r.json();if(g!==generation)return;if(data.events.length){for(const e of data.events){ops.push(e.op);cursor=e.seq}render()}let lr=await fetch('/api/locks?document='+encodeURIComponent(doc));if(!lr.ok)throw Error();let lockState=await lr.json();if(g!==generation)return;const next=lockState.previews||{};if(JSON.stringify(previews)!==JSON.stringify(next)){previews=next;render()}document.querySelector('#status').textContent='Connected · '+type+' · '+cursor+' events'}catch(e){document.querySelector('#status').textContent='Disconnected; retrying'}finally{setTimeout(poll,200)}}
+document.querySelector('#open').onclick=()=>{generation++;clearTimeout(previewExpiryTimer);previews={};doc=document.querySelector('#doc').value;cursor=0;ops=[];hidden.clear();type='fixed';zoom=1;panX=panY=0;render()};document.querySelector('#page').onchange=render;
 canvas.onwheel=e=>{if(type!=='infinite')return;e.preventDefault();zoom=Math.max(.2,Math.min(5,zoom*(e.deltaY<0?1.1:.9)));render()};let drag=null;canvas.onpointerdown=e=>{if(type==='infinite'){drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)}};canvas.onpointermove=e=>{if(drag){panX+=(e.clientX-drag[0])*1000/canvas.clientWidth;panY+=(e.clientY-drag[1])*1400/canvas.clientHeight;drag=[e.clientX,e.clientY];render()}};canvas.onpointerup=()=>drag=null;document.querySelector('#doc').value=doc;render();poll();
 </script></body></html>

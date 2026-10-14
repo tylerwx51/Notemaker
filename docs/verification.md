@@ -1,5 +1,258 @@
 # Verification
 
+## Full drawing and collaboration feature set — 2026-10-14
+
+Implemented the remaining ADR 0009 groups with GPT-6-luna implementation
+agents: brush profiles/presets, geometric and 3D figures, text styling,
+selection and atomic transforms, copy/cut/paste, erasers and enclosed fills,
+layers, embedded pictures, background templates and grouped tool panels.
+All durable edits use the selected proxy and local replica. Selection leases
+and live previews are transient; causal conflict snapshots and their resolution
+are replicated and undoable. Handwriting recognition remains deferred.
+
+The integrated local run at
+`.test-artifacts/runs/20261014-011936-401576/report.json` passed framework,
+server, CLI, drawing, drawing-tools, Chromium rendering, selection, conflict,
+proxy and chat suites (97 test executions, including inherited shared checks).
+Its topology suite exposed two test-fixture assumptions: every POST had been
+counted as a saved action upload. Fixtures now restrict upload counters and
+transport fault injection to `/api/events`, allowing `/api/locks` coordination
+traffic through independently. The CLI lost-ack fixture received the same fix.
+The corrected topology suite passed all 10 tests, including its generated
+network examples. The focused clipboard test passed after adding copy timestamps
+to the proxy's local clipboard metadata.
+
+A complete local rerun passed all 108 test executions across all eleven
+suites: `.test-artifacts/runs/20261014-021929-135803/report.json`. It includes the
+new regression requiring a committed transform to reach the upstream server
+without an explicit sync. Transform commits, selection mutations and conflict
+resolutions now schedule uploads; transient previews and leases remain outside
+the saved action history.
+
+The broad emulator regression caught a pen-tail bug: with scribble detection
+disabled, ACTION_UP failed to emit the last stroke snapshot. Short gestures
+could persist only their first point. Final stroke emission is now unconditional
+unless the gesture is consumed as a scribble erasure; instrumentation asserts
+that all 12 injected points reach the saved stroke.
+
+The existing Android CLI and chat UI suites passed in
+`.test-artifacts/runs/20261014-012822-568797/`. The initial performance preflight
+ran before the preceding chat emulator disappeared from ADB; its later run
+passed in `.test-artifacts/runs/20261014-014156-350899/`. It verified 1,000 durable
+strokes, incremental/full replay and cached/uncached image equivalence, queue
+drain below one second, and the existing latency/growth budgets. The last
+100-stroke window had 1.27 ms p95 input-handler time and 16.74 ms p95
+input-to-draw time. These are emulator measurements, not E Ink latency claims.
+
+The longer integration run exposed live pen uploads waiting behind a fetch-only
+sweep of inactive notebooks. Captured Java stacks showed the sync worker waiting
+on replica and lock requests while the active notebook accumulated pending ink.
+The scheduler now prioritizes the active notebook and pending edits, preempts
+stale fetch requests asynchronously, and retries intentional preemption without
+disconnect errors or exponential backoff. Replica/info/lock requests have a
+two-second inactivity timeout because HTTP disconnect alone did not reliably
+interrupt a blocked JVM read. Empty lock-update POSTs are skipped. The existing
+500 ms upload gate remains in force.
+
+A regression inserts an uncooperative four-second response delay for an idle
+notebook, requires a new active edit to arrive upstream within three seconds,
+and then verifies the idle notebook catches up. The integration harness also
+waits for both proxies' upstream handshakes before timing delivery, retains its
+original seven-second live-stroke budget, and records both source and destination
+state on failure. Temporary Java-stack diagnostics were removed from production
+status responses.
+
+The final build passed all 109 local test executions across all eleven suites,
+including the new stalled-background-fetch regression and all ten proxy-tree
+properties: `.test-artifacts/runs/20261014-024548-026249/report.json`.
+The complete two-emulator `tests/integration.py` run also passed on that build,
+including live partial-stroke delivery before finger-up, simultaneous drawing,
+undo/redo, visibility, offline/restart convergence, browser replay, multiple
+document types and finger/stylus input. Its final output is retained at
+`.test-artifacts/tablet-final/20261014-024511/integration-results.txt`.
+
+The full expanded `tests/drawing_android.py` suite passed with APK
+`d4219dc2cf22c62c72572db1b05daa66cfa63f2218409ff707c207649110b14f`.
+It verifies foreign previews and cancellation through proxy notifications
+without a revision change, rejected undo preserving model/history, unlocked
+undo succeeding, box and closed freeform lasso selection, layer compositing
+after reordering, templates behind ink, persisted conflict badges after restart,
+side-by-side comparison and resolution/undo, clipboard across restart and
+notebooks, and brush/eraser/template/layer/preferences panels. Screenshots and
+instrumentation results are in `.test-artifacts/drawing-android/`.
+
+Those tests caught and fixed Android-specific issues: startup loaded raw
+replica data without coordination/conflict metadata; transient notifications
+were ignored when the durable revision stayed unchanged; failed undo advanced
+the UI history; layer order differed from export order; and closed freeform
+lassos were mistaken for taps. Popup contents now scroll when needed, and the
+comparison panel keeps both previews and all three resolution choices visible.
+
+Installed the final APK
+`76230903dc925dcc42328c92e68e1b2e90753f5187448e8e01d6574be53e1309`
+on BOOX NoteAir6C `eac89823`. The backed-up upgrade preserved all 37 private
+app-data files byte-for-byte and all 448 actions in the current notebook.
+Installation, connectivity, APK comparison and history checks passed in
+`.test-artifacts/tablet/20261014-024538-391481/`.
+
+Physical BOOX checks on that build passed in
+`.test-artifacts/tablet-drawing/20261014-024619/`: actual toolbar/text input,
+shape creation/undo/cancel, ephemeral previews, atomic text scaling, clipboard,
+fill, background template, partial erasing, complete pressure-bearing stroke
+samples and offline restart. The original notebook selection, upstream, root
+identity and all 448 original actions/actor histories were preserved. The test
+notebook synchronized all 15 actions with zero pending actions through USB;
+tablet and server action logs matched. The desktop database backup and sync
+report are in `.test-artifacts/tablet-final/20261014-024511/`. Only the temporary
+local server was stopped afterward; no home-server deployment was performed.
+Hardware checks used ADB and instrumentation, including pressure-bearing input
+samples. Physical stylus feel, tilt and E Ink ghosting still need hands-on
+assessment; screenshot and software timing checks do not establish those.
+
+Coverage uses actual CLI calls and proxy trees for competing selections,
+15-second expiry, preview cancellation, clean owner shutdown, offline edits,
+actor-specific undo, locked-operation rejection, and conflict convergence.
+Conflict tests preserve successive versions on both offline branches, including
+same-actor edits and hide-versus-edit conflicts; resolution and its undo/redo
+propagate. Browser checks verify filled 3D figures, styled text and pictures,
+rotated connector boundaries, and previews without durable event changes.
+Partial erasing, clipboard diagrams, layers and templates are atomic and
+reversible. Complex flood-fill work is bounded and fails without an action.
+
+Commands used for the final verification:
+
+```sh
+nix-shell --run 'python3 tests/run.py --tier local --no-build'
+nix-shell --run 'python3 tests/topology_properties.py'
+nix-shell --run 'python3 tests/drawing_android.py'
+nix-shell --run 'python3 tests/integration.py'
+nix-shell --run 'python3 tests/run.py --tier emulator --suite integration --suite cli_android --suite chat_ui --suite performance --no-build'
+nix-shell --run 'python3 tests/tablet_checks.py --serial eac89823 --install --reverse-port 8765 --timeout 90'
+nix-shell --run 'python3 tests/tablet_drawing.py --serial eac89823'
+```
+
+## Physical BOOX drawing checks — 2026-10-14
+
+Installed the current chunk-1 APK on BOOX NoteAir6C `eac89823` (Android 16)
+after backing up its installed APK and private app data. Installation preserved
+all 19 existing files byte-for-byte; the installed APK hash matched the build.
+Compared the pre-upgrade replica with the running tablet and verified all 411
+original actions, the main-server identity, and actor histories were retained.
+
+Executed through Nix:
+
+```sh
+nix-shell --run 'python3 tests/run.py --tier hardware --serial eac89823 --install-tablet --require-resources'
+nix-shell --run 'python3 tests/tablet_drawing.py --serial eac89823'
+nix-shell --run 'python3 tests/tablet_checks.py --serial eac89823 --timeout 60'
+nix-shell --run 'python3 tests/run.py --tier local --suite framework_checks --no-build'
+```
+
+The initial upgrade smoke check installed successfully but failed on a stale
+proxy port. Instrumentation restarts on BOOX can change that port; tests now
+refresh forwarding and wait for a successful read-only probe. Mutations are
+not retried automatically. Early drawing attempts passed toolbar shape/text
+creation but hit the same restart race; those failed reports are retained.
+
+The first offline harness also cleared the upstream temporarily. Restoring the
+preference alone did not restore the effective proxy edge when the existing USB
+mapping led to an unavailable desktop server. The original edge and root identity
+were restored through the proxy command pathway, briefly removing and then
+restoring that exact USB mapping so the offline main-server address could be
+accepted. No replica files were edited directly. The final harness preserves
+the upstream throughout, requires it to be offline before starting, and checks
+both preferences and effective proxy configuration afterward.
+
+The final drawing run passed real UI taps/drag creation, text entry/placement,
+star creation, atomic undo/redo, cancellation, a JVM CLI edit through the tablet
+proxy, live app visibility of that edit, and offline process restart. Existing
+notebook content and actor histories remained unchanged. The original `notes`
+selection, host/proxy preferences, effective upstream, root identity and USB
+mapping were preserved. Unique test notebooks are retained.
+
+Then verified the desktop database had the tablet's pinned identity, backed it
+up through SQLite's backup API, and started the local server temporarily on
+127.0.0.1:8765. The final connectivity smoke check passed. All seven actions in
+the final test notebook synchronized over USB; tablet/server action logs matched
+and pending count reached zero. The original 411 actions and histories were
+verified again. Only the temporary server process was stopped afterward.
+
+Artifacts:
+
+- `.test-artifacts/tablet/20261014-002028-995317/`: pre-upgrade APK/data,
+  desktop database backup, installed APK verification, history preservation and
+  connection-restoration reports; initial smoke failure is retained.
+- `.test-artifacts/tablet-drawing/20261014-002905/`: final passing drawing
+  report (including effective upstream preservation), screenshots and sync report.
+- `.test-artifacts/tablet/20261014-003057-381651/`: passing connectivity smoke.
+- `.test-artifacts/runs/20261014-002306-548371/`: 13 passing local framework checks.
+
+Device screenshots confirm layout and rendered content, not physical E Ink
+ghosting or pen feel. Input was injected through ADB/instrumentation; actual
+stylus pressure, latency and refresh appearance still need hands-on review.
+No remote home-server deployment was performed. The updated APK remains installed.
+
+## Drawing tools, chunk 1 — 2026-10-13
+
+Added Android shape/text creation through the selected proxy, original vector
+icons and grouped panels, a read-only shared shape catalog, and native line,
+triangle, diamond, pentagon, hexagon and star objects. Core, CLI/proxy, Android
+and server/browser support the same object snapshots. The existing object
+commands provide atomic history and offline persistence. See ADR 0009 for the
+accepted scope and remaining chunks.
+
+Executed through Nix:
+
+```sh
+nix-shell --run 'python3 tests/run.py --tier local --suite framework_checks --suite server_checks --suite cli_checks --suite drawing_checks --suite drawing_browser --suite proxy_checks'
+nix-shell --run 'python3 tests/run.py --tier local --tier emulator --suite drawing_checks --suite drawing_browser --suite cli_android'
+nix-shell --run 'python3 tests/run.py --tier emulator --suite cli_android --no-build'
+```
+
+The first command passed the JVM CLI build and all six selected local suites
+(13 framework, 5 server, 18 CLI, 11 drawing, 1 browser and 8 proxy test executions;
+some suites inherit shared server checks). The combined run rebuilt the JVM/DEX
+CLI and APK and passed the final drawing/browser tests, including maximum-valid
+polygon dimensions and rounded outlines. Its emulator preflight encountered
+the preceding server connection's TIME_WAIT state. The preflight now uses
+SO_REUSEADDR while still rejecting an occupied listener. No process was killed
+to free that port. The final emulator-only run then passed in full.
+
+Coverage includes actual CLI creation, edits, actor undo/redo, catalog reads
+without history changes, signed/zero-height lines, failed atomic batches, PNG
+and SVG exports, and server/replica convergence. Chromium pixel checks verify
+colored triangle/star interiors, white bounding-box corners and signed line
+bounds, catching rectangle fallbacks. Large native polygon exports normalize
+their internal SVG coordinates while preserving their logical placement.
+
+The API 36 emulator exercised real toolbar taps and text entry, drawing gestures
+for all nine palette shapes, cancellation, signed-line placement, editable text,
+one completed creation per atomic batch, app-spawned CLI edits, offline restart,
+and a rapid shape–pen–shape–pen sequence followed by undo. Pending object saves
+block undo until history insertion order is known. Existing SVG, object erasure,
+reconnect, browser and remote-selected-proxy checks also passed; a star created
+on page 2 was verified in the selected desktop proxy's store.
+
+An initial emulator attempt exposed ADB argument quoting in the test harness
+(empty host and text with spaces); quoting was corrected before successful UI
+and gesture checks. The shape palette screenshot was inspected for readable
+3×3 touch targets and original monochrome icon presentation. `git diff --check`
+passed.
+
+Retained reports:
+
+- `.test-artifacts/runs/20261013-233756-317484/report.json`: selected local suites.
+- `.test-artifacts/runs/20261013-234503-161825/report.json`: final builds and
+  drawing/browser checks; records the emulator preflight failure.
+- `.test-artifacts/runs/20261013-234535-770352/report.json`: final passing emulator
+  suite, including the asynchronous history regression.
+- `.test-artifacts/cli-android/shape-palette.png`: inspected palette screenshot.
+
+No physical tablet installation or remote deployment was performed. Actual
+BOOX stylus behavior, E Ink refresh and external multi-computer testing remain
+unverified. Selection locks, collaborative transform previews and conflict
+comparison are subsequent chunks, not claims of this verification.
+
 ## Tiered automated test framework — 2026-10-13
 
 Added `tests/run.py` with independent local, emulator, hardware and network

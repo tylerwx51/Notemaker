@@ -24,6 +24,8 @@ final class EditorUi {
     private FrameLayout workspace;
     private PopupWindow popup;
     private boolean expanded;
+    private boolean showToolLabels=true;
+    private String selectedTool = "pen";
     private String trayState = "";
     private long thumbnailTime;
     private int thumbnailRevision = -1;
@@ -31,6 +33,7 @@ final class EditorUi {
     EditorUi(MainActivity app) {
         this.app = app;
         expanded = app.getSharedPreferences("settings", 0).getBoolean("layerTrayExpanded", true);
+        showToolLabels=app.getSharedPreferences("settings",0).getBoolean("showToolLabels",true);
     }
 
     int dp(float value) { return Math.round(value * app.getResources().getDisplayMetrics().density); }
@@ -60,7 +63,9 @@ final class EditorUi {
         header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         connection = text("", 12, MUTED, false);
         connection.setGravity(Gravity.RIGHT);
+        connection.setOnClickListener(v->{if(!app.conflicts.isEmpty())showConflictPanel();});
         header.addView(connection);
+        header.addView(action("Prefs", () -> { dismissPopup(); showPopup(preferencesPanel(), tools.get("pen"), false); }));
         header.addView(action("Agent", () -> { dismissPopup(); app.agent.show(); }));
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(70)));
         root.addView(divider(), new LinearLayout.LayoutParams(-1, dp(1)));
@@ -76,6 +81,10 @@ final class EditorUi {
         space(rail, 18);
         tool(rail, "pen", "Pen", "Pen tools");
         tool(rail, "eraser", "Erase", "Eraser tools");
+        tool(rail, "shapes", "Shapes", "Shape tools");
+        tool(rail, "fill", "Fill", "Enclosed area fill");
+        tool(rail, "select", "Select", "Select and transform objects");
+        tool(rail, "text", "Text", "Text placement");
         tool(rail, "move", "Move", "Canvas navigation");
         space(rail, 18);
         tool(rail, "history", "History", "Undo and redo");
@@ -149,7 +158,8 @@ final class EditorUi {
         setText(connection, app.saveError!=null ? "Save failed" : app.saving>0 ? (app.replica.remote()?"Saving to proxy…":"Saving on device…") : app.connected
                 ? app.pendingCount == 0 ? "●  Connected" : "●  Syncing changes"
                 : app.replica.remote()?"○  Proxy unavailable · last snapshot":"○  Offline · saved on device");
-        String mode = app.erase ? "eraser" : app.pan ? "move" : "pen";
+        if(!app.conflicts.isEmpty())setText(connection,connection.getText()+"  ·  "+app.conflicts.size()+" conflict(s)");
+        String mode = app.erase ? "eraser" : app.pan ? "move" : app.drawingShape!=null ? (app.drawingShape.equals("text")?"text":"shapes") : selectedTool;
         for (Map.Entry<String, Tool> entry : tools.entrySet()) entry.getValue().active(entry.getKey().equals(mode));
 
         StringBuilder state = new StringBuilder(app.document).append('/').append(app.page).append('/').append(app.selected);
@@ -308,7 +318,21 @@ final class EditorUi {
         menuAction(box, "Draw on this layer", true, () -> {
             synchronized (app.lock) { app.selected = id; app.hidden.remove(id); app.save(); app.update(); }
         });
+        menuAction(box, "Rename layer…", true, () -> app.renameLayer(id));
+        menuAction(box, "Archive layer", !id.equals("base"), () -> new AlertDialog.Builder(app).setTitle("Archive layer?").setMessage("This hides the layer and its contents. Undo restores it.").setNegativeButton("Cancel",null).setPositiveButton("Archive",(dialog,which)->app.layerCommand("hide",id,null)).show());
+        menuAction(box, "Duplicate layer", true, () -> app.layerCommand("duplicate", id, null));
+        ArrayList<String> order=new ArrayList<>(app.layers.keySet());int position=order.indexOf(id);
+        // The tray displays the highest order first, so visual up means a larger render order.
+        menuAction(box, "Move layer up", position>=0&&position+1<order.size(), () -> app.layerCommand("reorder", id, String.valueOf(position+1)));
+        menuAction(box, "Move layer down", position>0, () -> app.layerCommand("reorder", id, String.valueOf(position-1)));
+        menuAction(box, "Merge into another layer…", order.size()>1, () -> chooseMergeTarget(id,order));
         showPopup(box, anchor, true);
+    }
+
+    private void chooseMergeTarget(String source,ArrayList<String> ids){
+        ArrayList<String> targets=new ArrayList<>();ArrayList<String> labels=new ArrayList<>();
+        for(String id:ids)if(!id.equals(source)){targets.add(id);JSONObject layer=app.layers.get(id);labels.add(layer==null?id:layer.optString("name",id));}
+        new AlertDialog.Builder(app).setTitle("Merge layer into").setItems(labels.toArray(new String[0]),(dialog,index)->app.layerCommand("merge",source,targets.get(index))).setNegativeButton("Cancel",null).show();
     }
 
     private LinearLayout popupBody(String heading, String description) {
@@ -325,11 +349,24 @@ final class EditorUi {
     }
 
     private void openTool(String kind, View anchor) {
+        if (Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind)) selectedTool=kind;
+        if(Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind))app.selecting=kind.equals("select");
         LinearLayout box;
         switch (kind) {
             case "pen":
-                app.erase = false; app.pan = false; app.update();
+                app.erase = false; app.pan = false; app.drawingShape=null;app.pendingText=null;if(app.canvas!=null)app.canvas.shapeDragging=false; app.update();
                 box = popupBody("Pen", "Pressure-sensitive ink");
+                menuAction(box, "Presets…", true, () -> { dismissPopup(); showPopup(presetPanel(), tools.get("pen"), false); });
+                TextView brushLabel = text("Brush type", 12, MUTED, true);
+                brushLabel.setPadding(0, dp(4), 0, dp(6));
+                box.addView(brushLabel);
+                LinearLayout brushKinds = row();
+                for (String brush : new String[]{"pen", "pencil", "marker", "brush"}) {
+                    String label=Character.toUpperCase(brush.charAt(0))+brush.substring(1);
+                    TextView choice=action(label,()->{app.brush=brush;app.update();});choice.setTextSize(11);brushKinds.addView(choice,new LinearLayout.LayoutParams(0,dp(42),1));
+                }
+                box.addView(brushKinds);
+                menuAction(box,"More brush types…",true,()->{dismissPopup();showPopup(brushPanel(),tools.get("pen"),false);});
                 LinearLayout swatches = row();
                 int[] colors = {Color.BLACK, 0xffbd2424, 0xff245dbd, 0xff247d38, 0xff7824aa, 0xffd06a00};
                 String[] names = {"Black", "Red", "Blue", "Green", "Purple", "Orange"};
@@ -368,21 +405,41 @@ final class EditorUi {
                 menuAction(box, "Done", true, () -> {});
                 break;
             case "eraser":
-                app.erase = true; app.pan = false; app.update();
-                box = popupBody("Stroke eraser", "Tap or sweep across a stroke to remove it from the selected layer.");
+                app.erase = true; app.pan = false; app.drawingShape=null;app.pendingText=null;if(app.canvas!=null)app.canvas.shapeDragging=false; app.update();
+                box = eraserPanel();
                 menuAction(box, "Undo last action", !app.undo.isEmpty(), () -> app.history(false));
                 menuAction(box, "Ready to erase", true, () -> {});
                 break;
             case "move":
-                app.pan = true; app.erase = false; app.update();
+                app.pan = true; app.erase = false; app.drawingShape=null;app.pendingText=null;if(app.canvas!=null)app.canvas.shapeDragging=false; app.update();
                 box = popupBody("Move canvas", "Drag to move. Pinch to zoom.");
+                menuAction(box, "Zoom out", true, () -> { app.canvas.zoom = Math.max(.2f, app.canvas.zoom / 1.25f); app.canvas.invalidate(); });
+                menuAction(box, "Zoom in", true, () -> { app.canvas.zoom = Math.min(5f, app.canvas.zoom * 1.25f); app.canvas.invalidate(); });
                 menuAction(box, "Reset view", true, () -> { app.canvas.zoom = 1; app.canvas.offsetX = app.canvas.offsetY = 0; app.canvas.invalidate(); });
                 menuAction(box, "Return to pen", true, () -> { app.pan = app.erase = false; app.update(); });
                 break;
+            case "shapes":
+                app.pan=false;app.erase=false;app.pendingText=null;app.update();
+                box=shapePanel();
+                break;
+            case "text":
+                app.pan=false;app.erase=false;app.drawingShape=null;app.pendingText=null;if(app.canvas!=null)app.canvas.shapeDragging=false;app.update();
+                box=popupBody("Text", "Enter text and font size, then tap the canvas to place it.");
+                menuAction(box,"Enter text…",true,app::textPlacementDialog);
+                for(Map<String,Object> entity:app.selectedEntities)if("object".equals(entity.get("kind"))){Map<String,Object> selected=app.model.objects.get(String.valueOf(entity.get("id")));if(selected!=null&&"text".equals(selected.get("shape"))){String objectId=String.valueOf(entity.get("id"));menuAction(box,"Edit selected text…",true,()->app.editObject(objectId));break;}}
+                menuAction(box,"Edit placed text…",app.model.objects.values().stream().anyMatch(o -> "text".equals(o.get("shape")) && !Boolean.FALSE.equals(app.model.objectActive.get(o.get("object")))),app::objectDialog);
+                break;
+            case "fill":
+                app.pan=false;app.erase=false;app.drawingShape=null;app.pendingText=null;app.fillTapMode=false;app.update();box=fillPanel();break;
+            case "select":
+                app.pan=false;app.erase=false;app.drawingShape=null;app.pendingText=null;app.selecting=true;app.update();box=selectionPanel();break;
+            case "conflicts":
+                box=conflictsPanel();break;
             case "history":
                 box = popupBody("History", "Your drawing and erasing actions");
-                menuAction(box, "Undo", !app.undo.isEmpty(), () -> app.history(false));
-                menuAction(box, "Redo", !app.redo.isEmpty(), () -> app.history(true));
+                boolean historyReady=!app.objectHistoryPending();
+                menuAction(box, "Undo", historyReady&&!app.undo.isEmpty(), () -> app.history(false));
+                menuAction(box, "Redo", historyReady&&!app.redo.isEmpty(), () -> app.history(true));
                 break;
             case "page":
                 box = popupBody(app.type.equals("pages") ? "Page " + (app.page + 1) : app.type.equals("infinite") ? "Infinite canvas" : "Single page", app.type.equals("pages") ? "Navigate your notebook" : "This document uses one continuous drawing surface.");
@@ -397,6 +454,9 @@ final class EditorUi {
                 box = popupBody("Documents", "Open a note or start a new one.");
                 menuAction(box, "Open or create document…", true, app::documentDialog);
                 menuAction(box, "Edit diagram objects…", !app.model.objects.isEmpty(), app::objectDialog);
+                menuAction(box, "Insert picture…", true, app::choosePicture);
+                menuAction(box, "Insert SVG artwork…", true, app::chooseSvgPicture);
+                menuAction(box, "Page templates…", true, () -> { dismissPopup(); showPopup(templatePanel(), tools.get("document"), false); });
                 TextView server = text("Server\n" + app.host, 11, MUTED, false);
                 server.setPadding(0, dp(18), 0, 0);
                 box.addView(server);
@@ -405,14 +465,269 @@ final class EditorUi {
         showPopup(box, anchor, false);
     }
 
-    private void changePage(int page) { synchronized (app.lock) { app.page = page; app.save(); app.update(); } }
+    private void changePage(int page) { app.deselect();synchronized (app.lock) { app.resetDrawingGesture();app.page = page; app.save(); app.update(); } }
+
+    private LinearLayout shapePanel(){
+        LinearLayout box=popupBody("Shapes","Choose a shape, then drag on the canvas.");
+        LinearLayout grid=column();
+        ArrayList<String> ids=new ArrayList<>(com.notemaker.core.ShapeCatalog.ids());ids.removeAll(Arrays.asList("circle","rectangle","rhombus","arrowLine","waveLine","regularHexagon"));
+        ids.remove("text");ids.remove("svg");ids.remove("image");
+        for(int i=0;i<ids.size();i++){
+            if(i%3==0){LinearLayout row=row();row.setGravity(Gravity.CENTER_VERTICAL);grid.addView(row,new LinearLayout.LayoutParams(-1,dp(64)));}
+            LinearLayout row=(LinearLayout)grid.getChildAt(grid.getChildCount()-1);
+            final String id=ids.get(i);LinearLayout item=column();item.setGravity(Gravity.CENTER);item.setPadding(dp(3),dp(3),dp(3),dp(3));item.setMinimumHeight(dp(60));item.setBackground(surface(Color.WHITE,LINE,7,1));
+            item.addView(new Icon(id),new LinearLayout.LayoutParams(dp(30),dp(30)));
+            String label=com.notemaker.core.ShapeCatalog.name(id);TextView name=text(label,10,INK,true);name.setGravity(Gravity.CENTER);name.setMaxLines(1);name.setEllipsize(TextUtils.TruncateAt.END);item.addView(name);
+            item.setContentDescription("Create "+label);item.setOnClickListener(v->{dismissPopup();app.setDrawingTool(id);});
+            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMargins(dp(2),dp(2),dp(2),dp(2));row.addView(item,p);
+        }
+        ScrollView shapeScroll=new ScrollView(app);shapeScroll.setVerticalScrollBarEnabled(false);shapeScroll.addView(grid);box.addView(shapeScroll,new LinearLayout.LayoutParams(-1,dp(208)));
+        box.addView(text("Outline color",11,MUTED,true));LinearLayout colors=row();int[] palette={Color.BLACK,0xffbd2424,0xff245dbd,0xff247d38,0xff7824aa,0xffd06a00};
+        for(int color:palette){TextView swatch=action("●",()->{app.color=color;if(app.objectFillColor!=Color.TRANSPARENT)app.objectFillColor=color;app.update();});swatch.setTextColor(color);swatch.setGravity(Gravity.CENTER);colors.addView(swatch,new LinearLayout.LayoutParams(0,dp(42),1));}box.addView(colors);
+        TextView widthLabel=text("Outline width  "+(int)app.width,12,INK,true);widthLabel.setPadding(0,dp(5),0,0);box.addView(widthLabel);
+        SeekBar width=new SeekBar(app);width.setMax(29);width.setProgress(Math.max(0,(int)app.width-1));width.setProgressTintList(ColorStateList.valueOf(INK));width.setThumbTintList(ColorStateList.valueOf(INK));width.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int v,boolean user){app.width=v+1;widthLabel.setText("Outline width  "+(v+1));}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});box.addView(width,new LinearLayout.LayoutParams(-1,dp(40)));
+        menuAction(box,app.objectFillColor==Color.TRANSPARENT?"Fill: off":"Fill: on",true,()->{app.objectFillColor=app.objectFillColor==Color.TRANSPARENT?app.color:Color.TRANSPARENT;dismissPopup();showPopup(shapePanel(),tools.get("shapes"),false);});
+        return box;
+    }
+
+    private LinearLayout presetPanel() {
+        LinearLayout box = popupBody("Pen presets", "Saved presets keep color and width together.");
+        android.content.SharedPreferences prefs = app.getSharedPreferences("settings", 0);
+        String[] defaults = {"Black · 2", "Black · 5", "Black · 9", "Red · 5", "Blue · 5"};
+        int[] colors = {Color.BLACK, Color.BLACK, Color.BLACK, 0xffbd2424, 0xff245dbd};
+        int[] widths = {2, 5, 9, 5, 5};
+        for (int i = 0; i < defaults.length; i++) {
+            final int color = colors[i], width = widths[i];
+            menuAction(box, defaults[i], true, () -> applyPenPreset(color, width, "pen"));
+        }
+        String saved = prefs.getString("penPresets", "");
+        if (!saved.isEmpty()) {
+            try {
+                org.json.JSONArray list = new org.json.JSONArray(saved);
+                for (int i = 0; i < list.length(); i++) {
+                    org.json.JSONObject preset = list.optJSONObject(i);
+                    if (preset == null) continue;
+                    final int color = preset.optInt("color", Color.BLACK), width = preset.optInt("width", 5);final String brush=preset.optString("brush","pen");
+                    menuAction(box, preset.optString("name", "Custom") + " · " + width, true, () -> applyPenPreset(color, width, brush));
+                }
+            } catch (Exception ignored) { }
+        }
+        menuAction(box, "Save current as preset…", true, () -> savePenPreset());
+        return box;
+    }
+
+    private LinearLayout brushPanel() {
+        LinearLayout box=popupBody("Brush types","Choose a monochrome brush profile.");
+        for(String brush:new String[]{"oily","fountain","charcoal","neoBrush","latinCalligraphy","asiaCalligraphy","square"}){
+            String label=brush.replaceAll("([a-z])([A-Z])","$1 $2");
+            menuAction(box,label,true,()->{app.brush=brush;app.update();dismissPopup();});
+        }
+        return box;
+    }
+
+    private LinearLayout preferencesPanel(){
+        LinearLayout box=popupBody("Toolbar preferences","Keep controls readable on the monochrome display.");
+        CheckBox labels=new CheckBox(app);labels.setText("Show tool labels");labels.setTextColor(INK);labels.setChecked(showToolLabels);box.addView(labels);
+        labels.setOnCheckedChangeListener((button,checked)->{showToolLabels=checked;app.getSharedPreferences("settings",0).edit().putBoolean("showToolLabels",checked).apply();for(Tool item:tools.values())item.label.setVisibility(checked?View.VISIBLE:View.GONE);});
+        menuAction(box,expanded?"Collapse layer tray":"Expand layer tray",true,()->{expanded=!expanded;app.getSharedPreferences("settings",0).edit().putBoolean("layerTrayExpanded",expanded).apply();buildTray();});
+        menuAction(box,"Save current pen as preset…",true,()->savePenPreset());
+        return box;
+    }
+
+    private LinearLayout fillPanel() {
+        LinearLayout box = popupBody("Enclosed fill", "Choose a fill color, then fill a closed object or ink path.");
+        int[] palette = {Color.BLACK, 0xffbd2424, 0xff245dbd, 0xff247d38, 0xff7824aa, 0xffd06a00, 0xffdddddd, 0xffffe59a};
+        LinearLayout colors = row();
+        for (int color : palette) {
+            TextView swatch = action("●", () -> { app.objectFillColor = color; app.color = color; app.update(); });
+            swatch.setTextColor(color); swatch.setGravity(Gravity.CENTER);
+            colors.addView(swatch, new LinearLayout.LayoutParams(0, dp(42), 1));
+        }
+        box.addView(colors);
+        menuAction(box,"Tap enclosed area to fill",true,()->{app.fillTapMode=true;app.selecting=false;app.objectFillColor=app.objectFillColor==Color.TRANSPARENT?app.color:app.objectFillColor;dismissPopup();app.update();Toast.makeText(app,"Tap inside a closed area",Toast.LENGTH_SHORT).show();});
+        menuAction(box, "Apply to a shape…", app.objectFillColor != Color.TRANSPARENT && !app.model.objects.isEmpty(), () -> {
+            dismissPopup();
+            LinearLayout targets = popupBody("Fill a shape", "Choose a native object.");
+            for (Map.Entry<String, Map<String,Object>> entry : app.model.objects.entrySet()) {
+                if (Boolean.FALSE.equals(app.model.objectActive.get(entry.getKey()))) continue;
+                String id=entry.getKey();Map<String,Object> object=entry.getValue();
+                menuAction(targets, com.notemaker.core.ShapeCatalog.name(String.valueOf(object.get("shape"))) + " · " + id.substring(0,Math.min(8,id.length())), true, () -> app.fillEntity("object",id,app.objectFillColor));
+            }
+            showPopup(targets, tools.get("fill"), false);
+        });
+        menuAction(box, "Apply to a closed ink path…", app.objectFillColor != Color.TRANSPARENT && !app.strokes.isEmpty(), () -> {
+            dismissPopup();
+            LinearLayout targets = popupBody("Fill a path", "Open paths are rejected by the shared validator.");
+            for (Map.Entry<String, org.json.JSONObject> entry : app.strokes.entrySet()) {
+                if (Boolean.FALSE.equals(app.active.get(entry.getKey())) || !app.selected.equals(entry.getValue().optString("layer")) || entry.getValue().optInt("page") != app.page) continue;
+                String id=entry.getKey();
+                menuAction(targets, "Ink path · " + id.substring(0,Math.min(8,id.length())), true, () -> app.fillEntity("stroke",id,app.objectFillColor));
+            }
+            showPopup(targets, tools.get("fill"), false);
+        });
+        return box;
+    }
+
+    private LinearLayout eraserPanel() {
+        LinearLayout box=popupBody("Eraser", "Erase ink on the selected layer. Each gesture saves as one action.");
+        for(String mode:new String[]{"stroke","partial","area","page"}){
+            String label=mode.equals("page")?"Erase page":Character.toUpperCase(mode.charAt(0))+mode.substring(1)+" erase";
+            menuAction(box,label, true,()->{if(mode.equals("page")){dismissPopup();app.applyErase("page",app.selected,app.page,new org.json.JSONArray(),app.eraserRadius);}else{app.eraserMode=mode;app.update();dismissPopup();showPopup(eraserPanel(),tools.get("eraser"),false);}});
+        }
+        CheckBox scribble=new CheckBox(app);scribble.setText("Scribble to erase");scribble.setChecked(app.scribbleToErase);scribble.setTextColor(INK);scribble.setOnCheckedChangeListener((button,checked)->{app.scribbleToErase=checked;app.getSharedPreferences("settings",0).edit().putBoolean("scribbleToErase",checked).apply();});box.addView(scribble);
+        TextView radiusLabel=text("Eraser size  "+(int)app.eraserRadius,12,INK,true);radiusLabel.setPadding(0,dp(6),0,0);box.addView(radiusLabel);
+        SeekBar radius=new SeekBar(app);radius.setMax(79);radius.setProgress(Math.max(0,(int)app.eraserRadius-1));radius.setProgressTintList(ColorStateList.valueOf(INK));radius.setThumbTintList(ColorStateList.valueOf(INK));radius.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int v,boolean user){app.eraserRadius=v+1;radiusLabel.setText("Eraser size  "+(v+1));}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}});box.addView(radius,new LinearLayout.LayoutParams(-1,dp(42)));
+        menuAction(box,"Erase objects…",!app.model.objects.isEmpty(),app::objectDialog);
+        return box;
+    }
+
+    private LinearLayout selectionPanel(){
+        LinearLayout box=popupBody("Selection","Selected objects are locked while you transform them.");
+        TextView state=text(app.selectedEntities.size()+" selected · "+app.selectionSkipped+" skipped as locked",12,MUTED,false);state.setPadding(0,dp(4),0,dp(8));box.addView(state);
+        CheckBox lasso=new CheckBox(app);lasso.setText("Freeform lasso (off: rectangle)");lasso.setTextColor(INK);lasso.setChecked(app.freeformLasso);box.addView(lasso);lasso.setOnCheckedChangeListener((button,checked)->{app.freeformLasso=checked;app.getSharedPreferences("settings",0).edit().putBoolean("freeformLasso",checked).apply();app.update();});
+        menuAction(box,"Choose objects and strokes…",true,()->chooseEntities());
+        menuAction(box,"Select all unlocked on this page",true,app::selectAllVisible);
+        menuAction(box,"Tap an item or draw a selection boundary",true,()->{});
+        menuAction(box,"Preview scale up",!app.selectedEntities.isEmpty(),()->app.previewSelection(1.1,0,0));
+        menuAction(box,"Preview scale down",!app.selectedEntities.isEmpty(),()->app.previewSelection(.9,0,0));
+        menuAction(box,"Preview rotate clockwise",!app.selectedEntities.isEmpty(),()->app.previewTransform(com.notemaker.core.Json.object("scale",1,"dx",0,"dy",0,"rotation",15)));
+        menuAction(box,"Preview flip horizontal",!app.selectedEntities.isEmpty(),()->app.previewTransform(com.notemaker.core.Json.object("scale",1,"dx",0,"dy",0,"flipX",true)));
+        menuAction(box,"Preview flip vertical",!app.selectedEntities.isEmpty(),()->app.previewTransform(com.notemaker.core.Json.object("scale",1,"dx",0,"dy",0,"flipY",true)));
+        menuAction(box,"Preview move right",!app.selectedEntities.isEmpty(),()->app.previewSelection(1,24,0));
+        menuAction(box,"Preview move down",!app.selectedEntities.isEmpty(),()->app.previewSelection(1,0,24));
+        menuAction(box,"Commit transform",app.pendingTransform!=null,app::commitTransformPreview);
+        menuAction(box,"Cancel preview",app.pendingTransform!=null,app::cancelTransformPreview);
+        menuAction(box,"Duplicate selection",!app.selectedEntities.isEmpty(),app::duplicateSelection);
+        menuAction(box,"Delete selection",!app.selectedEntities.isEmpty(),app::deleteSelection);
+        menuAction(box,"Cut selection",!app.selectedEntities.isEmpty(),app::cutSelection);
+        menuAction(box,"Copy selection",!app.selectedEntities.isEmpty(),app::copySelection);
+        menuAction(box,"Paste copied selection",!com.notemaker.core.Json.list(app.selectionClipboard.getOrDefault("entities",java.util.Collections.emptyList())).isEmpty(),app::pasteSelection);
+        menuAction(box,"Deselect and release locks",app.selectionSession!=null,app::deselect);
+        return box;
+    }
+
+    private LinearLayout conflictsPanel(){
+        LinearLayout box=popupBody("Sync conflicts","Both offline versions are preserved until you choose.");
+        for(Object raw:app.conflicts){Map<String,Object> conflict=com.notemaker.core.Json.map(raw);String id=String.valueOf(conflict.get("id"));String title=conflict.getOrDefault("kind","Edit")+" · "+conflict.getOrDefault("entity",id);
+            menuAction(box,String.valueOf(title),true,()->showConflict(id,conflict));
+        }
+        return box;
+    }
+
+    private void showConflict(String id,Map<String,Object> conflict){
+        dismissPopup();LinearLayout box=popupBody("Compare versions","Choose either version or keep both. Actor details appear when recorded.");
+        LinearLayout columns=new LinearLayout(app);columns.setOrientation(LinearLayout.HORIZONTAL);
+        String actorA=String.valueOf(conflict.getOrDefault("localActor","actor not recorded")),actorB=String.valueOf(conflict.getOrDefault("remoteActor","actor not recorded"));
+        columns.addView(conflictVersion("Version A",actorA,conflict.get("local")),new LinearLayout.LayoutParams(0,dp(190),1));
+        columns.addView(conflictVersion("Version B",actorB,conflict.get("remote")),new LinearLayout.LayoutParams(0,dp(190),1));box.addView(columns);
+        TextView details=text("Version A details\n"+versionSummary(conflict.get("local"))+"\nVersion B details\n"+versionSummary(conflict.get("remote")),11,MUTED,false);details.setTextIsSelectable(true);box.addView(details);
+        menuAction(box,"Use Version A",true,()->app.resolveConflict(id,"local"));
+        menuAction(box,"Use Version B",true,()->app.resolveConflict(id,"remote"));
+        menuAction(box,"Keep both versions",true,()->app.resolveConflict(id,"both"));
+        showPopup(box,connection,false);
+    }
+
+    private LinearLayout conflictVersion(String title,String actor,Object raw){
+        LinearLayout column=new LinearLayout(app);column.setOrientation(LinearLayout.VERTICAL);column.setPadding(dp(4),dp(4),dp(4),dp(4));
+        TextView heading=text(title+" · "+actor,12,INK,true);column.addView(heading);ConflictPreview preview=new ConflictPreview(raw);column.addView(preview,new LinearLayout.LayoutParams(-1,dp(120)));
+        if(raw instanceof Map){Map<String,Object> value=com.notemaker.core.Json.map(raw);TextView label=text(String.valueOf(value.getOrDefault("shape",value.get("kind")))+(value.containsKey("text")?" · "+value.get("text"):""),11,MUTED,false);column.addView(label);}
+        else column.addView(text("Deleted or unavailable",11,MUTED,false));
+        return column;
+    }
+
+    private final class ConflictPreview extends View{
+        final Object raw;final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        ConflictPreview(Object raw){super(app);this.raw=raw;setBackgroundColor(0xffffffff);setContentDescription("Conflict version preview");}
+        @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);if(!(raw instanceof Map)){canvas.drawText("No version",dp(8),dp(24),paint);return;}Map<String,Object> value=com.notemaker.core.Json.map(raw);try{
+            double left=0,top=0,right=100,bottom=100;
+            if(value.containsKey("points")){List<Object> points=com.notemaker.core.Json.list(value.get("points"));if(points.isEmpty())return;left=top=Double.POSITIVE_INFINITY;right=bottom=Double.NEGATIVE_INFINITY;for(Object item:points){List<Object> point=com.notemaker.core.Json.list(item);left=Math.min(left,((Number)point.get(0)).doubleValue());right=Math.max(right,((Number)point.get(0)).doubleValue());top=Math.min(top,((Number)point.get(1)).doubleValue());bottom=Math.max(bottom,((Number)point.get(1)).doubleValue());}}
+            else if(value.containsKey("x")){left=((Number)value.get("x")).doubleValue();top=((Number)value.get("y")).doubleValue();right=left+((Number)value.get("w")).doubleValue();bottom=top+((Number)value.get("h")).doubleValue();}
+            double width=Math.max(24,right-left),height=Math.max(24,bottom-top),scale=Math.min((getWidth()-dp(16))/width,(getHeight()-dp(16))/height);scale=Math.max(.01,Math.min(4,scale));canvas.save();canvas.translate((float)((getWidth()-width*scale)/2-left*scale),(float)((getHeight()-height*scale)/2-top*scale));canvas.scale((float)scale,(float)scale);
+            if(value.containsKey("points")){int color=((Number)value.getOrDefault("color",Color.BLACK)).intValue();paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)((Number)value.getOrDefault("width",4)).doubleValue());paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);List<Object> points=com.notemaker.core.Json.list(value.get("points"));Path path=new Path();for(int i=0;i<points.size();i++){List<Object> point=com.notemaker.core.Json.list(points.get(i));if(i==0)path.moveTo(((Number)point.get(0)).floatValue(),((Number)point.get(1)).floatValue());else path.lineTo(((Number)point.get(0)).floatValue(),((Number)point.get(1)).floatValue());}canvas.drawPath(path,paint);paint.setStyle(Paint.Style.FILL);}
+            else com.notemaker.core.Render.drawObject(app.model,value,new com.notemaker.cli.Png(canvas));canvas.restore();
+        }catch(Exception ignored){}}
+    }
+
+    private String pretty(Object value){try{return value==null?"(empty)":new org.json.JSONObject(com.notemaker.core.Json.write(value)).toString(2);}catch(Exception error){return String.valueOf(value);}}
+
+    private String versionSummary(Object raw){
+        if(!(raw instanceof Map))return pretty(raw);Map<String,Object> version=com.notemaker.core.Json.map(raw);StringBuilder out=new StringBuilder();
+        for(String key:new String[]{"kind","shape","text","fontFamily","alignment","bold","italic","underline","x","y","w","h","fontSize","color","fill","brush","width","active"})if(version.containsKey(key))out.append(key).append(": ").append(version.get(key)).append('\n');
+        Object points=version.get("points");if(points instanceof java.util.List)out.append("points: ").append(((java.util.List<?>)points).size()).append('\n');
+        return out.toString().trim();
+    }
+
+    private void chooseEntities(){
+        ArrayList<Map<String,Object>> entities=new ArrayList<>();ArrayList<String> labels=new ArrayList<>();
+        synchronized(app.lock){
+            for(Map.Entry<String,Map<String,Object>> entry:app.model.objects.entrySet()){
+                Map<String,Object> object=entry.getValue();if(((Number)object.get("page")).intValue()!=app.page||Boolean.FALSE.equals(app.model.objectActive.get(entry.getKey()))||app.canvas==null||!app.canvas.visible(String.valueOf(object.get("layer"))))continue;
+                String leaseActor=leaseActor("object",entry.getKey());String label=com.notemaker.core.ShapeCatalog.name(String.valueOf(object.get("shape")))+" · "+entry.getKey().substring(0,Math.min(8,entry.getKey().length()))+(leaseActor==null?"":" · Locked by "+leaseActor);entities.add(com.notemaker.core.Json.object("kind","object","id",entry.getKey()));labels.add(label);
+            }
+            for(Map.Entry<String,org.json.JSONObject> entry:app.strokes.entrySet()){
+                org.json.JSONObject stroke=entry.getValue();if(stroke.optInt("page")!=app.page||Boolean.FALSE.equals(app.active.get(entry.getKey()))||app.canvas==null||!app.canvas.visible(stroke.optString("layer")))continue;
+                String leaseActor=leaseActor("stroke",entry.getKey());entities.add(com.notemaker.core.Json.object("kind","stroke","id",entry.getKey()));labels.add("Ink stroke · "+entry.getKey().substring(0,Math.min(8,entry.getKey().length()))+(leaseActor==null?"":" · Locked by "+leaseActor));
+            }
+        }
+        if(labels.isEmpty()){Toast.makeText(app,"There are no objects or strokes on this page",Toast.LENGTH_SHORT).show();return;}
+        boolean[] checked=new boolean[labels.size()];for(int i=0;i<entities.size();i++)for(Map<String,Object> selected:app.selectedEntities)if(entities.get(i).equals(selected))checked[i]=true;
+        new AlertDialog.Builder(app).setTitle("Select entities").setMultiChoiceItems(labels.toArray(new String[0]),checked,(dialog,index,value)->checked[index]=value)
+                .setNegativeButton("Cancel",null).setPositiveButton("Select",(dialog,which)->{ArrayList<Map<String,Object>> chosen=new ArrayList<>();for(int i=0;i<checked.length;i++)if(checked[i])chosen.add(entities.get(i));if(app.selectionSession!=null){app.deselect();app.selecting=true;}if(chosen.isEmpty())app.selecting=false;else app.startSelection(chosen);}).show();
+    }
+
+    private String leaseActor(String kind,String id){Object raw=app.leases.get(app.page+":"+kind+":"+id);return raw instanceof Map?String.valueOf(com.notemaker.core.Json.map(raw).getOrDefault("actor","another session")):null;}
+
+    private LinearLayout templatePanel() {
+        LinearLayout box = popupBody("Page templates", "Adds a page-sized background guide behind your ink.");
+        menuAction(box, "Ruled", true, () -> app.insertTemplate("ruled"));
+        menuAction(box, "Graph", true, () -> app.insertTemplate("grid"));
+        menuAction(box, "Dot grid", true, () -> app.insertTemplate("dots"));
+        menuAction(box, "Planner · checklist", true, () -> app.insertTemplate("planner"));
+        return box;
+    }
+
+    private void applyPenPreset(int color, int width, String brush) {
+        app.color = color;
+        app.width = Math.max(1, Math.min(30, width));
+        app.brush = brush;
+        app.update();
+        dismissPopup();
+    }
+
+    private void savePenPreset() {
+        EditText name = new EditText(app);
+        name.setSingleLine(true);
+        name.setHint("Preset name");
+        LinearLayout form = column();
+        form.setPadding(dp(24), dp(8), dp(24), dp(8));
+        form.addView(name);
+        new AlertDialog.Builder(app).setTitle("Save pen preset").setView(form)
+                .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
+                    String label = name.getText().toString().trim();
+                    if (label.isEmpty()) label = "Preset " + (app.getSharedPreferences("settings", 0).getString("penPresets", "").length() + 1);
+                    android.content.SharedPreferences prefs = app.getSharedPreferences("settings", 0);
+                    org.json.JSONArray list;
+                    try { list = new org.json.JSONArray(prefs.getString("penPresets", "")); }
+                    catch (Exception e) { list = new org.json.JSONArray(); }
+                    list.put(MainActivity.obj("name", label, "color", app.color, "width", (int) app.width, "brush", app.brush));
+                    prefs.edit().putString("penPresets", list.toString()).apply();
+                    dismissPopup();
+                }).show();
+    }
 
     void dismissPopup() { if (popup != null) { popup.dismiss(); popup = null; } }
+
+    void showConflictPanel() { dismissPopup(); if (connection != null && !app.conflicts.isEmpty()) showPopup(conflictsPanel(), connection, false); }
+    void showSelectionPanel() { dismissPopup(); if (tools.get("select") != null) showPopup(selectionPanel(), tools.get("select"), false); }
     private void showPopup(LinearLayout body, View anchor, boolean fromRight) {
+        if(root.getWidth()<=0||!root.isAttachedToWindow()){root.post(()->showPopup(body,anchor,fromRight));return;}
         dismissPopup();
         int popupWidth = Math.min(dp(300), root.getWidth() - dp(32));
         body.measure(View.MeasureSpec.makeMeasureSpec(popupWidth, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        popup = new PopupWindow(body, popupWidth, -2, true);
+        int naturalHeight=body.getMeasuredHeight(),maxHeight=Math.max(dp(160),root.getHeight()-root.getPaddingTop()-root.getPaddingBottom()-dp(32)),popupHeight=Math.min(naturalHeight,maxHeight);
+        View content=body;
+        if(naturalHeight>maxHeight){ScrollView scroll=new ScrollView(app);scroll.setFillViewport(false);scroll.setVerticalScrollBarEnabled(true);scroll.addView(body,new ScrollView.LayoutParams(-1,-2));content=scroll;}
+        popup = new PopupWindow(content, popupWidth, popupHeight, true);
         popup.setBackgroundDrawable(surface(Color.WHITE, LINE, 14, 1));
         popup.setOutsideTouchable(true);
         popup.setElevation(dp(4));
@@ -421,7 +736,7 @@ final class EditorUi {
         int[] rootPosition = new int[2]; root.getLocationOnScreen(rootPosition);
         int x = fromRight ? position[0] - popupWidth - dp(12) : position[0] + anchor.getWidth() + dp(18);
         x = Math.max(dp(12), Math.min(x, root.getWidth() - popupWidth - dp(12)));
-        int y = Math.max(rootPosition[1] + root.getPaddingTop() + dp(8), Math.min(position[1], rootPosition[1] + root.getHeight() - root.getPaddingBottom() - body.getMeasuredHeight() - dp(12)));
+        int y = Math.max(rootPosition[1] + root.getPaddingTop() + dp(8), Math.min(position[1], rootPosition[1] + root.getHeight() - root.getPaddingBottom() - popupHeight - dp(12)));
         popup.showAtLocation(root, Gravity.TOP | Gravity.LEFT, x, y);
     }
 
@@ -443,6 +758,7 @@ final class EditorUi {
             icon = new Icon(kind);
             label = text(name, 10, INK, true);
             label.setGravity(Gravity.CENTER);
+            label.setVisibility(showToolLabels?View.VISIBLE:View.GONE);
             addView(icon, new LinearLayout.LayoutParams(dp(32), dp(32)));
             addView(label);
             setBackground(surface(PAPER, PAPER, 10, 0));
@@ -509,6 +825,37 @@ final class EditorUi {
                 case "move": path(canvas, 12, 2, 12, 22); path(canvas, 2, 12, 22, 12); path(canvas, 8, 6, 12, 2, 16, 6); path(canvas, 8, 18, 12, 22, 16, 18); path(canvas, 6, 8, 2, 12, 6, 16); path(canvas, 18, 8, 22, 12, 18, 16); break;
                 case "history": canvas.drawArc(new RectF(4, 4, 21, 21), 210, 290, false, paint); path(canvas, 3, 3, 3, 9, 9, 9); path(canvas, 12, 7, 12, 13, 16, 15); break;
                 case "document": case "page": path(canvas, 5, 2, 15, 2, 20, 7, 20, 22, 5, 22, 5, 2); path(canvas, 15, 2, 15, 7, 20, 7); path(canvas, 9, 12, 16, 12); path(canvas, 9, 16, 16, 16); break;
+                case "text": path(canvas, 5, 5, 19, 5);path(canvas,12,5,12,20);path(canvas,8,20,16,20);break;
+                case "select": paint.setPathEffect(new DashPathEffect(new float[]{3,2},0));canvas.drawRect(4,4,20,20,paint);paint.setPathEffect(null);path(canvas,12,4,12,20);path(canvas,4,12,20,12);break;
+                case "fill": { Path fill=new Path();fill.moveTo(12,3);fill.cubicTo(9,8,4,12,4,16);fill.cubicTo(4,22,20,22,20,16);fill.cubicTo(20,12,15,8,12,3);canvas.drawPath(fill,paint);break; }
+                case "shapes":canvas.drawRect(3,4,13,14,paint);canvas.drawOval(11,10,21,20,paint);path(canvas,4,21,10,13,16,21,4,21);break;
+                case "rect":canvas.drawRect(4,5,20,19,paint);break;
+                case "ellipse":canvas.drawOval(4,5,20,19,paint);break;
+                case "circle":canvas.drawCircle(12,12,8,paint);break;
+                case "rectangle":canvas.drawRect(4,5,20,19,paint);break;
+                case "line":path(canvas,4,19,20,5);break;
+                case "arrow":path(canvas,4,19,19,5,19,12);path(canvas,19,5,12,5);break;
+                case "triangle":path(canvas,12,4,21,20,3,20,12,4);break;
+                case "triangle45":path(canvas,4,20,20,20,20,4,4,20);path(canvas,15,20,20,15);break;
+                case "triangle60":path(canvas,12,3,21,20,3,20,12,3);break;
+                case "triangle90":path(canvas,4,3,4,20,21,20,4,3);path(canvas,4,16,8,16,8,20);break;
+                case "diamond":path(canvas,12,3,21,12,12,21,3,12,12,3);break;
+                case "rhombus":path(canvas,12,3,21,12,12,21,3,12,12,3);break;
+                case "pentagon":poly(canvas,5,12);break;
+                case "hexagon":poly(canvas,6,12);break;
+                case "regularHexagon":poly(canvas,6,12);break;
+                case "regularPolygon":poly(canvas,8,11);break;
+                case "star":poly(canvas,10,12);break;
+                case "cube":path(canvas,4,8,12,3,20,8,12,13,4,8);path(canvas,4,8,4,18,12,22,12,13);path(canvas,20,8,20,18,12,22);break;
+                case "pyramid":path(canvas,12,3,3,20,21,20,12,3);path(canvas,12,3,12,20);path(canvas,3,20,15,12);path(canvas,21,20,9,12);break;
+                case "cylinder":canvas.drawOval(5,3,19,9,paint);path(canvas,5,6,5,18);path(canvas,19,6,19,18);canvas.drawArc(new RectF(5,15,19,21),0,180,false,paint);break;
+                case "cone":path(canvas,12,3,4,19);path(canvas,12,3,20,19);canvas.drawOval(4,15,20,21,paint);break;
+                case "sphere":canvas.drawOval(4,4,20,20,paint);path(canvas,4,13,9,10,15,10,20,13);break;
+                case "arrowLine":path(canvas,4,19,19,5,19,12);path(canvas,19,5,12,5);break;
+                case "trapezoid":path(canvas,7,4,17,4,21,20,3,20,7,4);break;
+                case "wave": case "waveLine": { Path wave=new Path();wave.moveTo(3,15);wave.cubicTo(7,2,11,2,13,13);wave.cubicTo(15,24,19,21,21,8);canvas.drawPath(wave,paint);break; }
+                case "curve": { Path curve=new Path();curve.moveTo(4,20);curve.cubicTo(3,3,20,3,20,20);canvas.drawPath(curve,paint);break; }
+                case "polyline": path(canvas,3,18,8,6,14,17,20,5);break;
                 case "eye": case "hidden":
                     Path eye = new Path(); eye.moveTo(2, 12); eye.quadTo(12, 0, 22, 12); eye.quadTo(12, 24, 2, 12); canvas.drawPath(eye, paint); canvas.drawCircle(12, 12, 3, paint);
                     if (kind.equals("hidden")) path(canvas, 3, 3, 21, 21); break;
@@ -517,6 +864,7 @@ final class EditorUi {
                 case "expand": path(canvas, 16, 5, 9, 12, 16, 19); path(canvas, 4, 5, 4, 19); break;
                 case "plus": path(canvas, 12, 4, 12, 20); path(canvas, 4, 12, 20, 12); break;
                 case "more": paint.setStyle(Paint.Style.FILL); for (int x = 5; x <= 19; x += 7) canvas.drawCircle(x, 12, 1.7f, paint); break;
+                default: poly(canvas,6,11); break;
             }
             canvas.restore();
         }
@@ -525,5 +873,6 @@ final class EditorUi {
             for (int i = 2; i < coordinates.length; i += 2) path.lineTo(coordinates[i], coordinates[i + 1]);
             canvas.drawPath(path, paint);
         }
+        void poly(Canvas canvas,int count,float radius){Path path=new Path();for(int i=0;i<count;i++){float r=kind.equals("star")&&i%2==1?radius*.45f:radius;double a=-Math.PI/2+i*Math.PI*2/count;float x=12+(float)Math.cos(a)*r,y=12+(float)Math.sin(a)*r;if(i==0)path.moveTo(x,y);else path.lineTo(x,y);}path.close();canvas.drawPath(path,paint);}
     }
 }

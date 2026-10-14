@@ -87,8 +87,9 @@ membership to determine what is currently visible. Export ignores UI-local hidin
 preferences, but respects shared object/stroke/layer active state. Default export
 clips infinite canvases to the default viewport; request another viewport as needed.
 PNG is capped at 16 million pixels, with each dimension at most 8192.
-Text is plain multiline sans-serif, with explicit line breaks and no automatic
-wrapping. Fonts/antialiasing vary across Android, desktop, and browser; geometry
+Text supports multiline content, font family, size, bold, italic, underline and
+alignment, with explicit line breaks and no automatic wrapping.
+Fonts/antialiasing vary across Android, desktop, and browser; geometry
 and replay rules are shared, but raster bytes are not promised to match.
 The Android child uses `/system/fonts/Roboto-Regular.ttf`; set `NOTEMAKER_FONT`
 in its environment for another readable font/character coverage. Its isolated font
@@ -180,10 +181,10 @@ Object fields:
 | Field | Meaning / default |
 | --- | --- |
 | `object` | Stable ID, generated UUID if omitted on creation. |
-| `shape` | Required: `rect`, `ellipse`, `text`, `arrow`, or `svg`. |
+| `shape` | Required: `rect`, `ellipse`, `text`, `arrow`, `line`, `triangle`, `diamond`, `pentagon`, `hexagon`, `star`, or `svg`. |
 | `svg` | Required for SVG objects: embedded static SVG source. See the import profile above. |
 | `layer`, `page` | `base`, `0` (diagram chooses its new layer). |
-| `x`, `y`, `w`, `h` | Logical coordinates; defaults `0,0,160,80` (SVG size comes from source). All non-arrow dimensions must be positive. |
+| `x`, `y`, `w`, `h` | Logical coordinates; defaults `0,0,160,80` (SVG size comes from source). Dimensions must be positive except for lines and arrows, whose endpoint is `(x+w,y+h)`. |
 | `color`, `width` | Signed ARGB color, default -16777216 (black); width 1–100, default 3. |
 | `fill` | Optional signed ARGB fill; omitted means transparent. |
 | `text`, `fontSize` | Plain label, default empty; font size 1–500, default 24. |
@@ -191,6 +192,23 @@ Object fields:
 
 SVG styling and text come from the embedded source; the object's generic
 `color`, `width`, `fill`, `text`, and `fontSize` do not override it.
+
+`shape list` returns `{"shapes":[{"id":"rect","name":"Rectangle"},...]}`.
+This is a read-only catalog available directly or through a selected proxy;
+it does not add document actions or history. For example, save the following
+JSON as `triangle.json`, then run the command inside `nix-shell`:
+
+```json
+{"object":"triangle-1","shape":"triangle","x":100,"y":100,"w":160,"h":120,"color":-16777216,"width":4,"fill":-3355444}
+```
+
+```sh
+apps/cli/notemaker --proxy-file .test-artifacts/my-replica/proxy.json --document demo object put triangle.json
+```
+
+Native polygons preserve their shape ID and editable bounds; shared rendering
+derives their geometry. Fill is ignored for lines and arrows. Upgrade all
+clients, proxies and the main server before synchronizing these shape IDs.
 
 Pages are numbered 0–10000 in the protocol/CLI; the app shows page numbers starting
 at 1. Fixed and infinite documents display page 0. Coordinates are document units,
@@ -286,3 +304,43 @@ Direct `--state` readers can read while the proxy runs or after it stops. They
 reconstruct their model once per process and observe complete journal records.
 Preserve each baseline and journal together for backup under the document lock
 or with writers stopped. Never run older standalone writers against this state.
+
+## Drawing tools and collaboration
+
+Use the same `--proxy-file`, `--document` and `--actor` for each editing session.
+All commands below return JSON. A failed validation or locked dependency leaves
+the entire content action and its undo history unchanged.
+
+| Command | Input or behavior |
+| --- | --- |
+| `shape list` | Shape IDs/names, including geometric families and cube, cylinder, cone, sphere and pyramid. |
+| `object put -` / `object update ID -` | Native shape/text snapshots or patches. Text supports `bold`, `italic`, `underline`, `fontFamily` (`sans-serif`, `serif`, `monospace`), and `alignment` (`left`, `center`, `right`). |
+| `stroke put -` | Existing stroke schema plus `brush`: `pen`, `pencil`, `marker`, `brush`, `oily`, `fountain`, `charcoal`, `neoBrush`, `latinCalligraphy`, `asiaCalligraphy`, `square`. |
+| `erase -` | `{mode, page, layer?, points?, radius?}`. Modes: `stroke`, `partial`, `area`, `page`. Points are `[x,y]`; area uses their bounding rectangle. Page mode omits points. Partial erasing splits ink into surviving strokes in one undoable action. |
+| `fill -` | `{object, color}` for a native closed shape, `{stroke, color}` for a closed ink outline, or `{x,y,page,layer,color}` for a region enclosed by several native ink/shape boundaries. Open regions are rejected. |
+| `image add FILE [PLACEMENT.json]` | Embedded PNG/JPEG; maximum 2 MiB decoded, 8192 pixels per edge, 32 megapixels. Placement uses the SVG placement fields. No external image URLs. |
+| `template add -` | `{template,page?,x?,y?,w?,h?,spacing?,color?,background?}`. Templates: `blank`, `ruled`, `grid`, `dots`, `planner`. Defaults to a reusable page background layer below drawing layers; `background:false` inserts into the supplied layer. |
+| `layer duplicate ID` | Copy layer and active contents atomically, remapping internal connector references. |
+| `layer merge SOURCE TARGET` | Move source contents into target and archive source; base cannot be the source. |
+| `layer reorder ID INDEX` | Zero-based drawing order. |
+| `layer hide ID` / `layer show ID` | Reversible archive/restore; the base layer remains available. |
+| `selection select -` | `{session?,page,entities:[{kind:"object" or "stroke",id}]}`. Returns `session`, `selected`, `skipped` and lease expiry. Locked entities are skipped explicitly. |
+| `selection heartbeat SESSION` | Renew the 15-second selection lease. |
+| `selection deselect SESSION` / `selection disconnect` | Release one session / all selections for this actor. |
+| `selection duplicate SESSION` / `selection delete SESSION` | Atomic operations on the leased selection. |
+| `selection copy SESSION` / `selection cut SESSION` | Copy snapshots, or return snapshots and delete the selection in one action. Internal connector references are retained; external attachments are materialized. |
+| `selection paste -` | `{entities:[snapshots],layer?,page?,dx?,dy?}`. Paste up to 100 entities with new IDs and remapped connectors in one action. The local `settings.clipboard` stores the payload for reuse. |
+| `transform preview -` / `transform commit -` | `{session,entities:[{kind,id,page}],transform:{dx?,dy?,scale?,rotation?,flipX?,flipY?,pivotX?,pivotY?}}`. Rotation is in degrees; scale is positive. Default pivot is the selection center. Text scales with the selection. |
+| `transform cancel SESSION` | Discard the transient preview without changing content. |
+| `conflicts` | Both snapshots, visibility, actor names and version IDs for unresolved concurrent edits. |
+| `conflict resolve ID local\|remote\|both` | Choose Version A, Version B or retain both; resolution is atomic and undoable. These names describe replay branches, not necessarily the calling device. |
+
+Renew a selection before it expires. Preview updates are transient and do not
+create action history or journal entries. Commit the completed gesture once;
+cancellation, lost leases and expiry discard the preview. Undo and bulk edits
+that affect another session's locked content are blocked as a whole.
+
+Fill produces an editable SVG object. Tap fill rasterizes native stroke and
+geometric boundaries on a bounded grid before generating the SVG region; it
+does not perform bitmap flood-fill inside imported pictures or arbitrary SVGs.
+Brush profiles are original renderings rather than copied BOOX assets.

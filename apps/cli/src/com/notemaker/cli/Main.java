@@ -25,11 +25,19 @@ public final class Main {
         + "document create [fixed|pages|infinite] | document list\ninspect | status | log\n"
         + "diagram add FILE|-         Atomic new layer and editable diagram objects\n"
         + "svg add FILE.svg|- [PLACEMENT.json]   Place SVG; optional {x,y,w,h,layer,page,object}\n"
+        + "shape list                   List supported editable shapes\n"
         + "layer put FILE|-           {layer,name,force} (create or update)\nlayer hide ID | layer show ID\n"
+        + "layer duplicate ID | layer merge SOURCE TARGET | layer reorder ID INDEX\n"
         + "object put FILE|-          Create/replace an editable object\n"
         + "object update ID FILE|-    Patch geometry, label or styling\n"
         + "object hide ID | object show ID\n"
+        + "selection select FILE|- | selection heartbeat SESSION | selection deselect SESSION\n"
+        + "selection copy SESSION | selection cut SESSION | selection paste FILE|-\n"
+        + "selection duplicate SESSION | selection delete SESSION | selection disconnect\n"
+        + "transform preview FILE|- | transform commit FILE|- | transform cancel SESSION\n"
+        + "conflicts | conflict resolve ID local|remote|both\n"
         + "stroke put FILE|- | stroke hide ID | stroke show ID\n"
+        + "erase FILE|- | fill FILE|- | template add FILE|- | image add FILE [PLACEMENT.json]\n"
         + "apply FILE|-               Atomic JSON array of protocol actions\n"
         + "append FILE|-              Append one raw action (editor stroke history)\n"
         + "settings FILE|-            Update local editor preferences\n"
@@ -62,14 +70,16 @@ public final class Main {
             Map<String,Object> descriptor=map(parse(new String(Files.readAllBytes(Paths.get(proxy)),StandardCharsets.UTF_8)));
             Object value=null;String cmd=a.get(0);
             if(cmd.equals("svg")){value=svgInput(a.subList(1,a.size()));a=new ArrayList<>(Arrays.asList("svg","add","-"));}
-            else if(cmd.equals("append")||cmd.equals("settings")||cmd.equals("apply")||cmd.equals("diagram")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke"))&&(a.contains("put")||a.contains("update")))){
+            else if(cmd.equals("image")){Map<String,Object> placement=imagePlacement(a);placement.put("shape","image");placement.put("image",ImageAsset.fromBytes(imageBytes(a.get(2))));value=placement;a=new ArrayList<>(Arrays.asList("image","add","-"));}
+            else if((cmd.equals("selection")&&a.size()==3&&Arrays.asList("select","paste").contains(a.get(1)))||(cmd.equals("transform")&&a.size()==3&&Arrays.asList("preview","commit").contains(a.get(1)))){int last=a.size()-1;value=input(a.get(last));a.set(last,"-");}
+            else if(cmd.equals("append")||cmd.equals("settings")||cmd.equals("apply")||cmd.equals("diagram")||cmd.equals("erase")||cmd.equals("fill")||cmd.equals("template")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke")||cmd.equals("image"))&&(a.contains("put")||a.contains("update")||a.contains("add")))){
                 int last=a.size()-1;value=input(a.get(last));a.set(last,"-");
             }
             if(cmd.equals("export"))remoteModel=Model.fromJson(map(LocalProxy.request(descriptor,doc,actor,Arrays.asList("inspect"),null)));
             else return LocalProxy.request(descriptor,doc,actor,a,value);
         }
         String command=a.remove(0);File directory=new File(state);Store store=remoteModel==null?(Boolean.TRUE.equals(inProxy.get())?Store.writer(directory,doc):new Store(directory,doc)):null;
-        boolean readOnly=Arrays.asList("inspect","snapshot","status","log","export","serve").contains(command)||(command.equals("document")&&a.equals(Arrays.asList("list")));
+        boolean readOnly=Arrays.asList("inspect","snapshot","status","log","export","serve").contains(command)||(command.equals("document")&&a.equals(Arrays.asList("list")))||(command.equals("shape")&&a.equals(Arrays.asList("list")));
         require(readOnly||Boolean.TRUE.equals(inProxy.get()),"Writes and synchronization require --proxy-file (or NOTEMAKER_PROXY_FILE); start the selected proxy with serve");
         final String actionActor=actor;
         switch(command){
@@ -90,7 +100,7 @@ public final class Main {
             case "inspect":arity(a,0);return store.model().json();
             case "snapshot":{
                 arity(a,0);Map<String,Object> s=store.read(),out=object("effectiveModel",Store.model(s).json(),"revision",s.get("revision"),"cursor",s.get("cursor"),"eventCount",list(s.get("events")).size(),"pendingCount",list(s.get("pending")).size());
-                for(String key:Arrays.asList("hidden","undo","redo","selected","page"))if(s.containsKey(key))out.put(key,s.get(key));return out;
+                for(String key:Arrays.asList("hidden","undo","redo","selected","page","clipboard"))if(s.containsKey(key))out.put(key,s.get(key));return out;
             }
             case "append":{
                 arity(a,1);Map<String,Object> s=store.append(map(input(a.get(0))),actor);List<Object> pending=list(s.get("pending"));return object("operation",map(pending.get(pending.size()-1)).get("id"));
@@ -98,10 +108,11 @@ public final class Main {
             case "settings":{
                 arity(a,1);Map<String,Object> preferences=map(input(a.get(0)));
                 for(String key:preferences.keySet()){
-                    require(Arrays.asList("hidden","undo","redo","selected","page").contains(key),"Unknown local preference");
+                    require(Arrays.asList("hidden","undo","redo","selected","page","clipboard").contains(key),"Unknown local preference");
                     if(Arrays.asList("hidden","undo","redo").contains(key))for(Object value:list(preferences.get(key)))require(value instanceof String,"Expected preference strings");
                     if(key.equals("selected"))string(preferences,key);
                     if(key.equals("page"))require(number(preferences,key)>=0&&number(preferences,key)<=10000&&number(preferences,key)==Math.rint(number(preferences,key)),"Invalid page");
+                    if(key.equals("clipboard")){Map<String,Object> clipboard=map(preferences.get(key));List<Object> entities=list(clipboard.get("entities"));require(entities.size()<=100,"Clipboard exceeds 100 entities");for(Object entity:entities)Model.validate(map(entity));}
                 }
                 store.edit(s->s.putAll(preferences));return object("saved",true);
             }
@@ -113,9 +124,38 @@ public final class Main {
                 Map<String,Object> raw=svgInput(a);raw.put("shape","svg");Map<String,Object> drawing=Actions.drawing(raw,"base");
                 return store.commit(actor,m->{require(!m.objects.containsKey(drawing.get("object")),"Object ID already exists; use object update");return Arrays.asList(drawing);});
             }
+            case "shape":{arity(a,1);require(a.get(0).equals("list"),"shape list");return object("shapes",ShapeCatalog.json());}
+            case "transform":{
+                if(a.size()==2&&a.get(0).equals("cancel"))return object("cancelled",true,"session",a.get(1));
+                require(a.size()==2&&Arrays.asList("preview","commit").contains(a.get(0)),"transform preview|commit FILE|-");Map<String,Object> request=map(input(a.get(1)));String session=string(request,"session");
+                List<Object> entities=list(request.get("entities"));Map<String,Object> transform=map(request.get("transform"));for(String key:transform.keySet())require(Arrays.asList("scale","dx","dy","rotation","flipX","flipY","pivotX","pivotY").contains(key),"Unknown transform field: "+key);
+                if(a.get(0).equals("preview"))return object("preview",true,"session",session);
+                LocalProxy.assertSession(store,actionActor,session,entities);
+                return store.commit(actionActor,m->Collaboration.transform(m,entities,transform));
+            }
+            case "conflicts":arity(a,0);return object("conflicts",store.conflicts());
+            case "conflict":{require(a.size()==3&&a.get(0).equals("resolve"),"conflict resolve ID local|remote|both");return store.conflict(a.get(1),a.get(2),actionActor);}
+            case "erase":{arity(a,1);Map<String,Object> request=map(input(a.get(0)));return store.commit(actionActor,m->DrawingActions.erase(m,request));}
+            case "fill":{arity(a,1);Map<String,Object> request=map(input(a.get(0)));Model model=store.model();List<Object> dependencies=new ArrayList<>();if(request.containsKey("object"))dependencies.add(object("kind","object","id",request.get("object"),"page",request.getOrDefault("page",0)));else if(request.containsKey("stroke"))dependencies.add(object("kind","stroke","id",request.get("stroke"),"page",request.getOrDefault("page",0)));else{int page=((Number)request.getOrDefault("page",0)).intValue();String layer=String.valueOf(request.getOrDefault("layer","base"));for(Map<String,Object> entity:model.strokes.values())if(page==((Number)entity.getOrDefault("page",0)).intValue()&&layer.equals(entity.get("layer"))&&!Boolean.FALSE.equals(model.layerActive.get(layer))&&!Boolean.FALSE.equals(model.active.get(entity.get("stroke"))))dependencies.add(object("kind","stroke","id",entity.get("stroke"),"page",page));for(Map<String,Object> entity:model.objects.values())if(page==((Number)entity.getOrDefault("page",0)).intValue()&&layer.equals(entity.get("layer"))&&!Boolean.FALSE.equals(model.layerActive.get(layer))&&!Boolean.FALSE.equals(model.objectActive.get(entity.get("object"))))dependencies.add(object("kind","object","id",entity.get("object"),"page",page));}return store.commit(actionActor,m->DrawingActions.fill(m,request),dependencies);}
+            case "template":{arity(a,2);require(a.get(0).equals("add"),"template add FILE|-");Map<String,Object> request=map(input(a.get(1)));return store.commit(actionActor,m->DrawingActions.template(m,request));}
+            case "image":{if(Boolean.TRUE.equals(inProxy.get())){arity(a,2);Map<String,Object> placement=map(input(a.get(1)));return store.commit(actionActor,m->Arrays.asList(Actions.drawing(placement,"base")));}require(a.size()>=2&&a.get(0).equals("add"),"image add FILE [PLACEMENT.json]");Map<String,Object> placement=imagePlacement(a);byte[] bytes=imageBytes(a.get(1));return store.commit(actionActor,m->DrawingActions.image(m,bytes,placement));}
             case "apply":arity(a,1);List<Object> ops=list(input(a.get(0)));return store.commit(actor,m->ops);
+            case "selection":{
+                require(a.size()>=1,"selection select|heartbeat|deselect|disconnect|duplicate|delete|copy|cut|paste");String sub=a.remove(0);
+                if(sub.equals("select")){arity(a,1);Map<String,Object> selection=map(input(a.get(0)));return LocalProxy.select(store,actionActor,selection);}
+                if(sub.equals("paste")){arity(a,1);Map<String,Object> request=map(input(a.get(0)));if(!request.containsKey("entities"))request.put("entities",list(map(store.read().getOrDefault("clipboard",object())).getOrDefault("entities",Collections.emptyList())));return store.commit(actionActor,m->DrawingActions.paste(m,request));}
+                if(sub.equals("disconnect")){arity(a,0);return LocalProxy.releaseActor(store,actionActor);}
+                if(sub.equals("copy")||sub.equals("cut")){arity(a,1);String session=a.get(0);List<Object> entities=LocalProxy.selected(store,actionActor,session);LocalProxy.assertSession(store,actionActor,session,entities);Model model=store.model();List<Object> snapshots=DrawingActions.copySelection(model,entities);long copiedAt=System.currentTimeMillis();store.edit(s->s.put("clipboard",object("copiedAt",copiedAt,"entities",copy(snapshots))));List<Object> dependencies=new ArrayList<>(entities);Map<String,Object> cutResult=null;if(sub.equals("cut")){cutResult=store.commit(actionActor,m->{List<Object> generated=new ArrayList<>();for(Object value:entities){Map<String,Object> e=map(value);String kind=string(e,"kind");generated.add(object("kind",kind.equals("object")?"object-active":"active",kind,string(e,"id"),"active",false));}return generated;},dependencies);LocalProxy.release(store,actionActor,session,false);}Map<String,Object> response=object("copiedAt",copiedAt,"entities",snapshots);if(cutResult!=null)response.put("operation",cutResult.get("operation"));return response;}
+                if(sub.equals("duplicate")||sub.equals("delete")){arity(a,1);String session=a.get(0);List<Object> entities=LocalProxy.selected(store,actionActor,session);LocalProxy.assertSession(store,actionActor,session,entities);List<Object> dependencies=new ArrayList<>(entities);Object result;
+                    if(sub.equals("delete")){result=store.commit(actionActor,m->{List<Object> generated=new ArrayList<>();for(Object value:entities){Map<String,Object> e=map(value);String kind=string(e,"kind");generated.add(object("kind",kind.equals("object")?"object-active":"active",kind,string(e,"id"),"active",false));}return generated;},dependencies);LocalProxy.release(store,actionActor,session,false);}
+                    else{Model model=store.model();result=store.commit(actionActor,m->{List<Object> generated=new ArrayList<>();Map<String,String> ids=new HashMap<>();for(Object value:entities){Map<String,Object> e=map(value);String kind=string(e,"kind"),id=string(e,"id");ids.put(kind+":"+id,Actions.id());}for(Object value:entities){Map<String,Object> e=map(value);String kind=string(e,"kind"),id=string(e,"id");Map<String,Object> old=kind.equals("object")?model.objects.get(id):model.strokes.get(id);Map<String,Object> n=map(copy(old));n.put(kind,ids.get(kind+":"+id));if(kind.equals("object")){n.put("x",number(n,"x")+24);n.put("y",number(n,"y")+24);for(String key:Arrays.asList("from","to"))if(n.containsKey(key)&&ids.containsKey("object:"+n.get(key)))n.put(key,ids.get("object:"+n.get(key)));}else{List<Object> points=new ArrayList<>();for(Object p:list(n.get("points"))){List<Object> xyz=list(p);points.add(Arrays.asList(((Number)xyz.get(0)).doubleValue()+24,((Number)xyz.get(1)).doubleValue()+24,xyz.get(2)));}n.put("points",points);}generated.add(n);}return generated;},dependencies);}return result;}
+                arity(a,1);return LocalProxy.release(store,actionActor,a.get(0),sub.equals("heartbeat"));
+            }
             case "layer":case "object":case "stroke":{
                 require(!a.isEmpty(),"Missing subcommand");String sub=a.remove(0);String kind=command;
+                if(kind.equals("layer")&&sub.equals("duplicate")){arity(a,1);String id=a.get(0);Model model=store.model();List<Object> dependencies=new ArrayList<>();for(Map<String,Object> entity:model.objects.values())if(id.equals(entity.get("layer")))dependencies.add(object("kind","object","id",entity.get("object"),"page",entity.getOrDefault("page",0)));for(Map<String,Object> entity:model.strokes.values())if(id.equals(entity.get("layer")))dependencies.add(object("kind","stroke","id",entity.get("stroke"),"page",entity.getOrDefault("page",0)));return store.commit(actor,m->DrawingActions.duplicateLayer(m,id),dependencies);}
+                if(kind.equals("layer")&&sub.equals("merge")){arity(a,2);String source=a.get(0),target=a.get(1);return store.commit(actor,m->DrawingActions.mergeLayer(m,source,target));}
+                if(kind.equals("layer")&&sub.equals("reorder")){arity(a,2);String id=a.get(0);int index=Integer.parseInt(a.get(1));return store.commit(actor,m->DrawingActions.reorderLayer(m,id,index));}
                 if(sub.equals("hide")||sub.equals("show")){arity(a,1);String id=a.get(0);return store.commit(actor,m->{require((kind.equals("object")?m.objects:kind.equals("layer")?m.layers:m.strokes).containsKey(id),"Unknown "+kind+" ID");return Arrays.asList(object("kind",kind.equals("stroke")?"active":kind+"-active",kind,id,"active",sub.equals("show")));});}
                 if(sub.equals("update")){require(kind.equals("object"),"Only object update is supported; use put for other kinds");arity(a,2);String id=a.get(0);Map<String,Object> patch=map(input(a.get(1)));require(!patch.containsKey("kind")&&!patch.containsKey("object")&&!patch.containsKey("id"),"Cannot patch identity");return store.commit(actor,m->{require(m.objects.containsKey(id),"Unknown object ID");Map<String,Object> o=map(copy(m.objects.get(id)));o.putAll(patch);return Arrays.asList(o);});}
                 require(sub.equals("put"),"Unknown subcommand");arity(a,1);Map<String,Object> raw=map(input(a.get(0)));Map<String,Object> o=kind.equals("object")?Actions.drawing(raw,"base"):map(copy(raw));o.put("kind",kind);o.remove("id");return store.commit(actor,m->Arrays.asList(o));
@@ -142,6 +182,13 @@ public final class Main {
         if(Boolean.TRUE.equals(inProxy.get())){require(path.equals("-")&&proxyInput.get()!=null,"Proxy input must be supplied in the input field with FILE=-");return copy(proxyInput.get());}
 
         return parse(readInput(path));
+    }
+    private static Map<String,Object> imagePlacement(List<String> args)throws IOException{
+        int offset=args.get(0).equals("image")?2:1;require(args.size()==offset+1||args.size()==offset+2,"image add FILE [PLACEMENT.json]");require(args.get(offset-1).equals("add"),"image add FILE [PLACEMENT.json]");Map<String,Object> placement=args.size()==offset+2?map(parse(readInput(args.get(offset+1)))):object();
+        for(String key:placement.keySet())require(Arrays.asList("x","y","w","h","layer","page","object").contains(key),"Unknown image placement field: "+key);return placement;
+    }
+    private static byte[] imageBytes(String path)throws IOException{
+        byte[] bytes;if(path.equals("-")){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int count;while((count=System.in.read(buffer))!=-1){out.write(buffer,0,count);require(out.size()<=ImageAsset.MAX_BYTES,"Image exceeds 2 MiB");}bytes=out.toByteArray();}else{require(Files.size(Paths.get(path))<=ImageAsset.MAX_BYTES,"Image exceeds 2 MiB");bytes=Files.readAllBytes(Paths.get(path));}ImageAsset.fromBytes(bytes);return bytes;
     }
     private static String readInput(String path)throws IOException{
         byte[] bytes;if(path.equals("-")){ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=System.in.read(buffer))!=-1){b.write(buffer,0,n);require(b.size()<=3000000,"Input exceeds 3 MB");}bytes=b.toByteArray();}else{require(Files.size(Paths.get(path))<=3000000,"Input exceeds 3 MB");bytes=Files.readAllBytes(Paths.get(path));}return new String(bytes,StandardCharsets.UTF_8);

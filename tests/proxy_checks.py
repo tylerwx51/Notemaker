@@ -9,9 +9,33 @@ import time
 import unittest
 from cli_checks import CLI, EXAMPLE
 import server_checks
-from topology_support import Proxy
+from topology_support import Link, Proxy, eventually, http
 
 class ProxyChecks(server_checks.ServerChecks):
+    def test_active_edit_preempts_delayed_idle_document_fetch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            self.post('idle-document',[dict(id='idle-seed',kind='document',type='fixed')])
+            self.post('live-document',[dict(id='live-seed',kind='document',type='fixed')])
+            link=Link(self.url,root/'link.json')
+            link.delay_next_replica('idle-document',4)
+            proxy=None
+            try:
+                proxy=Proxy(root/'replica','idle-document',link.url)
+                self.assertTrue(link.delay_started.wait(8),'sync loop never entered delayed idle-document fetch')
+                begin=time.monotonic()
+                http(proxy.descriptor['url']+'/command',dict(document='live-document',actor='agent',args=['append','-'],input={'kind':'document','type':'fixed'}),proxy.descriptor['token'])
+                events=eventually(lambda:[row for row in self.read('live-document') if row['op'].get('type')=='fixed' and row['op'].get('actor')=='agent'],3)
+                self.assertLess(time.monotonic()-begin,3.0,'active document waited behind the delayed idle-document fetch')
+                self.assertTrue(events)
+                def idle_caught_up():
+                    state=http(proxy.descriptor['url']+'/command',dict(document='idle-document',actor='observer',args=['snapshot']),proxy.descriptor['token'])['result']
+                    return state['cursor']>=1
+                eventually(idle_caught_up,10)
+            finally:
+                if proxy is not None:proxy.stop()
+                link.close()
+
     def test_large_catchup_uses_bounded_journal_transactions(self):
         points=[[i/3,(i%1400)/3,.54321] for i in range(6000)]
         for i in range(20):
