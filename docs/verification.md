@@ -1,5 +1,34 @@
 # Verification
 
+## Selection ends on tool change — 2026-10-14
+
+Tool changes now clear the selected entities, stop lease heartbeats, cancel
+uncommitted previews and release locks through the selected proxy. Selection
+generation checks discard and release delayed acquisitions, including a pending
+per-item deselection that would otherwise reacquire the remaining entities.
+Old preview callbacks cannot restore a canceled preview. Reopening Select keeps
+the active selection.
+
+Built with `nix-shell --run 'apps/android/build.sh'`. The focused isolated-emulator
+regression passed with
+`nix-shell --run 'python3 tests/drawing_android.py --tool-switch-only'`.
+It checks Pen, Eraser, Move, Shapes, Text, Fill and direct shape placement;
+selection acquisition and per-item reselection races; lease removal; and
+preview cancellation without changing drawing state or undo history. The same
+regression is included in the normal Android drawing suite.
+
+Installed APK
+`03e8e05f9a24f520692306f1d6642fac75fceac116762b6d62b4f8f1f85ddd1c`
+on BOOX `eac89823` with the backed-up installation check. All 40 app-data files
+were byte-identical across installation, all 479 existing notebook actions were
+preserved, and the proxy connected with zero pending actions. Installation
+artifacts: `.test-artifacts/tablet/20261014-095651-503791/`.
+The same tool-switch regression passed on the BOOX in an isolated test notebook
+with the upstream unavailable. The original `notes` selection, upstream, root
+identity and all 479 original actions/actor histories were preserved. Results:
+`.test-artifacts/selection-tool-switch/20261014-095432/`. The temporary desktop
+server used for the installation smoke check was stopped afterward.
+
 ## Full drawing and collaboration feature set — 2026-10-14
 
 Implemented the remaining ADR 0009 groups with GPT-6-luna implementation

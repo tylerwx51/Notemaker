@@ -348,7 +348,9 @@ final class EditorUi {
         return box;
     }
 
-    private void openTool(String kind, View anchor) {
+    void openTool(String kind, View anchor) {
+        if(!kind.equals("select")&&(app.selecting||app.selectionSession!=null||!app.selectedEntities.isEmpty()))app.deselect();
+        app.fillTapMode=false;
         if (Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind)) selectedTool=kind;
         if(Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind))app.selecting=kind.equals("select");
         LinearLayout box;

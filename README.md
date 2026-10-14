@@ -373,7 +373,7 @@ computer; it never discovers or selects a physical tablet automatically.
 | Tier | Coverage | External resources |
 | --- | --- | --- |
 | `local` (default) | Framework, server, CLI, drawing/export/browser, proxy, mock-chat, generated topology/failure tests | None; temporary local servers/proxies and Chromium |
-| `emulator` | Two-client integration, Android CLI, chat UI, 1,000-stroke performance | Local Android emulators; host graphics for performance |
+| `emulator` | Two-client integration, drawing/selection UI, Android CLI, chat UI, 1,000-stroke performance | Local Android emulators; host graphics for performance |
 | `hardware` | Installed tablet app/proxy connectivity, drained queue, logs, screenshot; optional backed-up upgrade | Explicit ADB serial and reachable configured server |
 | `network` | Edits through multiple existing proxies, final server order and model convergence | Explicit server URL and at least two reachable proxy descriptors |
 
@@ -383,6 +383,8 @@ nix-shell --run 'python3 tests/run.py --tier local --tier emulator'
 # Select a smaller emulator run, or inspect the plan without accessing devices.
 nix-shell --run 'python3 tests/run.py --tier emulator --suite cli_android'
 nix-shell --run 'python3 tests/run.py --tier hardware --tier network --list'
+# Focused tool-switch selection/lock-release regression on an isolated emulator.
+nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --tool-switch-only'
 ```
 
 The runner builds the required artifacts and runs suites sequentially to avoid

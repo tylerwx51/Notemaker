@@ -29,6 +29,9 @@ CLI/agent sessions. Selection skips locked entities and reports what was
 skipped. Undo and bulk operations that affect locked entities fail as a whole.
 Deselecting or cleanly disconnecting releases locks; missing heartbeats expire
 locks after 15 seconds. Layers are not implicitly locked by selecting an object.
+Choosing another tool ends the selection, cancels any uncommitted transform
+preview and releases its leases through the selected proxy. Delayed acquisition
+responses cannot restore a selection after its tool or document context ends.
 
 Transforms send ephemeral previews through proxies. Only the completed
 transform becomes a durable atomic action and one undo entry. When a lock

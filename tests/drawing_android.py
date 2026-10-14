@@ -8,6 +8,7 @@ import shlex
 import re
 import xml.etree.ElementTree as ET
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -101,6 +102,11 @@ def main():
                 env=env, stdout=log, stderr=subprocess.STDOUT)
             wait_ready()
             adb('install', '-r', str(APK))
+            if '--tool-switch-only' in sys.argv:
+                instrument('configure', document='android-tool-switch-selection', host='offline')
+                instrument('tool-switch-selection')
+                print('PASS switching tools releases active and late-acquired selection leases and cancels previews')
+                return
             result = run('adb', '-s', SERIAL, 'shell', 'am', 'instrument', '-w',
                          '-e', 'action', 'configure', '-e', 'document', 'android-fill',
                          '-e', 'host', 'offline', 'com.notemaker/.Integration')
@@ -114,6 +120,9 @@ def main():
             assert objects[0]['shape'] == 'rect', objects
             assert objects[1]['shape'] == 'svg' and '#ff0000' in objects[1]['svg'], objects
             print('PASS Android tap-to-fill creates a single filled region object')
+            instrument('configure', document='android-tool-switch-selection', host='offline')
+            instrument('tool-switch-selection')
+            print('PASS switching tools releases active and late-acquired selection leases and cancels previews')
             result = run('adb', '-s', SERIAL, 'shell', 'am', 'instrument', '-w',
                          '-e', 'action', 'configure', '-e', 'document', 'android-collaboration',
                          '-e', 'host', 'offline', 'com.notemaker/.Integration')
