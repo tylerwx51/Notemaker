@@ -60,7 +60,7 @@ public final class Store {
         Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         final Map<String,Object> result=object();
         edit(state->{
-            Model model=Store.model(state);if(requiredSession!=null)Collaboration.requireSelection(state,model,actor,requiredSession,selected);Model baseline=new Model(model);List<Object> requested=build.create(model),ops=new ArrayList<>();
+            Model model=Store.model(state);if(requiredSession!=null)Collaboration.requireSelection(state,model,actor,requiredSession,selected);Model baseline=new Model(model);Timing.mark("geometry_begin");List<Object> requested=build.create(model),ops=new ArrayList<>();Timing.mark("geometry_done");
             for(Object value:requested){Map<String,Object> op=map(value);ops.add(op);String kind=string(op,"kind");
                 String key=kind.equals("object")?"object":kind.equals("layer")?"layer":kind.equals("stroke")?"stroke":null;
                 if(key!=null&&!(key.equals("object")?model.objects:key.equals("layer")?model.layers:model.strokes).containsKey(op.get(key)))ops.add(object("kind",key.equals("stroke")?"active":key+"-active",key,op.get(key),"active",true));
@@ -68,12 +68,15 @@ public final class Store {
             Model.require(!ops.isEmpty()&&ops.size()<=200,"Action needs 1–200 operations");
             List<Object> inverse=new ArrayList<>();
             for(Object v:ops){Map<String,Object> op=map(v);Model.require(!Arrays.asList("batch","document").contains(op.get("kind")),"Use document create; nested batches are not allowed");Model.validate(op);inverse.add(0,Actions.inverse(model,op));model.apply(op);}
+            Timing.mark("inverse_done");
             Collaboration.requireUnlocked(state,actor,ops,System.currentTimeMillis());
             Collaboration.requireUnlocked(state,actor,dependencies,System.currentTimeMillis());
             Actions.validateReferences(model,ops);
+            Timing.mark("locks_done");
             Map<String,Object> batch=object("kind","batch","id",UUID.randomUUID().toString(),"actor",actor,"actions",ops);Model.withBases(batch,baseline);Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)batch.put("session",session);
             Model.require(write(batch).getBytes(StandardCharsets.UTF_8).length<=3000000,"Action exceeds 3 MB");
             Model.require(write(inverse).getBytes(StandardCharsets.UTF_8).length<=3000000,"Undo snapshot exceeds 3 MB; split this action");
+            Timing.mark("limits_done");
             list(state.get("pending")).add(batch);
             Map<String,Object> history=history(state,actor);list(history.get("undo")).add(object("forward",copy(ops),"inverse",inverse));history.put("redo",new ArrayList<>());
             result.put("operation",batch.get("id"));result.put("actions",ops);

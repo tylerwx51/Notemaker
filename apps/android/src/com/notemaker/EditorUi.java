@@ -818,12 +818,12 @@ final class EditorUi {
             float scale = Math.min((w - dp(6)) / 1000f, (h - dp(20)) / 1400f);
             String key=app.document+"/"+app.page+"/"+getWidth()+"/"+getHeight();
             if(!key.equals(rasterKey)){if(raster!=null)raster.bitmap.recycle();raster=new InkCache(getWidth(),getHeight());rasterKey=key;}
-            LinkedHashMap<String,JSONObject> settled=new LinkedHashMap<>();
-            for(Map.Entry<String,JSONObject> entry:app.strokes.entrySet()){
-                JSONObject stroke=entry.getValue();if(!entry.getKey().equals(app.canvas.current)&&layer.equals(stroke.optString("layer"))&&stroke.optInt("page")==app.page&&!Boolean.FALSE.equals(app.active.get(entry.getKey())))settled.put(entry.getKey(),stroke);
+            LinkedHashMap<String,Map<String,Object>> settled=new LinkedHashMap<>();
+            for(Map.Entry<String,Map<String,Object>> entry:app.model.strokes.entrySet()){
+                Map<String,Object> stroke=entry.getValue();if(!entry.getKey().equals(app.canvas.current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==app.page&&!Boolean.FALSE.equals(app.active.get(entry.getKey()))){Map<String,Object> preview=new LinkedHashMap<>(stroke);preview.put("width",Math.max(((Number)stroke.get("width")).doubleValue(),dp(1.4f)/scale));settled.put(entry.getKey(),preview);}
             }
             raster.draw(c,settled,image->{image.clipRect(1,dp(16),w-1,h-1);image.translate((w-1000*scale)/2,dp(16));image.scale(scale,scale);},(image,stroke)->{
-                JSONObject preview=MainActivity.obj("kind","stroke","color",stroke.optInt("color"),"brush",stroke.optString("brush","pen"),"erasures",stroke.optJSONArray("erasures"),"width",Math.max(stroke.optDouble("width"),dp(1.4f)/scale),"points",stroke.optJSONArray("points"));app.canvas.drawStroke(image,preview);
+                com.notemaker.core.Render.drawStroke(stroke,new com.notemaker.cli.Png(image));
             });
             c.save();c.clipRect(1,dp(16),w-1,h-1);c.translate((w-1000*scale)/2,dp(16));c.scale(scale,scale);
             if(layer.equals(app.selected)&&app.canvas.points!=null)app.canvas.drawStroke(c,app.canvas.stroke());

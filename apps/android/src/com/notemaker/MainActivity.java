@@ -165,6 +165,7 @@ public class MainActivity extends Activity {
     }
     void load(String newType){synchronized(lock){
         resetDrawingGesture();
+        if(canvas!=null)canvas.erasePreviews.clear();
         pendingObjectHistory.clear();
         historyPending=false;
         eventCount=pendingCount=0;optimistic.clear();renderedEntities.clear();cursor=0;revision=-1;hidden.clear();undo.clear();redo.clear();selected="base";page=0;type=newType;
@@ -393,17 +394,25 @@ public class MainActivity extends Activity {
             catch(Exception error){runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=error.toString();update();Toast.makeText(this,"Could not update selection: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     Map<String,Long> eraseTimings;
+    static final class ErasePreview {
+        final String layer;final int page;final List<Path> paths=new ArrayList<>();
+        ErasePreview(String layer,int page,Map<String,Object> input){this.layer=layer;this.page=page;for(double[][] region:DrawingActions.eraseRegions(input))paths.add(com.notemaker.cli.ItemCoverage.path(region,true));}
+    }
     void applyErase(String mode,String layer,int erasePage,JSONArray path,float radius){
         final Map<String,Long> trace=eraseTimings;if(trace!=null)trace.put("entered",System.nanoTime());
         AppReplica target=replica;final PendingObjectHistory pending;
+        final String previewId=id();Map<String,Object> input=Json.object("mode",mode,"layer",layer,"page",erasePage,"points",path==null?Collections.emptyList():Json.parse(path.toString()),"radius",radius);
+        // Do not predict an edit when coordination state advertises a foreign lock.
+        boolean foreign=false;for(Object raw:leases.values())if(!"human".equals(Json.map(raw).get("actor"))){foreign=true;break;}
+        if(mode.equals("partial")&&!foreign)try{canvas.erasePreviews.put(previewId,new ErasePreview(layer,erasePage,input));}catch(IllegalArgumentException ignored){}
         synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;update();}
         if(trace!=null)trace.put("queued",System.nanoTime());
-        Map<String,Object> input=Json.object("mode",mode,"layer",layer,"page",erasePage,"points",path==null?Collections.emptyList():Json.parse(path.toString()),"radius",radius);
         ReplicaService.writes.execute(()->{try{
             if(trace!=null)trace.put("worker_start",System.nanoTime());
-            target.command(Arrays.asList("erase","-"),input);if(trace!=null)trace.put("command_done",System.nanoTime());Map<String,Object> snapshot=target.read();if(trace!=null)trace.put("snapshot_done",System.nanoTime());
-            runOnUiThread(()->{if(trace!=null)trace.put("ui_start",System.nanoTime());saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;try{refreshShared(snapshot);}catch(Exception e){saveError=e.toString();}if(trace!=null)trace.put("refresh_done",System.nanoTime());save();update();if(trace!=null)trace.put("ui_done",System.nanoTime());});
-        }catch(Exception error){runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=error.toString();update();Toast.makeText(this,"Could not erase: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
+            if(trace!=null)Timing.observer.set(phase->trace.put(phase,System.nanoTime()));
+            try{target.command(Arrays.asList("erase","-"),input);}finally{Timing.observer.remove();}if(trace!=null)trace.put("command_done",System.nanoTime());Map<String,Object> snapshot=target.read();if(trace!=null)trace.put("snapshot_done",System.nanoTime());
+            runOnUiThread(()->{if(trace!=null)trace.put("ui_start",System.nanoTime());saving--;if(target!=replica)return;canvas.erasePreviews.remove(previewId);pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");redo.clear();for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;try{refreshShared(snapshot);}catch(Exception e){saveError=e.toString();}if(trace!=null)trace.put("refresh_done",System.nanoTime());save();update();if(trace!=null)trace.put("ui_done",System.nanoTime());});
+        }catch(Exception error){runOnUiThread(()->{saving--;if(target!=replica)return;canvas.erasePreviews.remove(previewId);pendingObjectHistory.remove(pending);if("No matching editable content".equals(error.getMessage())){update();return;}saveError=error.toString();update();Toast.makeText(this,"Could not erase: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     void fillAt(float x,float y){
         final AppReplica target=replica;final PendingObjectHistory pending;
@@ -463,6 +472,7 @@ public class MainActivity extends Activity {
     }}
 
     class CanvasView extends View {
+        final Map<String,ErasePreview> erasePreviews=new LinkedHashMap<>();
         Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
         float zoom=1,offsetX=0,offsetY=0,lastX,lastY;
         JSONArray points,eraserPoints;String current;long lastSent;
@@ -485,9 +495,9 @@ public class MainActivity extends Activity {
         void transform(Canvas c){c.translate(offsetX,offsetY);c.scale(scale()*zoom,scale()*zoom);if(!type.equals("infinite"))c.clipRect(0,0,1000,1400);}
         void settledInk(Canvas c,String layer){
             InkCache cache=ink.get(layer);if(cache==null){if(ink.size()>=3){String oldest=ink.keySet().iterator().next();ink.remove(oldest).bitmap.recycle();}cache=new InkCache(getWidth(),getHeight());ink.put(layer,cache);}
-            LinkedHashMap<String,JSONObject> visible=new LinkedHashMap<>();
-            for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.optString("layer"))&&stroke.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey())))visible.put(e.getKey(),stroke);}
-            cache.draw(c,visible,this::transform,this::drawStroke);
+            LinkedHashMap<String,Map<String,Object>> visible=new LinkedHashMap<>();
+            for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey())))visible.put(e.getKey(),stroke);}
+            cache.draw(c,visible,this::transform,(image,stroke)->Render.drawStroke(stroke,new com.notemaker.cli.Png(image)));
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
             if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
@@ -497,11 +507,13 @@ public class MainActivity extends Activity {
             c.save();transform(c);if(!type.equals("infinite")){paint.setColor(0xffaaaaaa);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);c.drawRect(0,0,1000,1400,paint);paint.setStyle(Paint.Style.FILL);}c.restore();
             boolean previewing=false;for(Object raw:transformPreviews.values())try{if(((Number)Json.map(raw).getOrDefault("expires",0)).longValue()>System.currentTimeMillis()){previewing=true;break;}}catch(Exception ignored){}
             for(String layer:layers.keySet())if(visible(layer)){
+                c.save();Matrix before=c.getMatrix();transform(c);for(ErasePreview preview:erasePreviews.values())if(preview.layer.equals(layer)&&preview.page==page)for(Path cut:preview.paths)c.clipOutPath(cut);c.setMatrix(before);
                 if(useInkCache&&!previewing)settledInk(c,layer);
                 else {c.save();transform(c);for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject s=e.getValue();if(!e.getKey().equals(current)&&layer.equals(s.optString("layer"))&&s.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!(previewing&&previewed("stroke",e.getKey())))drawStroke(c,s);}c.restore();}
                 c.save();transform(c);
                 for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!(previewing&&previewed("object",e.getKey())))Render.drawObject(model,o,new com.notemaker.cli.Png(c));}
                 if(layer.equals(selected)&&points!=null&&current!=null)drawStroke(c,stroke());c.restore();
+                c.restore();
             }
             drawTransformPreviews(c);drawSelection(c);
             if(lassoing){c.save();transform(c);paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2/Math.max(.2f,zoom));paint.setPathEffect(new DashPathEffect(new float[]{7,5},0));if(freeformLasso&&lassoPath.size()>1){Path outline=new Path();outline.moveTo(lassoPath.get(0)[0],lassoPath.get(0)[1]);for(int i=1;i<lassoPath.size();i++)outline.lineTo(lassoPath.get(i)[0],lassoPath.get(i)[1]);c.drawPath(outline,paint);}else c.drawRect(lassoStartX,lassoStartY,lassoEndX,lassoEndY,paint);paint.setPathEffect(null);paint.setStyle(Paint.Style.FILL);c.restore();}

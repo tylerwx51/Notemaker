@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--archive',type=Path,required=True)
     parser.add_argument('--document',required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
     args=parser.parse_args()
     if not os.environ.get('IN_NIX_SHELL'): parser.error('Run through nix-shell')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False,mode=0o700)
@@ -66,6 +67,7 @@ def main():
     installed=False
     try:
         call('install','--no-incremental',str(apk));installed=True
+        if args.compile_speed: (out/'compile.txt').write_bytes(call('shell','cmd','package','compile','-m','speed','-f',PACKAGE,timeout=180))
         call('push',str(replica),remote)
         call('shell','run-as',PACKAGE,'cp','-r',remote+'/files',remote+'/shared_prefs','.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')

@@ -99,8 +99,7 @@ public final class Main {
             }
             case "inspect":arity(a,0);return store.model().json();
             case "snapshot":{
-                arity(a,0);Map<String,Object> s=store.read(),out=object("effectiveModel",Store.model(s).json(),"revision",s.get("revision"),"cursor",s.get("cursor"),"eventCount",list(s.get("events")).size(),"pendingCount",list(s.get("pending")).size());
-                for(String key:Arrays.asList("hidden","undo","redo","selected","page","clipboard"))if(s.containsKey(key))out.put(key,s.get(key));return out;
+                arity(a,0);return snapshot(store.read());
             }
             case "append":{
                 arity(a,1);Map<String,Object> s=store.append(map(input(a.get(0))),actor);List<Object> pending=list(s.get("pending"));return object("operation",map(pending.get(pending.size()-1)).get("id"));
@@ -187,6 +186,10 @@ public final class Main {
     private static Map<String,Object> imagePlacement(List<String> args)throws IOException{
         int offset=args.get(0).equals("image")?2:1;require(args.size()==offset+1||args.size()==offset+2,"image add FILE [PLACEMENT.json]");require(args.get(offset-1).equals("add"),"image add FILE [PLACEMENT.json]");Map<String,Object> placement=args.size()==offset+2?map(parse(readInput(args.get(offset+1)))):object();
         for(String key:placement.keySet())require(Arrays.asList("x","y","w","h","layer","page","object").contains(key),"Unknown image placement field: "+key);return placement;
+    }
+    static Map<String,Object> snapshot(Map<String,Object> s){
+        Model model=Store.model(s);Map<String,Object> out=object("effectiveModel",model.json(),"conflicts",model.visibleConflicts(),"revision",s.get("revision"),"cursor",s.get("cursor"),"eventCount",list(s.get("events")).size(),"pendingCount",list(s.get("pending")).size());
+        for(String key:Arrays.asList("hidden","undo","redo","selected","page","clipboard"))if(s.containsKey(key))out.put(key,s.get(key));return out;
     }
     private static byte[] imageBytes(String path)throws IOException{
         byte[] bytes;if(path.equals("-")){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int count;while((count=System.in.read(buffer))!=-1){out.write(buffer,0,count);require(out.size()<=ImageAsset.MAX_BYTES,"Image exceeds 2 MiB");}bytes=out.toByteArray();}else{require(Files.size(Paths.get(path))<=ImageAsset.MAX_BYTES,"Image exceeds 2 MiB");bytes=Files.readAllBytes(Paths.get(path));}ImageAsset.fromBytes(bytes);return bytes;

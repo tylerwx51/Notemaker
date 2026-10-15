@@ -74,11 +74,19 @@ public final class DrawingActions {
         String mode=(String)input.getOrDefault("mode","stroke");require(Arrays.asList("stroke","item","partial","area","page").contains(mode),"Unknown eraser mode");
         LayerEditor editor=new LayerEditor(m,(String)input.getOrDefault("layer","base"),LayerEditor.page(input));
         double radius=opt(input,"radius",12);require(Double.isFinite(radius)&&radius>=1&&radius<=10000,"Invalid eraser radius");
-        List<double[][]> regions=new ArrayList<>();
-        if(!mode.equals("page")){List<Object> path=list(input.get("points"));require(!path.isEmpty()&&path.size()<=2000,"Eraser needs 1–2000 points");double[] prior=point(path.get(0));if(path.size()==1)regions.add(Geometry.capsule(prior,prior,radius));for(int i=1;i<path.size();i++){double[] next=point(path.get(i));regions.add(Geometry.capsule(prior,next,radius));prior=next;}}
+        List<double[][]> regions=mode.equals("page")?Collections.emptyList():eraseRegions(input);
         List<Object> out=new ArrayList<>();for(DrawItem item:editor.items()){
             boolean hit=mode.equals("page");List<double[][]> touching=new ArrayList<>();for(double[][] region:regions)if(item.intersects(region,factory)){hit=true;if(mode.equals("partial"))touching.add(region);else break;}
             if(hit)out.add(mode.equals("partial")?item.erase(touching):object("kind",item.kind.equals("stroke")?"active":"object-active",item.kind,item.id,"active",false));
         }return checked(out);
+    }
+    /** Shared exact swept regions for transient feedback and durable erasing. */
+    public static List<double[][]> eraseRegions(Map<String,Object> input){
+        double radius=opt(input,"radius",12);require(Double.isFinite(radius)&&radius>=1&&radius<=10000,"Invalid eraser radius");List<double[][]> regions=new ArrayList<>();
+            List<Object> path=list(input.get("points"));require(!path.isEmpty()&&path.size()<=2000,"Eraser needs 1–2000 points");List<double[]> distinct=new ArrayList<>();
+            for(Object raw:path){double[] p=point(raw);int size=distinct.size();if(size>0){double[] last=distinct.get(size-1);if(p[0]==last[0]&&p[1]==last[1])continue;
+                if(size>1){double[] a=distinct.get(size-2);double ax=last[0]-a[0],ay=last[1]-a[1],bx=p[0]-last[0],by=p[1]-last[1];if(ax*by==ay*bx&&ax*bx+ay*by>=0){distinct.set(size-1,p);continue;}}}distinct.add(p);}
+            double[] prior=distinct.get(0);if(distinct.size()==1)regions.add(Geometry.capsule(prior,prior,radius));for(int i=1;i<distinct.size();i++){double[] next=distinct.get(i);regions.add(Geometry.capsule(prior,next,radius));prior=next;}
+        return regions;
     }
 }

@@ -64,12 +64,15 @@ final class Journal {
                 offset=log.getFilePointer();
             }
             if(edit!=null){
+                Timing.mark("journal_begin");
                 State next=snapshot();Map<String,Object> delta;byte[] bytes;
-                try{edit.apply(next);delta=difference(next);bytes=write(delta).getBytes(StandardCharsets.UTF_8);Model.require(bytes.length<=40000000,"Local transaction exceeds 40 MB");}
+                try{Timing.mark("edit_begin");edit.apply(next);Timing.mark("edit_done");delta=difference(next);Timing.mark("delta_done");bytes=write(delta).getBytes(StandardCharsets.UTF_8);Timing.mark("serialize_done");Model.require(bytes.length<=40000000,"Local transaction exceeds 40 MB");}
                 catch(Exception e){throw new Rejected(e);}
                 CRC32 crc=new CRC32();crc.update(bytes);
                 log.seek(offset);log.writeInt(bytes.length);log.write(bytes);log.writeInt((int)crc.getValue());log.getFD().sync();
+                Timing.mark("sync_done");
                 apply(delta);offset=log.getFilePointer();
+                Timing.mark("apply_done");
             }
         }
         return snapshot();

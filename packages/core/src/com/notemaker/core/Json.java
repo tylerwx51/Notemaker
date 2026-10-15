@@ -41,30 +41,32 @@ public final class Json {
         return Objects.equals(a,b);
     }
     public static String write(Object value) {
-        if (value==null) return "null";
+        StringBuilder out=new StringBuilder();append(out,value);return out.toString();
+    }
+    private static void append(StringBuilder out,Object value) {
+        if (value==null){out.append("null");return;}
         if (value instanceof String) {
-            StringBuilder s=new StringBuilder("\"");
-            for(char c:((String)value).toCharArray()) {
-                if(c=='"'||c=='\\') s.append('\\').append(c);
-                else if(c<32) s.append(String.format(Locale.ROOT,"\\u%04x",(int)c));
-                else s.append(c);
+            out.append('"');String text=(String)value;
+            for(int i=0;i<text.length();i++) {char c=text.charAt(i);
+                if(c=='"'||c=='\\')out.append('\\').append(c);
+                else if(c<32)out.append("\\u00").append("0123456789abcdef".charAt(c>>>4)).append("0123456789abcdef".charAt(c&15));
+                else out.append(c);
             }
-            return s.append('"').toString();
+            out.append('"');return;
         }
-        if(value instanceof Boolean) return value.toString();
+        if(value instanceof Boolean){out.append(value);return;}
         if(value instanceof Number) {
             if(!Double.isFinite(((Number)value).doubleValue())) throw new IllegalArgumentException("Nonfinite JSON number");
-            return value.toString();
+            out.append(value);return;
         }
         if(value instanceof Map) {
-            StringJoiner s=new StringJoiner(",","{","}");
-            for(Map.Entry<String,Object> e:map(value).entrySet()) s.add(write(e.getKey())+":"+write(e.getValue()));
-            return s.toString();
+            out.append('{');boolean comma=false;
+            for(Map.Entry<String,Object> e:map(value).entrySet()){if(comma)out.append(',');append(out,e.getKey());out.append(':');append(out,e.getValue());comma=true;}
+            out.append('}');return;
         }
         if(value instanceof List) {
-            StringJoiner s=new StringJoiner(",","[","]");
-            for(Object v:list(value)) s.add(write(v));
-            return s.toString();
+            out.append('[');boolean comma=false;for(Object v:list(value)){if(comma)out.append(',');append(out,v);comma=true;}
+            out.append(']');return;
         }
         throw new IllegalArgumentException("Unsupported JSON value");
     }
