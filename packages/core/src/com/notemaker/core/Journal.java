@@ -17,11 +17,16 @@ final class Journal {
     private Model committed, effective;
     private Set<Object> receivedIds;
     private long offset, stamp=-1, size=-1;
+    /** A rejected edit has not touched the journal or the cached materialization. */
+    private static final class Rejected extends Exception {
+        final Exception original;
+        Rejected(Exception original){this.original=original;}
+    }
 
     static Map<String,Object> access(File file,String document,Store.Edit edit,boolean writable) throws Exception {
         String path=file.getCanonicalPath();Journal cache=caches.computeIfAbsent(path,k->new Journal());
         synchronized(cache){if(!file.getParentFile().exists())return cache.accessLocked(file,document,edit,false);try(RandomAccessFile lock=new RandomAccessFile(path+".lock","rw");FileLock held=lock.getChannel().lock()){
-            try{return cache.accessLocked(file,document,edit,writable);}catch(Exception e){cache.state=null;throw e;}
+            try{return cache.accessLocked(file,document,edit,writable);}catch(Rejected e){throw e.original;}catch(Exception e){cache.state=null;throw e;}
         }}
     }
     private Map<String,Object> accessLocked(File file,String document,Store.Edit edit,boolean writable) throws Exception {
@@ -59,9 +64,10 @@ final class Journal {
                 offset=log.getFilePointer();
             }
             if(edit!=null){
-                State next=snapshot();edit.apply(next);
-                Map<String,Object> delta=difference(next);byte[] bytes=write(delta).getBytes(StandardCharsets.UTF_8);
-                Model.require(bytes.length<=40000000,"Local transaction exceeds 40 MB");CRC32 crc=new CRC32();crc.update(bytes);
+                State next=snapshot();Map<String,Object> delta;byte[] bytes;
+                try{edit.apply(next);delta=difference(next);bytes=write(delta).getBytes(StandardCharsets.UTF_8);Model.require(bytes.length<=40000000,"Local transaction exceeds 40 MB");}
+                catch(Exception e){throw new Rejected(e);}
+                CRC32 crc=new CRC32();crc.update(bytes);
                 log.seek(offset);log.writeInt(bytes.length);log.write(bytes);log.writeInt((int)crc.getValue());log.getFD().sync();
                 apply(delta);offset=log.getFilePointer();
             }

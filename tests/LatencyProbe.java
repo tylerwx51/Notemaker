@@ -88,6 +88,19 @@ public final class LatencyProbe {
                 System.out.println(write(object("phase","queued_erase","index",index,"queue_ms",(start-submitted)/1e6,"work_ms",(System.nanoTime()-start)/1e6,"total_ms",(System.nanoTime()-submitted)/1e6,"error",error)));}));
             }
             for(java.util.concurrent.Future<?> job:jobs)job.get();writer.shutdown();
+            proxy.execute(object("document",doc,"actor","latency-probe","args",Arrays.asList("undo")));
+            int sample=0;
+            for(DrawItem item:editor.items())if(item.kind.equals("stroke")){
+                List<Object> pts=list(item.content.get("points")),point=list(pts.get(pts.size()/2));
+                Map<String,Object> request=object("mode","partial","layer",layer,"page",page,"radius",12,"points",Arrays.asList(Arrays.asList(point.get(0),point.get(1))));
+                long start=System.nanoTime();boolean changed=true;
+                try{proxy.execute(object("document",doc,"actor","latency-probe","args",Arrays.asList("erase","-"),"input",request));}
+                catch(IllegalArgumentException e){if(!"No matching editable content".equals(e.getMessage()))throw e;changed=false;}
+                double commandMs=(System.nanoTime()-start)/1e6;
+                proxy.execute(object("document",doc,"actor","latency-probe","args",Arrays.asList("snapshot")));
+                System.out.println(write(object("phase","varied_erase","sample",sample++,"points",pts.size(),"command_ms",commandMs,"through_snapshot_ms",(System.nanoTime()-start)/1e6,"changed",changed)));
+                if(changed)proxy.execute(object("document",doc,"actor","latency-probe","args",Arrays.asList("undo")));
+            }
         }
         System.out.flush();System.exit(0);
     }

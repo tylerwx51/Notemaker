@@ -24,6 +24,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--serial', help='Measure Android on this device; otherwise JVM')
     parser.add_argument('--android-jar', type=Path, help='Candidate CLI dex jar; default: installed APK')
+    parser.add_argument('--probe', choices=['LatencyProbe','CacheFootprintProbe','CoverageParity'], default='LatencyProbe')
     args = parser.parse_args()
     if not os.environ.get('IN_NIX_SHELL'):
         parser.error('Run through nix-shell')
@@ -45,10 +46,12 @@ def main():
         raise ValueError('Document absent from archive')
     (replica/'LATENCY-SCRATCH').touch()
     jar = ROOT/'apps/cli/build/notemaker.jar'
-    subprocess.run(['javac', '--release', '8', '-cp', str(jar), '-d', str(classes), str(ROOT/'tests/LatencyProbe.java')], check=True)
+    sources=[ROOT/'tests/LatencyProbe.java']
+    if args.probe!='LatencyProbe': sources.append(ROOT/('tests/'+args.probe+'.java'))
+    subprocess.run(['javac', '--release', '8', '-cp', str(jar), '-d', str(classes), *map(str,sources)], check=True)
     if not args.serial:
         with (out/'timings.jsonl').open('w') as log:
-            subprocess.run(['java', '-cp', str(classes)+':'+str(jar), 'LatencyProbe', str(replica), args.document], stdout=log, check=True, timeout=300)
+            subprocess.run(['java', '-cp', str(classes)+':'+str(jar), args.probe, str(replica), args.document], stdout=log, check=True, timeout=600)
         return
     adb = ['adb', '-s', args.serial]
     dex = out/'dex'; dex.mkdir()
@@ -66,9 +69,9 @@ def main():
             subprocess.run(adb+['push', str(args.android_jar), apk], check=True)
         else:
             apk = subprocess.check_output(adb+['shell', 'pm', 'path', 'com.notemaker'], text=True).strip().removeprefix('package:')
-        command = ['env', 'CLASSPATH='+remote+'/probe.jar:'+apk, 'app_process', '/system/bin', 'LatencyProbe', remote+'/replica', args.document]
+        command = ['env', 'CLASSPATH='+remote+'/probe.jar:'+apk, 'app_process', '/system/bin', args.probe, remote+'/replica', args.document]
         with (out/'timings.jsonl').open('w') as log:
-            subprocess.run(adb+['shell', shlex.join(command)], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=300)
+            subprocess.run(adb+['shell', shlex.join(command)], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
     finally:
         subprocess.run(adb+['shell', 'rm', '-rf', remote], check=True)
     print(out/'timings.jsonl')
