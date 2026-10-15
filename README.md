@@ -116,6 +116,17 @@ the app or clearing its data removes locally stored notes and unsynced edits.
 ### Drawing and collaboration
 
 The top bar holds **Notes**, **Pen**, **Erase**, and direct **Undo/Redo** controls.
+Use **Notes → Browse files…** to search saved notes and tap a file to open it.
+The default **Grid** view includes document previews; choose **List** for compact
+rows. The chosen mode is remembered on this device. Previews show the first page
+of paged notes or fit the content of an infinite canvas, and load in the background.
+**Refresh** reloads both the file list and previews.
+**New file** creates a named fixed page, multipage notebook, or infinite canvas;
+an existing name is rejected without changing that file. The browser lists files
+on the selected editing proxy (this device by default), so device files remain
+available offline. **Refresh** reloads the list. Files that exist only on the
+upstream server are not listed; use **Open or create document…** to open those
+by name or change connection settings.
 The narrow left rail groups **Template**, **Layers**, **Shapes**, **Fill**,
 **Select**, **Text**, **Insert**, **Move**, **Pages**, **Agent**, and **More**.
 The robot **Agent** button opens the Agent interface directly.
@@ -205,6 +216,10 @@ This emulator-only review installs the built APK, creates a unique
 through Android's UI automation. It temporarily overrides emulator size/density
 for narrow-screen checks and resets those overrides afterward. Test notes are
 retained; screenshots are saved in `.test-artifacts/ui-review/`.
+
+For file browsing, creation, search and offline restart checks on an isolated
+emulator, run `nix-shell --run 'apps/android/build.sh && python3 tests/files_android.py'`.
+This uses emulator port 5590 and saves artifacts in `.test-artifacts/drawing-android/`.
 
 ### Agent CLI and editable diagrams
 

@@ -28,6 +28,13 @@ public class Integration extends Instrumentation {
             String action=arguments.getString("action","state");
             if(action.equals("erase-performance")){result.putString("stream","PASS erase-performance\n"+com.notemaker.core.Json.write(ErasePerformance.run(this,app))+"\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("coverage")){CoverageCheck.run(this,app);result.putString("stream","PASS coverage\n");finish(Activity.RESULT_OK,result);return;}
+            if(action.equals("file-preview")){
+                Map<String,Object> snapshot=app.replica.read();Bitmap preview=DocumentBrowser.thumbnail(snapshot);
+                int ink=0;for(int y=0;y<preview.getHeight();y++)for(int x=0;x<preview.getWidth();x++)if(preview.getPixel(x,y)!=Color.WHITE)ink++;
+                preview.recycle();if(ink==0)throw new IllegalStateException("Document preview contains no drawing");
+                if(!snapshot.get("revision").equals(app.replica.read().get("revision")))throw new IllegalStateException("Preview changed document state");
+                result.putString("stream","PASS file-preview\n");finish(Activity.RESULT_OK,result);return;
+            }
             if(action.equals("performance")){
                 String metrics=com.notemaker.core.Json.write(Performance.run(this,app));
                 try(java.io.FileOutputStream out=app.openFileOutput("performance.json",0)){out.write(metrics.getBytes("UTF-8"));}

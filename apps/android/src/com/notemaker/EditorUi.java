@@ -398,6 +398,7 @@ final class EditorUi {
                 break;
             default:
                 box = popupBody("Documents", "Open a note or start a new one.");
+                menuAction(box, "Browse files…", true, () -> new DocumentBrowser(app).show());
                 menuAction(box, "Open or create document…", true, app::documentDialog);
                 menuAction(box, "Edit diagram objects…", !app.model.objects.isEmpty(), app::objectDialog);
                 break;

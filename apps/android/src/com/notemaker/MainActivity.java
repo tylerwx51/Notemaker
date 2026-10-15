@@ -213,6 +213,12 @@ public class MainActivity extends Activity {
             getSharedPreferences("settings",0).edit().putString("host",host).putString("document",document).putString("proxyUrl",proxyUrl).putString("proxyToken",proxyToken).apply();configureProxy();update();
         }).setNegativeButton("Cancel",null).show();
     }
+    void openDocument(String name, String documentType){
+        deselect();
+        synchronized(lock){save();document=name;connected=false;load(documentType);canvas.zoom=1;canvas.offsetX=canvas.offsetY=0;}
+        getSharedPreferences("settings",0).edit().putString("document",document).apply();
+        configureProxy();update();
+    }
     void pageDialog(){if(!type.equals("pages"))return;EditText field=new EditText(this);field.setInputType(2);field.setText(""+(page+1));new AlertDialog.Builder(this).setTitle("Go to / create page").setView(field).setPositiveButton("Open",(d,w)->{try{int next=Math.max(0,Math.min(10000,Integer.parseInt(field.getText().toString())-1));deselect();resetDrawingGesture();page=next;save();update();}catch(Exception ignored){}}).show();}
     void history(boolean forward){
         final ArrayList<String> from=forward?redo:undo,to=forward?undo:redo;final String entry;final AppReplica target=replica;

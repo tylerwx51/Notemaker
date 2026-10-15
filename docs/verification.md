@@ -1,5 +1,30 @@
 # Verification
 
+## File browser — 2026-10-14
+
+The grid/list follow-up also passes the APK build and isolated offline browser
+suite. The default grid renders actual saved ink; instrumentation verifies that
+rendering leaves the document revision unchanged. UI checks cover switching to
+List, retaining that choice after an app restart, returning to Grid, and the
+existing creation/search/open flows. Reviewed `files-grid.png` visually; grid
+and list screenshots are retained in `.test-artifacts/drawing-android/`.
+
+Passed through the root Nix shell: Android APK build, 18 CLI checks, 13 test
+framework checks, and `tests/files_android.py` on an isolated API 36 emulator.
+The offline UI check creates a multipage file, rejects empty and duplicate
+names, filters the file list, switches documents, restarts the app, and verifies
+the saved document type. Screenshot and logs are in
+`.test-artifacts/drawing-android/files-*`. The suite is included in the emulator
+tier. The README and ADR 0012 describe replica scope and existing CLI commands.
+Installed on BOOX `eac89823` using the backed-up upgrade workflow. All 52
+data/preferences files matched immediately after installation, and all 131
+actions and actor histories in the active document were preserved after launch.
+The proxy reconnected with zero pending actions. Installed APK SHA-256:
+`0fab2a801425ea46bf3952ea4304d411aa41915425e9b807618f49acba269a94`.
+Backups and smoke results for the grid/list update:
+`.test-artifacts/tablet/20261014-205522-807085/`.
+E Ink behavior and remote proxy browser UI were not checked.
+
 ## Erase latency optimizations — 2026-10-14
 
 Implemented the follow-up on `perf/svg-display-cache`, preserving the baseline

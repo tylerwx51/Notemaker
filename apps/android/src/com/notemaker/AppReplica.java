@@ -27,8 +27,11 @@ final class AppReplica {
         return map(command(Arrays.asList("snapshot"),null));
     }
     Object command(List<String> args,Object input) throws Exception {
-        if(remote())return LocalProxy.request(descriptor,document,"human",args,input);
-        return ReplicaService.ensure(app).execute(object("document",document,"actor","human","args",args,"input",input));
+        return command(document,args,input);
+    }
+    Object command(String name,List<String> args,Object input) throws Exception {
+        if(remote())return LocalProxy.request(descriptor,name,"human",args,input);
+        return ReplicaService.ensure(app).execute(object("document",name,"actor","human","args",args,"input",input));
     }
     void listen(Runnable changed) throws Exception {
         HttpURLConnection connection=new Endpoint(descriptor).open("/api/stream");stream=connection;connection.setReadTimeout(45000);
