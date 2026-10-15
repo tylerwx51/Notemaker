@@ -26,6 +26,7 @@ public class Integration extends Instrumentation {
             Intent intent=new Intent(getTargetContext(),MainActivity.class);intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             MainActivity app=(MainActivity)startActivitySync(intent);android.util.Log.i("NoteMakerPerformance","Activity started");waitForIdleSync();
             String action=arguments.getString("action","state");
+            if(action.equals("erase-performance")){result.putString("stream","PASS erase-performance\n"+com.notemaker.core.Json.write(ErasePerformance.run(this,app))+"\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("coverage")){CoverageCheck.run(this,app);result.putString("stream","PASS coverage\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("performance")){
                 String metrics=com.notemaker.core.Json.write(Performance.run(this,app));

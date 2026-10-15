@@ -392,13 +392,17 @@ public class MainActivity extends Activity {
         ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection",command,session),null);Map<String,Object> snapshot=target.read();runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;try{refreshShared(snapshot);}catch(Exception error){saveError=error.toString();}save();if(command.equals("delete"))deselect();update();});}
             catch(Exception error){runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=error.toString();update();Toast.makeText(this,"Could not update selection: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
+    Map<String,Long> eraseTimings;
     void applyErase(String mode,String layer,int erasePage,JSONArray path,float radius){
+        final Map<String,Long> trace=eraseTimings;if(trace!=null)trace.put("entered",System.nanoTime());
         AppReplica target=replica;final PendingObjectHistory pending;
         synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;update();}
+        if(trace!=null)trace.put("queued",System.nanoTime());
         Map<String,Object> input=Json.object("mode",mode,"layer",layer,"page",erasePage,"points",path==null?Collections.emptyList():Json.parse(path.toString()),"radius",radius);
         ReplicaService.writes.execute(()->{try{
-            target.command(Arrays.asList("erase","-"),input);Map<String,Object> snapshot=target.read();
-            runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;try{refreshShared(snapshot);}catch(Exception e){saveError=e.toString();}save();update();});
+            if(trace!=null)trace.put("worker_start",System.nanoTime());
+            target.command(Arrays.asList("erase","-"),input);if(trace!=null)trace.put("command_done",System.nanoTime());Map<String,Object> snapshot=target.read();if(trace!=null)trace.put("snapshot_done",System.nanoTime());
+            runOnUiThread(()->{if(trace!=null)trace.put("ui_start",System.nanoTime());saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;try{refreshShared(snapshot);}catch(Exception e){saveError=e.toString();}if(trace!=null)trace.put("refresh_done",System.nanoTime());save();update();if(trace!=null)trace.put("ui_done",System.nanoTime());});
         }catch(Exception error){runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=error.toString();update();Toast.makeText(this,"Could not erase: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     void fillAt(float x,float y){
@@ -473,6 +477,7 @@ public class MainActivity extends Activity {
         String inkTransform="";
         long inputStarted;
         java.util.function.LongConsumer drawLatency;
+        Runnable afterDraw;
         boolean useInkCache=true;
         float shapeStartX,shapeStartY,shapeEndX,shapeEndY;boolean shapeDragging;
         boolean transforming;float transformStartX,transformStartY,transformDeltaX,transformDeltaY;long lastPreviewAt;
@@ -485,6 +490,7 @@ public class MainActivity extends Activity {
             cache.draw(c,visible,this::transform,this::drawStroke);
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
+            if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
             if(getWidth()==0||getHeight()==0)return;
             String key=document+"/"+page+"/"+type+"/"+getWidth()+"/"+getHeight()+"/"+zoom+"/"+offsetX+"/"+offsetY;
             if(!key.equals(inkTransform)){for(InkCache item:ink.values())item.bitmap.recycle();ink.clear();inkTransform=key;}
@@ -501,6 +507,7 @@ public class MainActivity extends Activity {
             if(lassoing){c.save();transform(c);paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2/Math.max(.2f,zoom));paint.setPathEffect(new DashPathEffect(new float[]{7,5},0));if(freeformLasso&&lassoPath.size()>1){Path outline=new Path();outline.moveTo(lassoPath.get(0)[0],lassoPath.get(0)[1]);for(int i=1;i<lassoPath.size();i++)outline.lineTo(lassoPath.get(i)[0],lassoPath.get(i)[1]);c.drawPath(outline,paint);}else c.drawRect(lassoStartX,lassoStartY,lassoEndX,lassoEndY,paint);paint.setPathEffect(null);paint.setStyle(Paint.Style.FILL);c.restore();}
             if(inputStarted!=0){if(drawLatency!=null)drawLatency.accept(System.nanoTime()-inputStarted);inputStarted=0;}
             if(shapeDragging&&drawingShape!=null&&!drawingShape.equals("text")){float dx=shapeEndX-shapeStartX,dy=shapeEndY-shapeStartY,left=Math.min(shapeStartX,shapeEndX),top=Math.min(shapeStartY,shapeEndY),w=Math.abs(dx),h=Math.abs(dy);if(drawingShape.equals("line")||drawingShape.equals("arrow")){left=shapeStartX;top=shapeStartY;w=dx;h=dy;if(Math.abs(w)+Math.abs(h)<1){w=1;h=1;}}else{w=Math.max(12,w);h=Math.max(12,h);if(!type.equals("infinite")){left=Math.max(0,Math.min(1000-w,left));top=Math.max(0,Math.min(1400-h,top));}}JSONObject preview=objectValue(drawingShape,left,top,w,h,color,width,objectFillColor);c.save();transform(c);Render.drawObject(model,Json.map(Json.parse(preview.toString())),new com.notemaker.cli.Png(c));c.restore();}
+            if(eraseTimings!=null)eraseTimings.put("draw_done",System.nanoTime());if(afterDraw!=null)afterDraw.run();
         }}
         JSONObject stroke(){return obj("kind","stroke","stroke",current,"layer",selected,"page",page,"color",color,"width",width,"brush",brush,"points",points);}
         boolean previewed(String kind,String id){long now=System.currentTimeMillis();for(Object raw:transformPreviews.values())try{Map<String,Object> preview=Json.map(raw);if(((Number)preview.getOrDefault("expires",0)).longValue()<=now)continue;for(Object item:Json.list(preview.get("entities"))){Map<String,Object> entity=Json.map(item);if(kind.equals(entity.get("kind"))&&id.equals(entity.get("id")))return true;}}catch(Exception ignored){}return false;}
