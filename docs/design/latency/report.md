@@ -125,6 +125,19 @@ queries over brushes, masks, shapes, transforms, text and SVG: both original and
 optimized implementations yield 2,745 hits and SHA-256
 `884efef226477927b9a95463f3aa9297468562a4cf92b824e5a09c43e30a42ca`.
 
+The 1,000-stroke API 36 emulator regression also passed: input-to-draw p95
+stayed between 16.79 and 16.88 ms across the beginning, middle and end windows,
+with zero full ink-cache rebuilds, maximum save queue depth 1, and 732 ms final
+drain. All strokes survived restart, and incremental replay and cached/uncached
+canvas comparisons matched. These are emulator stylus events, not BOOX pen or
+E Ink measurements.
+
+The recommended build was installed on the physical tablet after testing.
+The backup/upgrade check preserved all 49 data/settings files and 358 actions;
+the app reconnected to its configured server with zero pending actions. This is
+a connected smoke check, not a second connected latency benchmark. Detailed
+installation evidence is in `docs/verification.md`.
+
 The remaining target gap is primarily whole-item hit-testing/redraw and the
 atomic action validation, serialization, sync and scheduling path. Further work
 should preserve durability while reducing repeated action/history validation and

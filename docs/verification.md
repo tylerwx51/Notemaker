@@ -22,6 +22,18 @@ rollback when a foreign lease arrives before persistence. Physical original/new
 coverage signatures match over 8,700 queries. Captures and detailed instrumentation
 remain in `.test-artifacts/latency`; published artifacts contain no note content.
 
+The 1,000-stroke performance regression passed on API 36: input-to-draw p95
+16.79–16.88 ms across three windows, maximum save queue 1, final drain 732 ms,
+zero full ink-cache rebuilds, replay equivalence, cached/uncached pixel matching
+and durable restart. Artifacts: `.test-artifacts/performance/`.
+
+Installed the verified build on BOOX `eac89823` using the backed-up upgrade
+workflow. All 49 data/preferences files matched immediately after installation;
+all 358 actions and actor histories were preserved after launch. The configured
+proxy connected with zero pending actions. APK SHA-256:
+`f45a248e17625ea939865071c5acf55a28d8003995f61dee04b878bb823c7dbc`.
+Backup and smoke results: `.test-artifacts/tablet/20261014-200826-752953/`.
+
 ## Erase latency investigation — 2026-10-14
 
 Captured the physical NoteAir6C's app files read-only and profiled a disposable
