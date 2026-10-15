@@ -51,7 +51,13 @@ persisted in private `proxy-config.json`. A replica cannot switch to a different
 main-server database. Uploads carry any already known main-server identity, so
 an unbound parent adopts it before acknowledging receipt. The config also keeps
 the opened-document registry, including names missing from legacy baselines.
-Forwarding-only proxies are deferred.
+Chat API requests from Android are also sent to the selected proxy. Each proxy
+forwards `/api/chats` requests, including the event stream, through its one
+configured upstream; the primary server remains the chat database and worker.
+This is transport forwarding only and does not replicate chat records into
+proxy storage. Requests to a proxy require its bearer token. A proxy with no
+upstream rejects chat requests with a message directing traffic through the
+proxy. Forwarding-only proxies for arbitrary APIs remain deferred.
 
 The main server alone commits the final action order. Each proxy maintains a
 provisional arrival order for offline rendering. An append-only ingress log
@@ -100,6 +106,10 @@ the app. A local acknowledgement survives process restart; an unsaved pen previe
 does not. Using a remote editing proxy requires connectivity to that proxy.
 Disk loss, corrupted acknowledged storage, malicious peers, and server failover
 are outside these guarantees. The browser retains its legacy read API.
+
+The primary server must remain reachable for chat creation and agent runs.
+Offline replica editing remains available, but chat requests are not cached or
+queued by intermediate proxies.
 
 ## Verification
 

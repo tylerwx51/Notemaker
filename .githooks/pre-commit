@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "Running NoteMaker local and emulator checks (network and physical-device tiers are excluded)."
+exec nix-shell --run 'python3 tests/run.py --tier local --tier emulator'

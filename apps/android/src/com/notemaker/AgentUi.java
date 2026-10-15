@@ -30,7 +30,7 @@ final class AgentUi {
     private TextView status;
     private EditText input;
     private Button send, stop;
-    private String base, chat;
+    private String base, proxyToken, chat;
     private volatile int generation;
     private volatile HttpURLConnection stream;
     private boolean rendering, busy;
@@ -68,9 +68,16 @@ final class AgentUi {
     void destroy() { dismiss(); requests.shutdownNow(); }
     void show() {
         if (dialog != null && dialog.isShowing()) return;
-        base = app.host.replaceAll("/+$", "");
-        if (base.isEmpty()) {
-            Toast.makeText(app, "Set a server URL in Notes before opening Agent", Toast.LENGTH_LONG).show(); return;
+        try {
+            if (!app.proxyUrl.isEmpty()) { base=app.proxyUrl.replaceAll("/+$", ""); proxyToken=app.proxyToken; }
+            else {
+                ReplicaService.ensure(app);
+                File descriptor=new File(app.getFilesDir(),"proxy.json");
+                JSONObject proxy=new JSONObject(new String(java.nio.file.Files.readAllBytes(descriptor.toPath()),StandardCharsets.UTF_8));
+                base=proxy.getString("url").replaceAll("/+$", ""); proxyToken=proxy.getString("token");
+            }
+        } catch(Exception e) {
+            Toast.makeText(app, "Cannot connect to the configured proxy: " + e.getMessage(), Toast.LENGTH_LONG).show(); return;
         }
         dialog = new Dialog(app);
         dialog.setTitle("Agent");
@@ -145,6 +152,7 @@ final class AgentUi {
     private JSONObject http(String url, JSONObject data) throws Exception {
         HttpURLConnection c = (HttpURLConnection)new URL(url).openConnection();
         c.setConnectTimeout(5000); c.setReadTimeout(10000);
+        c.setRequestProperty("Authorization", "Bearer " + proxyToken);
         try {
             if (data != null) {
                 c.setRequestMethod("POST"); c.setDoOutput(true); c.setRequestProperty("Content-Type", "application/json");
@@ -263,6 +271,7 @@ final class AgentUi {
                 HttpURLConnection c=null;
                 try {
                     c=(HttpURLConnection)new URL(host+"/api/chats/"+identity+"/stream?after="+after).openConnection();
+                    c.setRequestProperty("Authorization", "Bearer " + proxyToken);
                     c.setConnectTimeout(5000); c.setReadTimeout(10000); stream=c;
                     try(BufferedReader lines=new BufferedReader(new InputStreamReader(c.getInputStream(),StandardCharsets.UTF_8))) {
                         ui.post(() -> { if(token==generation && dialog!=null)status.setText(lastStatus); });

@@ -204,13 +204,16 @@ public final class LocalProxy implements Closeable {
     }
     private static Map<String,String> query(URI uri) throws Exception {Map<String,String> out=new HashMap<>();if(uri.getRawQuery()!=null)for(String part:uri.getRawQuery().split("&")){String[] pair=part.split("=",2);out.put(URLDecoder.decode(pair[0],"UTF-8"),pair.length==2?URLDecoder.decode(pair[1],"UTF-8"):"");}return out;}
     private void handle(Socket socket){try(Socket connection=socket){
-        connection.setSoTimeout(15000);InputStream in=new BufferedInputStream(connection.getInputStream());String request=line(in),authorization="";int length=0,total=0;
+        connection.setSoTimeout(45000);InputStream in=new BufferedInputStream(connection.getInputStream());String request=line(in),authorization="";int length=0,total=0;
         while(true){String header=line(in);if(header.isEmpty())break;total+=header.length();require(total<=16384,"Headers too large");int colon=header.indexOf(':');require(colon>0,"Invalid header");String key=header.substring(0,colon),value=header.substring(colon+1).trim();if(key.equalsIgnoreCase("Content-Length"))length=Integer.parseInt(value);if(key.equalsIgnoreCase("Authorization"))authorization=value;}
         int status=200;Object response;
         try {
             require(authorization.equals("Bearer "+token),"Unauthorized proxy request");String[] parts=request.split(" ");URI uri=new URI(parts[1]);Map<String,String> q=query(uri);String path=uri.getPath();
             if(parts[0].equals("GET")&&path.equals("/api/stream")){events(connection);return;}
-            Map<String,Object> body=object();if(parts[0].equals("POST")){require(length>0&&length<=4000000,"Request exceeds 4 MB");byte[] bytes=new byte[length];new DataInputStream(in).readFully(bytes);body=map(parse(new String(bytes,StandardCharsets.UTF_8)));}
+            byte[] requestBody=null;Map<String,Object> body=object();if(parts[0].equals("POST")){require(length>0&&length<=4000000,"Request exceeds 4 MB");requestBody=new byte[length];new DataInputStream(in).readFully(requestBody);body=map(parse(new String(requestBody,StandardCharsets.UTF_8)));}
+            if(path.equals("/api/chats")||path.startsWith("/api/chats/")){
+                forwardChat(connection,parts[0],uri,requestBody);return;
+            }
             if(parts[0].equals("GET")&&path.equals("/api/info"))response=info(q.getOrDefault("trail",""),q.containsKey("validate"));
             else if(parts[0].equals("GET")&&path.equals("/api/replica")){
                 String doc=q.getOrDefault("document","notes");activeDocument=doc;boolean fresh=!documents.containsKey(doc);response=store(doc).replica(Integer.parseInt(q.getOrDefault("after","0")),Integer.parseInt(q.getOrDefault("pendingAfter","0")));if(fresh)wakeFetch();
@@ -229,6 +232,19 @@ public final class LocalProxy implements Closeable {
         }catch(Exception e){status=400;response=object("error",e.toString());}
         byte[] data=write(response).getBytes(StandardCharsets.UTF_8);OutputStream out=connection.getOutputStream();out.write(("HTTP/1.1 "+status+" "+(status==200?"OK":"Bad Request")+"\r\nContent-Type: application/json\r\nContent-Length: "+data.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));out.write(data);out.flush();
     }catch(Exception e){if(running)System.err.println("Proxy request: "+e);}finally{sockets.remove(socket);}}
+    /** Chat requests belong to the primary server, but follow the same configured proxy chain as notes. */
+    private void forwardChat(Socket socket,String method,URI uri,byte[] body) throws Exception {
+        Endpoint peer=upstream;require(peer!=null,"No upstream proxy configured for chat. All app traffic must go through the proxy.");
+        String path=uri.getRawPath()+(uri.getRawQuery()==null?"":"?"+uri.getRawQuery());
+        HttpURLConnection c=peer.open(path);c.setRequestMethod(method);c.setReadTimeout(path.contains("/stream")?45000:10000);
+        try {
+            if(body!=null){c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");c.setFixedLengthStreamingMode(body.length);try(OutputStream out=c.getOutputStream()){out.write(body);}}
+            int status=c.getResponseCode();InputStream source=status<400?c.getInputStream():c.getErrorStream();
+            OutputStream out=socket.getOutputStream();String type=c.getContentType();
+            out.write(("HTTP/1.1 "+status+" "+(status<400?"OK":"Upstream Error")+"\r\nContent-Type: "+(type==null?"application/json":type)+"\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));out.flush();
+            if(source!=null)try(InputStream in=source){byte[] buffer=new byte[8192];int count;while((count=in.read(buffer))!=-1){out.write(buffer,0,count);out.flush();}}
+        } finally {c.disconnect();}
+    }
     private void events(Socket socket) throws Exception {
         OutputStream out=socket.getOutputStream();out.write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII));long seen=-1;
         while(running){long current;synchronized(changes){if(generation==seen)changes.wait(15000);current=generation;}out.write((current==seen?": heartbeat\n\n":"data: "+current+"\n\n").getBytes(StandardCharsets.UTF_8));out.flush();seen=current;}

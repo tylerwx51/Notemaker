@@ -18,6 +18,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'apps/server'))
 from agent.harness import PiHarness
+from topology_support import Proxy
 
 
 class ChatChecks(unittest.TestCase):
@@ -118,6 +119,59 @@ class ChatChecks(unittest.TestCase):
         self.assertEqual(self.get('/api/chats')['chats'][0]['id'], chats[0])
         events = self.get('/api/chats/' + chats[0] + '/events')['events']
         self.assertEqual(events[-1]['event']['status'], 'interrupted')
+
+    def test_chat_api_forwards_through_every_proxy_hop(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = Proxy(root / 'first', upstream=self.url)
+            second = Proxy(root / 'second', upstream=first.descriptor_path)
+            self.addCleanup(second.stop)
+            self.addCleanup(first.stop)
+
+            def get(path):
+                request = urllib.request.Request(second.descriptor['url'] + path,
+                    headers={'Authorization': 'Bearer ' + second.descriptor['token']})
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    if '/stream?' in path or path.endswith('/stream'):
+                        rows=[]
+                        for line in response:
+                            if line.strip():
+                                row=json.loads(line);rows.append(row)
+                                if row.get('event',{}).get('kind')=='assistant_end':break
+                        return rows
+                    return json.load(response)
+
+            def post(path, value):
+                request = urllib.request.Request(second.descriptor['url'] + path,
+                    json.dumps(value).encode(), {'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + second.descriptor['token']})
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return json.load(response)
+
+            options = get('/api/chats/options')
+            config = options['defaults'] | {'id': str(uuid.uuid4()), 'harness': 'mock'}
+            chat = post('/api/chats', config)
+            self.assertEqual(get('/api/chats')['chats'][0]['id'], chat['id'])
+            self.assertEqual(get('/api/chats/' + chat['id'])['id'], chat['id'])
+            message = {'request': str(uuid.uuid4()), 'text': 'through proxy chain', 'document': 'routing'}
+            post('/api/chats/' + chat['id'] + '/messages', message)
+            events = get('/api/chats/' + chat['id'] + '/stream?after=0')
+            self.assertTrue(any(row.get('event',{}).get('kind') == 'assistant_end' for row in events), events)
+            self.assertTrue(get('/api/chats/' + chat['id'] + '/events?after=0')['events'])
+
+            # A long mock run gives Stop a deterministic window and exercises its POST forwarding.
+            running = post('/api/chats', options['defaults'] | {'id': str(uuid.uuid4()), 'harness': 'mock'})
+            post('/api/chats/' + running['id'] + '/messages',
+                 {'request': str(uuid.uuid4()), 'text': 'x' * 32000, 'document': 'routing'})
+            self.assertTrue(post('/api/chats/' + running['id'] + '/stop', {})['stopping'])
+
+    def test_android_agent_chat_transport_is_proxy_only(self):
+        source = (ROOT / 'apps/android/src/com/notemaker/AgentUi.java').read_text()
+        self.assertNotIn('app.host', source,
+            'Proxy routing check failed: Android sent a request directly to the upstream. All app network traffic must go through the proxy.')
+        self.assertIn('ReplicaService.ensure(app)', source)
+        self.assertIn('app.proxyUrl', source)
+        self.assertIn('Authorization", "Bearer " + proxyToken', source)
 
     def test_stop_and_concurrent_send(self):
         chat = self.create()

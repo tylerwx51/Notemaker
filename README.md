@@ -417,6 +417,12 @@ nix-shell --run 'python3 tests/run.py --tier hardware --tier network --list'
 nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --tool-switch-only'
 ```
 
+The repository pre-commit hook runs both local and emulator tiers, excluding
+the external network and physical-tablet tiers. Enable it for this checkout with
+`git config core.hooksPath .githooks`. It runs through `nix-shell` and blocks a
+commit if a check fails. Chat proxy-routing checks verify forwarding through a
+two-proxy chain and guard Android against using the upstream URL directly.
+
 The runner builds the required artifacts and runs suites sequentially to avoid
 emulator port conflicts and interference with latency measurements. Use
 `--no-build` only with current build artifacts. Existing individual scripts
@@ -568,6 +574,9 @@ or editing notes. Tool rows show filenames or commands; tap one for readable
 arguments and results. The popup shrinks above the keyboard while composing,
 keeping the message field and Send button visible, and expands when it closes.
 
+Android chat requests use the selected editing proxy (the tablet's local proxy
+by default), then follow its configured upstream proxy chain to the primary
+server's Chat API. Document reads and edits use the same proxy workflow.
 Replies stream while the agent works. Closing the popup or disconnecting the
 tablet does not stop the agent; reopen the chat to catch up. **Stop** cancels the
 run but retains completed edits. Chats persist on the server; unsent drafts stay
