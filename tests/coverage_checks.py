@@ -158,6 +158,15 @@ class CoverageChecks(unittest.TestCase):
         finally:
             peer.stop()
 
+    def test_repeated_collinear_and_backtracking_erase_points(self):
+        self.put(object='box',shape='rect',x=0,y=0,w=100,h=100,fill=-1)
+        self.call('erase','-',value=dict(mode='partial',radius=3,points=[[10,50],[10,50],[30,50],[70,50],[30,50],[30,80]]))
+        for x,y in [(10,50),(50,50),(70,50),(30,70)]:
+            self.assertEqual(self.query(x,y),[])
+        self.assertEqual(self.query(50,70),['box'])
+        self.call('undo')
+        self.assertEqual(self.query(50,50),['box'])
+
     def test_appended_ink_does_not_reuse_old_action_metadata(self):
         self.call('append','-',value=dict(kind='stroke',stroke='raw',layer='base',page=0,width=4,color=-16777216,points=[[0,50,1],[100,50,1]]))
         original=self.call('inspect')['strokes'][0]

@@ -6,6 +6,8 @@ import java.util.Collections;
 
 public final class Png implements Render.Surface {
     private static final java.util.Map<String,com.caverock.androidsvg.SVG> SVGS=new java.util.LinkedHashMap<String,com.caverock.androidsvg.SVG>(16,.75f,true){protected boolean removeEldestEntry(java.util.Map.Entry<String,com.caverock.androidsvg.SVG> e){return size()>16;}};
+    private static final java.util.Map<java.util.List<Object>,Picture> PICTURES=new java.util.LinkedHashMap<java.util.List<Object>,Picture>(16,.75f,true){protected boolean removeEldestEntry(java.util.Map.Entry<java.util.List<Object>,Picture> e){return size()>64;}};
+    public static boolean useSvgPictures=true;
     private final Canvas canvas;
     private final java.util.Deque<Integer> clips=new java.util.ArrayDeque<>();
     public static int[] coverageTile(Model m,java.util.Map<String,Object> item,int x,int y,int size){Bitmap image=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888);try{Canvas c=new Canvas(image);c.translate(-x,-y);Render.drawItem(m,item,new Png(c));int[] pixels=new int[size*size];image.getPixels(pixels,0,size,0,0,size,size);return pixels;}finally{image.recycle();}}
@@ -53,7 +55,14 @@ public final class Png implements Render.Surface {
         synchronized(SVGS){
             com.caverock.androidsvg.SVG svg=SVGS.get(source);
             if(svg==null){try{svg=com.caverock.androidsvg.SVG.getFromString(SvgAsset.viewport(source));}catch(com.caverock.androidsvg.SVGParseException e){throw new IllegalArgumentException("Could not render SVG",e);}SVGS.put(source,svg);}
-            canvas.save();try{canvas.translate((float)x,(float)y);canvas.clipRect(0,0,(float)w,(float)h);svg.renderToCanvas(canvas,new RectF(0,0,(float)w,(float)h));}finally{canvas.restore();}
+            canvas.save();try{
+                canvas.translate((float)x,(float)y);canvas.clipRect(0,0,(float)w,(float)h);
+                if(useSvgPictures){
+                    java.util.List<Object> key=java.util.Arrays.asList(source,(float)w,(float)h);Picture picture=PICTURES.get(key);
+                    if(picture==null){picture=new Picture();Canvas recording=picture.beginRecording(Math.max(1,(int)Math.ceil(w)),Math.max(1,(int)Math.ceil(h)));try{svg.renderToCanvas(recording,new RectF(0,0,(float)w,(float)h));}finally{picture.endRecording();}PICTURES.put(key,picture);}
+                    canvas.drawPicture(picture);
+                }else svg.renderToCanvas(canvas,new RectF(0,0,(float)w,(float)h));
+            }finally{canvas.restore();}
         }
     }
     public void saveTransform(double cx,double cy,double rotation,boolean flipX,boolean flipY){transforms.push(canvas.save());canvas.translate((float)cx,(float)cy);canvas.rotate((float)rotation);canvas.scale(flipX?-1:1,flipY?-1:1);canvas.translate((float)-cx,(float)-cy);}

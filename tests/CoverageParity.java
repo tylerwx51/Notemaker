@@ -12,6 +12,7 @@ public final class CoverageParity {
             List<Object> points=new ArrayList<>();for(int i=0;i<90;i++)points.add(Arrays.asList(60+40*Math.sin(i*.3),60+40*Math.cos(i*.7),.1+random.nextDouble()*.9));
             Map<String,Object> stroke=object("kind","stroke","stroke",brush,"layer","base","page",0,"color",-16777216,"width",7,"brush",brush,"points",points);
             for(boolean masked:new boolean[]{false,true}){
+                stroke=new LinkedHashMap<>(stroke); // Published model snapshots are immutable.
                 if(masked)stroke.put("erasures",Arrays.asList(Geometry.json(Geometry.rect(-45,-25,30,110)),Geometry.json(Geometry.capsule(new double[]{-40,-50},new double[]{30,0},9))));
                 Model model=new Model();model.apply(stroke);DrawItem item=new DrawItem(model,stroke);
                 for(int i=0;i<300;i++){

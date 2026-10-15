@@ -16,7 +16,7 @@ final class InkCache {
         boolean changed=false,reordered=false;RectF dirty=new RectF();
         List<String> oldOrder=new ArrayList<>(),newOrder=new ArrayList<>();
         for(String id:drawn.keySet())if(visible.containsKey(id))oldOrder.add(id);
-        boolean added=false;for(String id:visible.keySet())if(drawn.containsKey(id)){newOrder.add(id);if(added)reordered=true;}else added=true;
+        boolean added=false;for(String id:visible.keySet())if(drawn.containsKey(id)){newOrder.add(id);if(added)changed=true;}else added=true;
         reordered|=!oldOrder.equals(newOrder);
         for(Map.Entry<String,Map<String,Object>> old:drawn.entrySet()){
             Map<String,Object> next=visible.get(old.getKey());
@@ -43,10 +43,12 @@ final class InkCache {
         drawn=visible;destination.drawBitmap(bitmap,0,0,null);
     }
     private static boolean sameBase(Map<String,Object> a,Map<String,Object> b){
+        if("object".equals(a.get("kind"))||"object".equals(b.get("kind")))return a.equals(b);
         for(String key:Arrays.asList("color","width","page","layer","brush","points"))if(!Objects.equals(a.get(key),b.get(key)))return false;return true;
     }
     private static boolean sameInk(Map<String,Object> a,Map<String,Object> b){return a==b||(sameBase(a,b)&&Objects.equals(a.get("erasures"),b.get("erasures")));}
     private static RectF bounds(Map<String,Object> stroke){
+        if("object".equals(stroke.get("kind"))){double[] b=new DrawItem(new Model(),stroke).paintBounds(com.notemaker.cli.ItemCoverage::create);return new RectF((float)b[0]-1,(float)b[1]-1,(float)b[2]+1,(float)b[3]+1);}
         float l=Float.POSITIVE_INFINITY,t=l,r=Float.NEGATIVE_INFINITY,b=r,pad=((Number)stroke.get("width")).floatValue()*2+1;
         for(Object raw:list(stroke.get("points"))){List<Object> p=list(raw);float x=((Number)p.get(0)).floatValue(),y=((Number)p.get(1)).floatValue();l=Math.min(l,x);t=Math.min(t,y);r=Math.max(r,x);b=Math.max(b,y);}
         return new RectF(l-pad,t-pad,r+pad,b+pad);

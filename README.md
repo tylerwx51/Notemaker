@@ -519,6 +519,26 @@ The probe uses the installed APK's core and Android renderer in a separate
 process, with an offline replica under a temporary device directory. It measures
 coverage generation, erase commands, snapshots, PNG rendering and a five-request
 write queue. It does not measure touch-to-display or E Ink refresh latency.
+
+For input-to-app-draw measurements on a physical tablet, build the APK and run
+the isolated-package harness. It installs `com.notemaker.latency`, copies only
+the selected note into it, disables its upstream, measures and undoes each edit,
+then uninstalls that package. The original app's note and settings are preserved.
+Output directories must be fresh; all captures and raw metrics stay private
+under `.test-artifacts`. Use `--mode item` for whole-item erasing.
+
+```sh
+nix-shell --run 'apps/cli/build.sh && apps/android/build.sh'
+nix-shell --run 'python3 tests/tablet_erase_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/ui-run'
+# Coverage retention memory or exact old/new geometry parity on a disposable replica:
+nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --android-jar apps/cli/build/notemaker-android.jar --probe CacheFootprintProbe --output .test-artifacts/latency/memory-run'
+# Replace CacheFootprintProbe with CoverageParity to compare hit-test signatures.
+# Regenerate published charts from sanitized measurements; matplotlib comes from shell.nix.
+nix-shell --run 'python3 tests/plot_drawing_latency.py'
+```
+
+See the [latency experiment report](docs/design/latency/report.md) for measured
+tradeoffs, retained experiment branches and the remaining gap to 30 ms.
 Omit `--serial` for JVM measurements; `--android-jar` tests a candidate CLI dex jar
 without installing it. Build the JVM CLI first. Captures and reports may contain
 private note data and stay under `.test-artifacts/`.

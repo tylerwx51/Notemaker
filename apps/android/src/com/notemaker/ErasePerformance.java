@@ -12,7 +12,8 @@ final class ErasePerformance {
         CoverageCheck.cachePixels();
         ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);test.waitForIdleSync();
         Model original=Store.model(app.replica.read());List<Object> samples=new ArrayList<>();
-        test.runOnMainSync(()->{app.setDrawingTool(null);app.erase=true;app.eraserMode="partial";app.eraserRadius=12;});
+        String mode=test.arguments.getString("mode","partial");
+        test.runOnMainSync(()->{app.setDrawingTool(null);app.erase=true;app.eraserMode=mode;app.eraserRadius=12;});
         for(DrawItem item:new LayerEditor(original,app.selected,app.page).items()){
             if(!item.kind.equals("stroke"))continue;
             List<Object> pts=list(item.content.get("points")),point=list(pts.get(pts.size()/2));
@@ -22,7 +23,7 @@ final class ErasePerformance {
             Map<String,Long> trace=new ConcurrentHashMap<>();
             test.runOnMainSync(()->{
                 app.eraseTimings=trace;
-                app.canvas.afterDraw=()->{if(feedback[0]==0&&!app.canvas.erasePreviews.isEmpty())feedback[0]=System.nanoTime()-start[0];Map<String,Object> current=app.model.strokes.get(item.id);if(current!=null&&!Objects.equals(oldMasks,current.get("erasures"))){elapsed[0]=System.nanoTime()-start[0];if(feedback[0]==0)feedback[0]=elapsed[0];app.canvas.afterDraw=null;drawn.countDown();}};
+                app.canvas.afterDraw=()->{if(feedback[0]==0&&!app.canvas.erasePreviews.isEmpty()){feedback[0]=System.nanoTime()-start[0];trace.put("feedback_draw_start",trace.get("draw_start"));trace.put("feedback_draw_done",System.nanoTime());}Map<String,Object> current=app.model.strokes.get(item.id);if(current!=null&&(!Objects.equals(oldMasks,current.get("erasures"))||Boolean.FALSE.equals(app.model.active.get(item.id)))){elapsed[0]=System.nanoTime()-start[0];if(feedback[0]==0)feedback[0]=elapsed[0];app.canvas.afterDraw=null;drawn.countDown();}};
                 start[0]=System.nanoTime();Integration.gesture(app,x,y,0,0,false);
             });
             Model.require(drawn.await(15,TimeUnit.SECONDS),"Updated content was not drawn");
@@ -34,9 +35,12 @@ final class ErasePerformance {
             test.runOnMainSync(()->{try{app.refreshShared(restored);app.update();}catch(Exception e){throw new RuntimeException(e);}});
             test.waitForIdleSync();Thread.sleep(100);
         }
-        Map<String,Object> report=object("samples",samples);
+        Map<String,Object> report=object("samples",samples,"mode",mode,"display_refresh_hz",app.getWindow().getDecorView().getDisplay().getRefreshRate());
         // Undo advances version metadata, so compare visible entity geometry separately.
-        Model after=Store.model(app.replica.read());report.put("geometry_restored",original.strokes.equals(after.strokes)&&original.active.equals(after.active));
+        Model after=Store.model(app.replica.read());boolean restored=original.strokes.equals(after.strokes)&&original.objects.equals(after.objects);
+        for(String id:original.strokes.keySet())restored&=Boolean.FALSE.equals(original.active.get(id))==Boolean.FALSE.equals(after.active.get(id));
+        for(String id:original.objects.keySet())restored&=Boolean.FALSE.equals(original.objectActive.get(id))==Boolean.FALSE.equals(after.objectActive.get(id));
+        Model.require(restored,"Undo did not restore source geometry and visibility");report.put("geometry_restored",restored);
         try(java.io.FileOutputStream out=app.openFileOutput("erase-performance.json",0)){out.write(write(report).getBytes("UTF-8"));}
         return report;
     }

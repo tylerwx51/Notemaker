@@ -101,8 +101,10 @@ Path adapters implement vector geometry; text uses native glyph outlines. Images
 SVG assets and SVG-backed figure shapes use lazy 64×64 alpha tiles at one local
 document unit per pixel, with alpha > 0 as the occupancy threshold. Empty/full
 tiles use sentinels and mixed tiles use 512-byte bitsets. Each item caches at most
-128 tiles; the LRU retains 16 items, bounding mixed-tile payload to 1 MiB plus
-geometry, source assets and indexing overhead. Individual raster queries exceeding
+128 tiles; the LRU now retains 10,000 geometry variants. This is an entry limit,
+not a 10 MB memory limit: worst-case mixed-tile payload alone could reach 625 MiB,
+in addition to geometry, source assets and indexing overhead. Tiles remain lazy;
+the measured vector-only workload does not allocate this worst case. Individual raster queries exceeding
 16384 tiles fail explicitly. Asset decoding retains existing renderer limits.
 Font metrics, SVG interpretation and antialiasing can differ across platforms;
 coverage follows each platform's rendering, rather than claiming identical
@@ -187,7 +189,7 @@ Existing drawing, collaboration and conflict suites cover their shared paths.
 Executed results are recorded in `docs/verification.md`. Physical E Ink/stylus
 behavior and a remote server rollout remain untested.
 
-### Measured performance limitation — 2026-10-14
+### Performance follow-up — 2026-10-14
 
 Physical-tablet profiling on a disposable copy of an existing note found that
 `DrawItem.intersects` requests exact coverage before rejecting distant items by
@@ -196,9 +198,30 @@ a layer scan exceeding the 16-item coverage cache rebuilds those unions on later
 gestures. On the measured layer, 36 active items with 3,296 ink points required
 about 1.25 seconds per erase. This work runs inside the document transaction and
 on the app's single write queue, allowing queued input to exceed five seconds.
-This is a known implementation limitation, not a requirement of the coverage
-model. The next optimization should reject candidates using conservative bounds
-before exact coverage, and preserve reusable vector coverage within a deliberate
-memory budget. Keep layer scoping and atomic document edits intact.
-See `tests/drawing_latency.py` and `docs/verification.md` for measurements and
-scope; the diagnostic bounds experiment does not change production behavior.
+The implemented follow-up rejects distant candidates before exact coverage,
+retains 10,000 recent coverage variants, packs stroke primitives into double
+arrays, and constructs native query geometry only for nearby primitives. Native
+paths are no longer incrementally unioned for ink. A separate 10,000-entry
+identity cache retains bounds and local coordinates for immutable published
+snapshots. Eviction and source replacement rebuild derived data; neither cache
+stores selected-layer state. Rejected edits retain valid Journal materialization.
+
+Android reuses SVG Pictures (64 entries) and its existing three display-sized
+layer bitmaps for both objects and ink. Edits repaint the connected region of
+overlapping paint bounds to preserve antialias pixels. In-process snapshots retain
+model indexes; HTTP JSON and the durable journal format are unchanged.
+
+Pending erase feedback is a scoped visual prediction on gesture release. Partial
+erase clips only the target layer; whole-item erase temporarily hides exact-hit
+candidates. The shared proxy still validates and journals the action. Success
+replaces the preview with authoritative state, and rejection removes it. A foreign
+lease suppresses prediction; a late lease is checked again by the actual command.
+Published model content remains immutable; prediction never changes actor history.
+
+The compact coverage cache measured 41.8 MiB for 10,000 distinct 20-point strokes,
+excluding prepared snapshots, document/history, image assets and display caches.
+The native-path experiment used 220.2 MiB and is preserved on a separate branch.
+Entry caps are deliberately not described as a total byte budget. Under 30 ms
+is approached for partial feedback, but is not achieved for every erase or for
+durable completion. See the [latency report](../design/latency/report.md) for
+measurements, branches, limits and reproducible charts.

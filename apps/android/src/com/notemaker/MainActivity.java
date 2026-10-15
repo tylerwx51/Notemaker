@@ -396,7 +396,8 @@ public class MainActivity extends Activity {
     Map<String,Long> eraseTimings;
     static final class ErasePreview {
         final String layer;final int page;final List<Path> paths=new ArrayList<>();
-        ErasePreview(String layer,int page,Map<String,Object> input){this.layer=layer;this.page=page;for(double[][] region:DrawingActions.eraseRegions(input))paths.add(com.notemaker.cli.ItemCoverage.path(region,true));}
+        final Set<String> hidden=new HashSet<>();
+        ErasePreview(Model model,String layer,int page,Map<String,Object> input){this.layer=layer;this.page=page;if("partial".equals(input.get("mode"))){for(double[][] region:DrawingActions.eraseRegions(input))paths.add(com.notemaker.cli.ItemCoverage.path(region,true));}else for(Object raw:DrawingActions.erase(model,input,com.notemaker.cli.ItemCoverage::create)){Map<String,Object> op=Json.map(raw);String kind="active".equals(op.get("kind"))?"stroke":"object";hidden.add(kind+":"+op.get(kind));}}
     }
     void applyErase(String mode,String layer,int erasePage,JSONArray path,float radius){
         final Map<String,Long> trace=eraseTimings;if(trace!=null)trace.put("entered",System.nanoTime());
@@ -404,7 +405,7 @@ public class MainActivity extends Activity {
         final String previewId=id();Map<String,Object> input=Json.object("mode",mode,"layer",layer,"page",erasePage,"points",path==null?Collections.emptyList():Json.parse(path.toString()),"radius",radius);
         // Do not predict an edit when coordination state advertises a foreign lock.
         boolean foreign=false;for(Object raw:leases.values())if(!"human".equals(Json.map(raw).get("actor"))){foreign=true;break;}
-        if(mode.equals("partial")&&!foreign)try{canvas.erasePreviews.put(previewId,new ErasePreview(layer,erasePage,input));}catch(IllegalArgumentException ignored){}
+        if(!foreign)try{canvas.erasePreviews.put(previewId,new ErasePreview(model,layer,erasePage,input));}catch(IllegalArgumentException ignored){}
         synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;update();}
         if(trace!=null)trace.put("queued",System.nanoTime());
         ReplicaService.writes.execute(()->{try{
@@ -473,6 +474,7 @@ public class MainActivity extends Activity {
 
     class CanvasView extends View {
         final Map<String,ErasePreview> erasePreviews=new LinkedHashMap<>();
+        boolean pendingErase(String kind,String id,String layer){for(ErasePreview preview:erasePreviews.values())if(preview.layer.equals(layer)&&preview.page==page&&preview.hidden.contains(kind+":"+id))return true;return false;}
         Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
         float zoom=1,offsetX=0,offsetY=0,lastX,lastY;
         JSONArray points,eraserPoints;String current;long lastSent;
@@ -496,8 +498,9 @@ public class MainActivity extends Activity {
         void settledInk(Canvas c,String layer){
             InkCache cache=ink.get(layer);if(cache==null){if(ink.size()>=3){String oldest=ink.keySet().iterator().next();ink.remove(oldest).bitmap.recycle();}cache=new InkCache(getWidth(),getHeight());ink.put(layer,cache);}
             LinkedHashMap<String,Map<String,Object>> visible=new LinkedHashMap<>();
-            for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey())))visible.put(e.getKey(),stroke);}
-            cache.draw(c,visible,this::transform,(image,stroke)->Render.drawStroke(stroke,new com.notemaker.cli.Png(image)));
+            for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer))visible.put(e.getKey(),stroke);}
+            for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer))visible.put("object:"+e.getKey(),new DrawItem(model,o).geometry());}
+            cache.draw(c,visible,this::transform,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
             if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
@@ -509,9 +512,9 @@ public class MainActivity extends Activity {
             for(String layer:layers.keySet())if(visible(layer)){
                 c.save();Matrix before=c.getMatrix();transform(c);for(ErasePreview preview:erasePreviews.values())if(preview.layer.equals(layer)&&preview.page==page)for(Path cut:preview.paths)c.clipOutPath(cut);c.setMatrix(before);
                 if(useInkCache&&!previewing)settledInk(c,layer);
-                else {c.save();transform(c);for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject s=e.getValue();if(!e.getKey().equals(current)&&layer.equals(s.optString("layer"))&&s.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!(previewing&&previewed("stroke",e.getKey())))drawStroke(c,s);}c.restore();}
+                else {c.save();transform(c);for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject s=e.getValue();if(!e.getKey().equals(current)&&layer.equals(s.optString("layer"))&&s.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)&&!(previewing&&previewed("stroke",e.getKey())))drawStroke(c,s);}c.restore();}
                 c.save();transform(c);
-                for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!(previewing&&previewed("object",e.getKey())))Render.drawObject(model,o,new com.notemaker.cli.Png(c));}
+                if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)&&!(previewing&&previewed("object",e.getKey())))Render.drawObject(model,o,new com.notemaker.cli.Png(c));}
                 if(layer.equals(selected)&&points!=null&&current!=null)drawStroke(c,stroke());c.restore();
                 c.restore();
             }

@@ -188,7 +188,7 @@ public final class Main {
         for(String key:placement.keySet())require(Arrays.asList("x","y","w","h","layer","page","object").contains(key),"Unknown image placement field: "+key);return placement;
     }
     static Map<String,Object> snapshot(Map<String,Object> s){
-        Model model=Store.model(s);Map<String,Object> out=object("effectiveModel",model.json(),"conflicts",model.visibleConflicts(),"revision",s.get("revision"),"cursor",s.get("cursor"),"eventCount",list(s.get("events")).size(),"pendingCount",list(s.get("pending")).size());
+        Model model=Store.model(s);Map<String,Object> out=new Store.Snapshot(model);out.putAll(object("effectiveModel",model.json(),"conflicts",model.visibleConflicts(),"revision",s.get("revision"),"cursor",s.get("cursor"),"eventCount",list(s.get("events")).size(),"pendingCount",list(s.get("pending")).size()));
         for(String key:Arrays.asList("hidden","undo","redo","selected","page","clipboard"))if(s.containsKey(key))out.put(key,s.get(key));return out;
     }
     private static byte[] imageBytes(String path)throws IOException{

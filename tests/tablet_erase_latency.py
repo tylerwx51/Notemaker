@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--document',required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
+    parser.add_argument('--mode',choices=['partial','item'],default='partial')
     args=parser.parse_args()
     if not os.environ.get('IN_NIX_SHELL'): parser.error('Run through nix-shell')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False,mode=0o700)
@@ -71,11 +72,16 @@ def main():
         call('push',str(replica),remote)
         call('shell','run-as',PACKAGE,'cp','-r',remote+'/files',remote+'/shared_prefs','.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')
-        output=call('shell','am','instrument','-w','-e','action','erase-performance',PACKAGE+'/com.notemaker.Integration',timeout=240).decode()
+        output=call('shell','am','instrument','-w','-e','action','erase-performance','-e','mode',args.mode,PACKAGE+'/com.notemaker.Integration',timeout=240).decode()
         (out/'instrumentation.txt').write_text(output)
         assert 'PASS erase-performance' in output,output
         (out/'metrics.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/erase-performance.json'))
-        print((out/'metrics.json').read_text())
+        report=json.loads((out/'metrics.json').read_text());samples=report['samples']
+        summary={'samples':len(samples),'geometry_restored':report['geometry_restored']}
+        for key in ['input_to_feedback_ms','input_to_updated_draw_ms']:
+            if samples and key in samples[0]:
+                values=sorted(s[key] for s in samples);summary[key+'_p95']=values[int(.95*len(values))]
+        print(json.dumps(summary))
     finally:
         (out/'logcat.txt').write_bytes(call('logcat','-d','-s','AndroidRuntime','NoteMaker','NoteMakerPerformance'))
         if installed: call('uninstall',PACKAGE)

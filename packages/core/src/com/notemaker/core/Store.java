@@ -27,7 +27,9 @@ public final class Store {
     }
     public interface Edit { void apply(Map<String,Object> state) throws Exception; }
     private Map<String,Object> locked(Edit edit) throws Exception {Model.require(edit==null||writable,"Writes require the selected proxy");return Journal.access(file,document,edit,writable);}
-    public static Model model(Map<String,Object> state){return state.containsKey("effectiveModel")?Model.fromJson(map(state.get("effectiveModel"))):state instanceof Journal.State?new Model(((Journal.State)state).model):new Model(state);}
+    /** In-process snapshots retain the immutable materialization; JSON clients use effectiveModel. */
+    public static final class Snapshot extends LinkedHashMap<String,Object>{private final Model model;public Snapshot(Model model){this.model=new Model(model);}}
+    public static Model model(Map<String,Object> state){return state instanceof Snapshot?new Model(((Snapshot)state).model):state.containsKey("effectiveModel")?Model.fromJson(map(state.get("effectiveModel"))):state instanceof Journal.State?new Model(((Journal.State)state).model):new Model(state);}
     public Model model() throws Exception {return model(read());}
     private Map<String,Object> overlay(Map<String,Object> state){state.remove("leases");state.remove("activeSessions");state.put("leases",copy(coordination.leases));state.put("activeSessions",copy(coordination.sessions));return state;}
     public Map<String,Object> read() throws Exception {synchronized(coordination){return overlay(locked(null));}}

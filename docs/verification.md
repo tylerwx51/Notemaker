@@ -1,5 +1,27 @@
 # Verification
 
+## Erase latency optimizations — 2026-10-14
+
+Implemented the follow-up on `perf/svg-display-cache`, preserving the baseline
+and high-memory experiments on separate branches. The [report and matplotlib
+charts](design/latency/report.md) include sanitized measurements, methodology,
+branch references, cache memory limits and the remaining latency gap.
+
+Final physical BOOX partial-erase feedback measured median 21.2 ms, p95 30.1 ms,
+27/29 under 30 ms. A prior run measured median 15.7 ms, p95 32.0 ms. Whole-item
+feedback in the verified repeat measured median 54.9 ms, p95 86.2 ms. Durable
+updated draws remained around 85–102 ms median. These are app draw timings on
+the reported 40 Hz display, not physical E Ink scanout. The offline isolated
+package restored source geometry/visibility after every trial and was removed.
+
+Passed through Nix: CLI (18), coverage (11), drawing tools (9), selection (20),
+proxy (9), conflicts (6), browser rendering/export, Android coverage and panels.
+Coverage instrumentation additionally verifies exact cache/full-render pixels
+for nine edit states, fractional SVG Picture replay, and pending feedback
+rollback when a foreign lease arrives before persistence. Physical original/new
+coverage signatures match over 8,700 queries. Captures and detailed instrumentation
+remain in `.test-artifacts/latency`; published artifacts contain no note content.
+
 ## Erase latency investigation — 2026-10-14
 
 Captured the physical NoteAir6C's app files read-only and profiled a disposable

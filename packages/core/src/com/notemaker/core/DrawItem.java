@@ -54,6 +54,14 @@ public final class DrawItem {
         double[][] p=new double[region.length][];for(int i=0;i<p.length;i++)p[i]=local(region[i][0],region[i][1]);double[] q=Geometry.bounds(p);if(coarse!=null&&!overlaps(coarse,q))return false;Coverage area=coverage(factory);return overlaps(area.bounds(),q)&&area.intersects(p);
     }
     public boolean hasCoverage(Coverage.Factory factory){Coverage coverage=coverage(factory);double[] b=coverage.bounds();return b[2]>b[0]&&b[3]>b[1]&&coverage.intersects(Geometry.rect(b[0],b[1],b[2]-b[0],b[3]-b[1]));}
+    /** Conservative document-space paint bounds, including native glyph overhangs. */
+    public double[] paintBounds(Coverage.Factory factory){
+        double[] b=coverage(factory).bounds(),out={Double.POSITIVE_INFINITY,Double.POSITIVE_INFINITY,Double.NEGATIVE_INFINITY,Double.NEGATIVE_INFINITY};
+        if(kind.equals("stroke")){double[] origin=local(0,0);return new double[]{b[0]-origin[0],b[1]-origin[1],b[2]-origin[0],b[3]-origin[1]};}
+        Map<String,Object> o=geometry();double w=number(o,"w"),h=number(o,"h"),angle=Math.toRadians(((Number)o.getOrDefault("rotation",0)).doubleValue());
+        for(double x:new double[]{b[0],b[2]})for(double y:new double[]{b[1],b[3]}){double dx=(x-w/2)*(Boolean.TRUE.equals(o.get("flipX"))?-1:1),dy=(y-h/2)*(Boolean.TRUE.equals(o.get("flipY"))?-1:1),px=number(o,"x")+w/2+dx*Math.cos(angle)-dy*Math.sin(angle),py=number(o,"y")+h/2+dx*Math.sin(angle)+dy*Math.cos(angle);out[0]=Math.min(out[0],px);out[1]=Math.min(out[1],py);out[2]=Math.max(out[2],px);out[3]=Math.max(out[3],py);}
+        return out;
+    }
     public Map<String,Object> erase(List<double[][]> regions){Map<String,Object> next=map(copy(content));for(String key:Arrays.asList("id","actor","seq","at","action","session","bases","visibility"))next.remove(key);List<Object> masks=new ArrayList<>(list(next.getOrDefault("erasures",Collections.emptyList())));Map<String,Object> o=geometry();for(double[][] region:regions){double[][] p=new double[region.length][];for(int i=0;i<p.length;i++){p[i]=local(region[i][0],region[i][1]);if(kind.equals("object")){p[i][0]/=unit(number(o,"w"));p[i][1]/=unit(number(o,"h"));}}masks.add(Geometry.json(p));}next.put("erasures",masks);Model.validate(next);return next;}
     private static double unit(double n){return n==0?1:n;}
     /** Decode persistent local masks into the unrotated paint coordinates. */
