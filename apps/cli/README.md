@@ -68,11 +68,11 @@ The current trusted-LAN server has no authentication.
 | `svg add FILE.svg\|- [PLACEMENT.json]` | Place a static SVG as one object; `-` reads raw SVG from stdin. |
 | `layer put FILE\|-` | Create/update `{layer,name,force}`. |
 | `object put FILE\|-` | Create/replace a complete object (defaults below). |
-| `object update ID FILE\|-` | Patch existing object's geometry, label, style, layer/page or attachments. |
-| `object hide ID` / `object show ID` | Erase/restore independently of geometry. |
+| `object update ID FILE\|-` | Patch geometry, label, style or attachments within `scope:{layer,page}` (default base/0). |
+| `object hide ID [LAYER [PAGE]]` / `object show ID [LAYER [PAGE]]` | Erase/restore independently of geometry within the named scope (default base/0). |
 | `layer hide ID` / `layer show ID` | Shared layer active state; base cannot be deactivated. |
 | `stroke put FILE\|-` | Create/replace a protocol stroke snapshot. |
-| `stroke hide ID` / `stroke show ID` | Whole-stroke erasure/restoration. |
+| `stroke hide ID [LAYER [PAGE]]` / `stroke show ID [LAYER [PAGE]]` | Whole-stroke erasure/restoration within the named scope (default base/0). |
 | `apply FILE\|-` | Atomic array of layer/object/stroke/active operations; no document creation or nested batches. |
 | `undo` / `redo` | Compensating action for the selected actor. |
 | `export FILE.svg\|FILE.png [PAGE [X Y WIDTH HEIGHT]]` | Render a page/viewport; page is zero-based. Default viewport 0,0,1000,1400. |
@@ -158,7 +158,7 @@ examples in this document. Stop the proxy with Ctrl-C. Reads can instead use
 ```sh
 apps/cli/notemaker --document demo --actor agent-1 diagram add apps/cli/examples/diagram.json
 apps/cli/notemaker --document demo --actor agent-1 object update app - <<'JSON'
-{"x":150,"text":"Renamed app"}
+{"scope":{"layer":"architecture","page":0},"x":150,"text":"Renamed app"}
 JSON
 apps/cli/notemaker --document demo export /tmp/demo.png
 apps/cli/notemaker --document demo --actor agent-1 undo
@@ -282,7 +282,7 @@ locally opened documents.
 Commands use `POST /command`, `Authorization: Bearer <token>` and JSON:
 
 ```json
-{"document":"notes","actor":"agent-1","args":["object","update","app","-"],"input":{"x":150,"text":"Updated"}}
+{"document":"notes","actor":"agent-1","args":["object","update","app","-"],"input":{"scope":{"layer":"architecture","page":0},"x":150,"text":"Updated"}}
 ```
 
 Responses are `{"result": ...}` or HTTP 400 `{"error": ...}`. Successful mutations
@@ -316,15 +316,16 @@ the entire content action and its undo history unchanged.
 | `shape list` | Shape IDs/names, including geometric families and cube, cylinder, cone, sphere and pyramid. |
 | `object put -` / `object update ID -` | Native shape/text snapshots or patches. Text supports `bold`, `italic`, `underline`, `fontFamily` (`sans-serif`, `serif`, `monospace`), and `alignment` (`left`, `center`, `right`). |
 | `stroke put -` | Existing stroke schema plus `brush`: `pen`, `pencil`, `marker`, `brush`, `oily`, `fountain`, `charcoal`, `neoBrush`, `latinCalligraphy`, `asiaCalligraphy`, `square`. |
-| `erase -` | `{mode, page, layer?, points?, radius?}`. Modes: `stroke`, `partial`, `area`, `page`. Points are `[x,y]`; area uses their bounding rectangle. Page mode omits points. Partial erasing splits ink into surviving strokes in one undoable action. |
-| `fill -` | `{object, color}` for a native closed shape, `{stroke, color}` for a closed ink outline, or `{x,y,page,layer,color}` for a region enclosed by several native ink/shape boundaries. Open regions are rejected. |
+| `erase -` | `{mode, page?, layer?, points?, radius?}`. Modes: `item` (`stroke` is a compatibility alias), `partial`, `area`, `page`. Whole-item and area modes test painted coverage against the swept round eraser, not its bounding rectangle. Page mode omits points. Partial erasing adds a local mask to any item type, preserving its ID/source in one undoable action. Defaults: layer `base`, page `0`, radius `12`. |
+| `fill -` | `{object, color, layer?, page?}` for a native closed shape, `{stroke, color, layer?, page?}` for a closed ink outline, or `{x,y,page,layer,color}` for a region enclosed by several native ink/shape boundaries. Defaults to `base`/`0`. Open regions, including erased boundary gaps, are rejected. |
 | `image add FILE [PLACEMENT.json]` | Embedded PNG/JPEG; maximum 2 MiB decoded, 8192 pixels per edge, 32 megapixels. Placement uses the SVG placement fields. No external image URLs. |
 | `template add -` | `{template,page?,x?,y?,w?,h?,spacing?,color?,background?}`. Templates: `blank`, `ruled`, `grid`, `dots`, `planner`. Defaults to a reusable page background layer below drawing layers; `background:false` inserts into the supplied layer. |
 | `layer duplicate ID` | Copy layer and active contents atomically, remapping internal connector references. |
 | `layer merge SOURCE TARGET` | Move source contents into target and archive source; base cannot be the source. |
 | `layer reorder ID INDEX` | Zero-based drawing order. |
 | `layer hide ID` / `layer show ID` | Reversible archive/restore; the base layer remains available. |
-| `selection select -` | `{session?,page,entities:[{kind:"object" or "stroke",id}]}`. Returns `session`, `selected`, `skipped` and lease expiry. Locked entities are skipped explicitly. |
+| `selection query -` | `{layer?,page?,region?:[[x,y],...],topmost?:boolean}`. Returns `{items:[{kind,id,page}]}` without acquiring leases or writing history. Region is an even/odd polygon (box or lasso); omit it to list items with coverage. `topmost:true` returns the first painted hit. Defaults to `base`/`0`. |
+| `selection select -` | `{session?,layer?,page?,entities:[{kind:"object" or "stroke",id}]}`. Resolve every ID within one layer/page before acquiring leases; mixed-layer batches fail without side effects. Defaults to `base`/`0`. Returns `session`, `selected`, `skipped` and lease expiry. Locked entities are skipped explicitly. A session cannot change layers/pages. |
 | `selection heartbeat SESSION` | Renew the 15-second selection lease. |
 | `selection deselect SESSION` / `selection disconnect` | Release one session / all selections for this actor. |
 | `selection duplicate SESSION` / `selection delete SESSION` | Atomic operations on the leased selection. |
@@ -339,6 +340,33 @@ Renew a selection before it expires. Preview updates are transient and do not
 create action history or journal entries. Commit the completed gesture once;
 cancellation, lost leases and expiry discard the preview. Undo and bulk edits
 that affect another session's locked content are blocked as a whole.
+
+Targeted updates use the same scope. For example, `object update app -` accepts
+`{"scope":{"layer":"architecture","page":0},"x":150}`. Without `scope`, it edits
+only `base`/`0`. `object hide ID [LAYER [PAGE]]` and `object show ID [LAYER [PAGE]]`
+(also `stroke hide/show`) use those same defaults. Creation/replacement snapshots
+carry their own layer/page; replacing an existing ID cannot move it out of its
+own scope. Use layer management or cut/paste to move between layers. Raw
+`apply`/`append`, replication and actor-history replay remain document operations,
+independent of an interactive selection session.
+
+Coverage lives in item-local coordinates. Ink, basic shapes and text use native
+vector regions. Images, imported SVG and SVG-backed figures use lazy alpha tiles
+at one local document unit per pixel: 64 × 64 pixels, empty/full sentinels, and
+512 bytes for a mixed tile. Each cached item retains at most 128 tiles; the LRU
+retains 16 items (at most 1 MiB of mixed-tile bit payload, excluding geometry,
+assets and map overhead). Large raster queries exceeding 16,384 tiles fail
+explicitly; query a smaller region. Font/SVG edge details follow the platform
+renderer. White opaque pixels count as coverage; transparent holes do not.
+
+Partial erasure stores `erasures`, an array of local polygon contours. Object
+coordinates are normalized by width/height (zero dimensions use one); stroke
+coordinates are offsets from the first point. Stroke transforms also transform
+these offsets. At most 2,000 contours and 64,000 total vertices are accepted,
+within existing action-size limits. `object update` with `erasures:[]` resets a
+mask. Fully erased items retain their source for undo or explicit editing.
+Upgrade app, CLI/proxies and server/viewer together before syncing masked items;
+older clients do not render the new masks. Existing action history is unchanged.
 
 Fill produces an editable SVG object. Tap fill rasterizes native stroke and
 geometric boundaries on a bounded grid before generating the SVG region; it

@@ -117,7 +117,8 @@ the app or clearing its data removes locally stored notes and unsynced edits.
 
 The top bar holds **Notes**, **Pen**, **Erase**, and direct **Undo/Redo** controls.
 The narrow left rail groups **Template**, **Layers**, **Shapes**, **Fill**,
-**Select**, **Text**, **Insert**, **Move**, **Pages**, and **More**.
+**Select**, **Text**, **Insert**, **Move**, **Pages**, **Agent**, and **More**.
+The robot **Agent** button opens the Agent interface directly.
 Both finger and stylus draw. **Pen** opens brush profiles, presets, color swatches and width controls;
 stylus pressure varies width.
 **Shapes** opens an original monochrome palette for rectangles, ellipses, arrows,
@@ -129,8 +130,11 @@ canvas tap places an editable text object. Use **Notes â†’ Edit diagram objectsâ
 to change an object's geometry or text afterward. Object creation participates
 in human undo/redo and remains available offline through the local proxy.
 
-**Erase** offers whole-stroke, partial, area and page erasing, plus optional
-scribble-to-erase. **Fill** colors native objects or enclosed drawing regions.
+**Erase** offers whole-item, partial, area and page erasing, plus optional
+scribble-to-erase. Selection and erasing follow painted coverage, including image
+transparency and hollow shapes, on the selected layer only. Partial erasure keeps
+the original item and adds an undoable local mask. Switching layers clears the
+selection and pending gestures. **Fill** colors native objects or enclosed drawing regions.
 **Select** provides transforms, copy/cut/paste, duplication and deletion, with
 15-second selection leases and live previews. The top-bar **Undo/Redo** controls change
 your own drawing/erasing actions and sync the result; another editor's selection
@@ -390,6 +394,9 @@ nix-shell --run 'python3 tests/run.py'
 nix-shell --run 'python3 tests/run.py --tier local --tier emulator'
 # Select a smaller emulator run, or inspect the plan without accessing devices.
 nix-shell --run 'python3 tests/run.py --tier emulator --suite cli_android'
+nix-shell --run 'python3 tests/run.py --tier local --suite coverage_checks'
+# Focused coverage, mask rendering, layer switching and panels on an isolated emulator.
+nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --coverage-only --panels-only'
 nix-shell --run 'python3 tests/run.py --tier hardware --tier network --list'
 # Focused tool-switch selection/lock-release regression on an isolated emulator.
 nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --tool-switch-only'
@@ -498,6 +505,23 @@ The benchmark uses the host GPU with Vulkan disabled and requires a working
 graphical session and host graphics driver. `shell.nix` supplies the GL loader;
 `NOTEMAKER_TEST_GPU` can override the renderer. The usual emulator launchers
 retain their software-rendering defaults for functional tests.
+
+To profile an existing note without modifying it, capture the tablet's app files
+and run the latency probe against a disposable copy. Replace `SERIAL` and the
+document name as needed; use a new output directory for each run:
+
+```sh
+nix-shell --run 'mkdir -p .test-artifacts/latency && adb -s SERIAL exec-out run-as com.notemaker tar -cf - files > .test-artifacts/latency/tablet-files.tar'
+nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --output .test-artifacts/latency/run1 --serial SERIAL'
+```
+
+The probe uses the installed APK's core and Android renderer in a separate
+process, with an offline replica under a temporary device directory. It measures
+coverage generation, erase commands, snapshots, PNG rendering and a five-request
+write queue. It does not measure touch-to-display or E Ink refresh latency.
+Omit `--serial` for JVM measurements; `--android-jar` tests a candidate CLI dex jar
+without installing it. Build the JVM CLI first. Captures and reports may contain
+private note data and stay under `.test-artifacts/`.
 
 ### Agent chats on BOOX
 

@@ -30,6 +30,17 @@ def validate(op, nested=False):
     for key in ('actor','session'):
         if key in op and (not isinstance(op[key],str) or not 0<len(op[key])<=200): raise ValueError('Invalid '+key)
     kind = op.get('kind')
+    if kind in ('stroke','object') and 'erasures' in op:
+        masks=op['erasures']
+        if not isinstance(masks,list) or len(masks)>2000: raise ValueError('Invalid erasure mask')
+        count=0
+        for polygon in masks:
+            if not isinstance(polygon,list) or not 3<=len(polygon)<=4096: raise ValueError('Invalid erasure region')
+            count+=len(polygon)
+            if count>64000: raise ValueError('Erasure mask too complex')
+            for point in polygon:
+                if not isinstance(point,list) or len(point)!=2 or any(type(v) not in (int,float) or not math.isfinite(v) or abs(v)>1e9 for v in point): raise ValueError('Invalid erasure vertex')
+
     if kind == 'batch':
         actions = op.get('actions')
         if nested or not isinstance(actions, list) or not 1 <= len(actions) <= 200:

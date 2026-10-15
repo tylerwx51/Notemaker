@@ -13,7 +13,8 @@ same visual weight.
 ## Decision
 
 Use a 56 dp white left rail for Template, Layers, Shapes, Fill, Select, Text,
-Insert, Move, Pages and More. The top bar carries Notes, the document identity
+Insert, Move, Pages, Agent and More. Agent uses an original code-drawn robot icon
+above More and opens the existing Agent interface directly. The top bar carries Notes, the document identity
 and save/sync status, Pen, Erase and direct Undo/Redo. More retains toolbar
 preferences, presets, history and Agent access. Existing actions remain reachable;
 this change adds no document actions or protocol changes.

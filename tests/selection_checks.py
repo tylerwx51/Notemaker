@@ -68,7 +68,7 @@ class SelectionChecks(ServerChecks):
         self.call(a,'document','create','pages')
         self.call(a,'layer','put','-',value={'layer':'page-layer','name':'Page Layer','force':False})
         self.call(a,'object','put','-',value={'object':'page-one','layer':'page-layer','shape':'rect','x':5,'y':5,'w':50,'h':40,'page':1})
-        self.call(a,'selection','select','-',value={'session':'page-session','page':1,'entities':[{'kind':'object','id':'page-one'}]})
+        self.call(a,'selection','select','-',value={'session':'page-session','layer':'page-layer','page':1,'entities':[{'kind':'object','id':'page-one'}]})
         self.assertIn('1:object:page-one',self.locks(),self.locks())
         with self.assertRaises(urllib.error.HTTPError):
             self.post(self.document,[{'id':'remote-page-hide','kind':'object-active','object':'page-one','active':False,'actor':'bob'}])
@@ -185,7 +185,7 @@ class SelectionChecks(ServerChecks):
         a=self.proxy('source-guards')
         self.call(a,'layer','put','-',value={'layer':'guard-layer','name':'Guard Layer','force':False})
         self.call(a,'object','put','-',value={'object':'guard-source','layer':'guard-layer','shape':'rect','x':10,'y':10,'w':60,'h':60})
-        self.call(a,'selection','select','-',actor='owner',value={'session':'guard-session','page':0,'entities':[{'kind':'object','id':'guard-source'}]})
+        self.call(a,'selection','select','-',actor='owner',value={'session':'guard-session','layer':'guard-layer','page':0,'entities':[{'kind':'object','id':'guard-source'}]})
         self.call(a,'fill','-',actor='other',value={'object':'guard-source','color':-65536},ok=False)
         self.call(a,'layer','duplicate','guard-layer',actor='other',ok=False)
         self.call(a,'object','update','guard-source',actor='other',value={'page':1},ok=False)

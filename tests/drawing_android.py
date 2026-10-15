@@ -89,6 +89,56 @@ def ui_dump():
             time.sleep(.5)
 
 
+def show_editor():
+    # Instrumentation teardown can race the immediate Activity relaunch.
+    for _ in range(5):
+        adb('shell','am','start','-W','-n','com.notemaker/.MainActivity')
+        hierarchy=ui_dump()
+        if 'content-desc="Pen tools"' in hierarchy:
+            return
+        if 'package="com.notemaker"' in hierarchy:
+            adb('shell','input','keyevent','4')
+        time.sleep(.3)
+    raise AssertionError('Editor did not return after instrumentation')
+
+
+def check_panels():
+    show_editor()
+    tap('Pen tools')
+    tap('More brush types…')
+    adb('shell', 'uiautomator', 'dump', '/data/local/tmp/drawing-ui.xml')
+    assert 'charcoal' in adb('shell', 'cat', '/data/local/tmp/drawing-ui.xml').casefold()
+    tap('charcoal')
+    tap('Erase')
+    tap('Scribble to erase')
+    adb('shell', 'input', 'keyevent', '4')
+    prefs = adb('shell', 'run-as', 'com.notemaker', 'cat', 'shared_prefs/settings.xml')
+    assert 'name="scribbleToErase" value="true"' in prefs, prefs
+    tap('Page templates')
+    tap('Ruled')
+    time.sleep(1)
+    state = latest_state()
+    assert any(o['shape'] == 'svg' and o.get('layer') == 'template-0' for o in state['model']['objects']), state
+    instrument('layer', layer='ui-layer')
+    show_editor()
+    tap('Layer actions')
+    tap('Options for layer Test layer')
+    layer_menu = ui_dump()
+    for option in ('Rename layer…', 'Duplicate layer', 'Move layer up', 'Merge into another layer…', 'Archive layer'):
+        assert option in layer_menu, (option, layer_menu)
+    tap('Duplicate layer')
+    time.sleep(1)
+    state = latest_state()
+    assert any(layer['layer'] != 'ui-layer' and layer['name'] == 'Test layer copy' for layer in state['model']['layers']), state
+    show_editor()
+    tap('More tools')
+    tap('Toolbar preferences…')
+    tap('Show tool labels')
+    prefs = adb('shell', 'run-as', 'com.notemaker', 'cat', 'shared_prefs/settings.xml')
+    assert 'name="showToolLabels" value="false"' in prefs, prefs
+    print('PASS Android brush, eraser, template, layer actions, and toolbar preferences panels')
+
+
 def main():
     devices = run('adb', 'devices')
     assert SERIAL not in devices, f'Reserved emulator already running: {SERIAL}'
@@ -102,11 +152,22 @@ def main():
                 env=env, stdout=log, stderr=subprocess.STDOUT)
             wait_ready()
             adb('install', '-r', str(APK))
+            if '--coverage-only' in sys.argv or '--panels-only' in sys.argv:
+                instrument('configure', document='android-coverage', host='offline')
+                if '--coverage-only' in sys.argv:
+                    instrument('coverage')
+                    print('PASS Android coverage, masks, pixels and layer switching')
+                if '--panels-only' in sys.argv:
+                    check_panels()
+                return
             if '--tool-switch-only' in sys.argv:
                 instrument('configure', document='android-tool-switch-selection', host='offline')
                 instrument('tool-switch-selection')
                 print('PASS switching tools releases active and late-acquired selection leases and cancels previews')
                 return
+            instrument('configure', document='android-coverage', host='offline')
+            instrument('coverage')
+            print('PASS Android coverage, masks, pixels and layer switching')
             result = run('adb', '-s', SERIAL, 'shell', 'am', 'instrument', '-w',
                          '-e', 'action', 'configure', '-e', 'document', 'android-fill',
                          '-e', 'host', 'offline', 'com.notemaker/.Integration')
@@ -211,38 +272,13 @@ def main():
             cross_doc = latest_state()
             assert any(o.get('shape') == 'rect' and o.get('x') == 144 for o in cross_doc['model']['objects']), cross_doc['model']['objects']
             print('PASS Android copy/paste survives app restart via local shared clipboard')
-            tap('Pen tools')
-            tap('More brush types…')
-            adb('shell', 'uiautomator', 'dump', '/data/local/tmp/drawing-ui.xml')
-            assert 'charcoal' in adb('shell', 'cat', '/data/local/tmp/drawing-ui.xml').casefold()
-            tap('charcoal')
-            tap('Erase')
-            tap('Scribble to erase')
-            adb('shell', 'input', 'keyevent', '4')
-            prefs = adb('shell', 'run-as', 'com.notemaker', 'cat', 'shared_prefs/settings.xml')
-            assert 'name="scribbleToErase" value="true"' in prefs, prefs
-            tap('Document actions')
-            tap('Page templates…')
-            tap('Ruled')
-            time.sleep(1)
-            state = latest_state()
-            assert any(o['shape'] == 'svg' and o.get('layer') == 'template-0' for o in state['model']['objects']), state
-            instrument('layer', layer='ui-layer')
-            tap('Options for layer Test layer')
-            layer_menu = ui_dump()
-            for option in ('Rename layer…', 'Duplicate layer', 'Move layer up', 'Merge into another layer…', 'Archive layer'):
-                assert option in layer_menu, (option, layer_menu)
-            tap('Duplicate layer')
-            time.sleep(1)
-            state = latest_state()
-            assert any(layer['layer'] != 'ui-layer' and layer['name'] == 'Test layer copy' for layer in state['model']['layers']), state
-            tap('Prefs')
-            tap('Show tool labels')
-            prefs = adb('shell', 'run-as', 'com.notemaker', 'cat', 'shared_prefs/settings.xml')
-            assert 'name="showToolLabels" value="false"' in prefs, prefs
-            print('PASS Android brush, eraser, template, layer actions, and toolbar preferences panels')
+            check_panels()
         finally:
             if emulator is not None:
+                try:
+                    (OUT/'logcat.txt').write_text(adb('logcat','-d','-t','600'))
+                except Exception:
+                    pass
                 emulator.terminate()
                 try:
                     emulator.wait(timeout=15)

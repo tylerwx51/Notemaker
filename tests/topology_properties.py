@@ -107,7 +107,7 @@ class TopologyProperties(server_checks.ServerChecks):
                     self.assertEqual(proxy.command('log')['events'],[])
                 # Parent outage must not prevent its child accepting local actions.
                 proxies[0].stop(crash=True)
-                proxies[2].command('object','update','app','-',value={'x':432})
+                proxies[2].command('object','update','app','-',value={'scope':{'layer':'architecture','page':0},'x':432})
                 eventually(lambda: proxies[1].command('inspect')['objects'][0]['x']==432)
                 proxies[0].start()
                 proxies[0].command('configure',self.url)

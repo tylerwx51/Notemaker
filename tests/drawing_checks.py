@@ -66,13 +66,8 @@ class DrawingChecks(ServerChecks):
         svg=self.root/'shapes.svg';png=self.root/'shapes.png'
         self.call(a,'export',str(svg));self.call(a,'export',str(png))
         source=svg.read_text()
-        encoded=re.findall(r'xlink:href="data:image/svg\+xml;base64,([^"]+)',source)
-        self.assertEqual(len(encoded),5)
-        polygons=[]
-        for image in encoded:
-            nested=base64.b64decode(image).decode()
-            points=re.search(r'<(?:[A-Za-z0-9_]+:)?polygon[^>]*points="([^"]+)',nested).group(1)
-            polygons.append(points)
+        polygons=re.findall(r'<path d="([^"]+)"',source)
+        self.assertEqual(len(polygons),5)
         self.assertEqual(len(set(polygons)),5)
         self.assertGreater(png.stat().st_size,100)
         self.call(a,'undo')
@@ -86,9 +81,8 @@ class DrawingChecks(ServerChecks):
         self.call(a,'object','put','-',value={'object':'maximum-polygon','shape':'triangle','x':0,'y':0,
             'w':1000000,'h':1000000,'width':100})
         large=self.root/'maximum-polygon.svg';self.call(a,'export',str(large))
-        embedded=re.findall(r'xlink:href="data:image/svg\+xml;base64,([^"]+)',large.read_text())[-1]
-        nested=base64.b64decode(embedded).decode()
-        viewbox=list(map(float,re.search(r'viewBox="([^"]+)"',nested).group(1).split()))
-        self.assertLessEqual(max(viewbox[2:]),1000)
+        source=large.read_text()
+        self.assertIn('1000000.0',source)
+        self.assertLess(len(source),20000)
 
 if __name__=='__main__':unittest.main()

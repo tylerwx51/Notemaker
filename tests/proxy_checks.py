@@ -82,7 +82,7 @@ class ProxyChecks(server_checks.ServerChecks):
                 bad=subprocess.run([str(CLI),'--proxy-file',str(descriptor),'--document','proxy-test','apply','-'],input=json.dumps([{'kind':'layer','layer':'bad','name':'Bad','force':False},{'kind':'object','object':'incomplete'}]),text=True,capture_output=True,timeout=30)
                 self.assertNotEqual(bad.returncode,0);self.assertEqual(call('log'),unchanged)
                 call('export',str(root/'proxy.svg'));self.assertIn('NoteMaker app',(root/'proxy.svg').read_text())
-                call('object','update','app','-',value={'x':432})
+                call('object','update','app','-',value={'scope':{'layer':'architecture','page':0},'x':432})
                 self.assertEqual(call('inspect')['objects'][0]['x'],432)
                 before=call('inspect');call('sync',self.url)
                 self.assertEqual(call('inspect'),before);self.assertEqual(call('status')['pending'],0)

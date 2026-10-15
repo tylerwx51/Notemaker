@@ -13,6 +13,16 @@ public final class Model {
     public final Map<String,Boolean> conflictActive=new LinkedHashMap<>();
     public final Map<String,Map<String,Object>> layers=new LinkedHashMap<>(), strokes=new LinkedHashMap<>(), objects=new LinkedHashMap<>();
     public final Map<String,Boolean> active=new LinkedHashMap<>(), objectActive=new LinkedHashMap<>(), layerActive=new LinkedHashMap<>();
+    private Map<String,LinkedHashMap<String,Map<String,Object>>> itemIndex;
+    private final Map<String,Integer> itemOrder=new HashMap<>();
+    private String itemScope(Map<String,Object> o){return o.get("layer")+":"+((Number)o.get("page")).intValue();}
+    private void indexItem(Map<String,Object> o){String kind=string(o,"kind"),key=kind+":"+string(o,kind);if(!itemOrder.containsKey(key))itemOrder.put(key,itemOrder.size());itemIndex.computeIfAbsent(itemScope(o),k->new LinkedHashMap<>()).put(key,o);}
+    public Collection<Map<String,Object>> layerItems(String layer,int page){
+        if(itemIndex==null){itemIndex=new HashMap<>();for(Map<String,Object> o:strokes.values())indexItem(o);for(Map<String,Object> o:objects.values())indexItem(o);}
+        Collection<Map<String,Object>> source=itemIndex.getOrDefault(layer+":"+page,new LinkedHashMap<>()).values();
+        List<Map<String,Object>> ordered=new ArrayList<>(source);ordered.sort(Comparator.<Map<String,Object>>comparingInt(o->"stroke".equals(o.get("kind"))?0:1).thenComparingInt(o->itemOrder.get(o.get("kind")+":"+o.get(string(o,"kind")))));return Collections.unmodifiableList(ordered);
+    }
+    private void putItem(Map<String,Object> o,Map<String,Map<String,Object>> table,String kind){Map<String,Object> old=table.put(string(o,kind),o);if(itemIndex!=null){if(old!=null&&!itemScope(old).equals(itemScope(o)))itemIndex.get(itemScope(old)).remove(kind+":"+string(o,kind));indexItem(o);}}
     public Model(){layers.put("base",object("kind","layer","layer","base","name","Layer 1","force",false));}
     /** Entity snapshots are immutable after publication; copy only the indexes. */
     public Model(Model other){type=other.type;documentSeen=other.documentSeen;layers.putAll(other.layers);strokes.putAll(other.strokes);objects.putAll(other.objects);active.putAll(other.active);objectActive.putAll(other.objectActive);layerActive.putAll(other.layerActive);versions.putAll(other.versions);versionActors.putAll(other.versionActors);conflicts.putAll(other.conflicts);conflictActive.putAll(other.conflictActive);}
@@ -56,8 +66,8 @@ public final class Model {
             case "conflict-status":conflictActive.put(string(op,"conflict"),(Boolean)op.get("active"));break;
             case "document":if(!documentSeen){type=string(op,"type");documentSeen=true;}break;
             case "layer":layers.put(string(op,"layer"),op);break;
-            case "stroke":strokes.put(string(op,"stroke"),op);break;
-            case "object":objects.put(string(op,"object"),op);break;
+            case "stroke":putItem(op,strokes,"stroke");break;
+            case "object":putItem(op,objects,"object");break;
             case "active":active.put(string(op,"stroke"),(Boolean)op.get("active"));break;
             case "object-active":objectActive.put(string(op,"object"),(Boolean)op.get("active"));break;
             case "layer-active":layerActive.put(string(op,"layer"),(Boolean)op.get("active"));break;
@@ -98,7 +108,7 @@ public final class Model {
             default:throw new IllegalArgumentException("Unknown operation kind: "+kind);
         }
     }
-    static void drawing(Map<String,Object>o){id(o,"layer");range(o,"page",0,10000);require(number(o,"page")==Math.rint(number(o,"page")),"Page must be an integer");range(o,"width",1,100);color(o,"color");}
+    static void drawing(Map<String,Object>o){id(o,"layer");range(o,"page",0,10000);require(number(o,"page")==Math.rint(number(o,"page")),"Page must be an integer");range(o,"width",1,100);color(o,"color");if(o.containsKey("erasures")){List<Object> masks=list(o.get("erasures"));require(masks.size()<=2000,"Too many erasure regions");int count=0;for(Object mask:masks){count+=Geometry.polygon(mask).length;require(count<=64000,"Erasure mask too complex");}}}
     static void color(Map<String,Object>o,String k){range(o,k,Integer.MIN_VALUE,Integer.MAX_VALUE);require(number(o,k)==Math.rint(number(o,k)),"Color must be signed ARGB integer");}
     static void range(Map<String,Object>o,String k,double lo,double hi){double v=number(o,k);require(v>=lo&&v<=hi,"Out of range: "+k);}
     static void id(Map<String,Object>o,String k){String s=string(o,k);require(!s.isEmpty()&&s.length()<=200,"Invalid "+k);}

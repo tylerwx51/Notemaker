@@ -80,8 +80,10 @@ selection coordination and preview transport without adding drawing history.
   Rotation and reflection share the same rendering transforms on Android,
   desktop export and the browser. Group transforms scale text with geometry.
   Box and freeform lasso selection use the same lease acquisition path.
-- Partial erasing clips ink against the eraser path and creates all surviving
-  segments in one action. Area and page erasing use visibility operations.
+- New partial erasing preserves item identity and applies a local coverage mask
+  to ink or objects, as specified in [ADR 0011](0011-unified-draw-item-coverage.md).
+  Historical fragment-based eraser actions retain their original replay behavior.
+  Area and page erasing use visibility operations.
   Scribble-to-erase invokes the same erase command and is a saved preference.
 - Enclosed fill supports a closed native object, a closed ink outline, or a
   bounded flood region across several native outlines. Filled regions are SVG

@@ -212,3 +212,23 @@ Drawing extensions include text style fields, brush identifiers, embedded PNG
 and JPEG objects, optional object rotation/reflection and layer order. The same
 validation applies locally and at the main server. Upgrade all applications
 together before using the new operations.
+# Draw-item erasure masks
+
+Object and stroke snapshots optionally carry `erasures`: an array of polygon
+contours, each an array of finite `[x,y]` pairs. Each contour has 3–4096 vertices;
+there are at most 2000 contours and 64000 total vertices, with coordinate
+magnitude at most 1e9. Existing atomic action/transport size limits also apply.
+The effective painted region subtracts the union of contours, using even/odd
+fill within each contour. This is clipping, never painting the page background.
+
+For objects, vertices are relative to the unrotated item's origin and normalized
+by its width/height (zero dimensions use one). The object's normal transform
+applies to content and mask together. Attached connectors use resolved endpoint
+geometry. Stroke vertices are offsets from the first point, in document units;
+stroke transforms update those vectors along with the source points.
+
+Masks are optional fields on existing snapshots, so history, causal versions,
+conflicts and batching retain their current format. The durable transport remains
+version 3. All renderers/proxies must be upgraded before using masks: old clients
+can ignore unknown fields and display erased source content. No remote rollout
+is performed by the local implementation change.

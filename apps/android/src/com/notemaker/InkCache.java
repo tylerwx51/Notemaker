@@ -29,6 +29,7 @@ final class InkCache {
         // Persisted IDs/actors and other log metadata do not change pixels.
         return a==b||(a.optInt("color")==b.optInt("color")&&a.optDouble("width")==b.optDouble("width")
             &&a.optInt("page")==b.optInt("page")&&a.optString("layer").equals(b.optString("layer"))
+            &&a.optString("brush").equals(b.optString("brush"))&&a.optString("erasures").equals(b.optString("erasures"))
             &&a.optJSONArray("points").toString().equals(b.optJSONArray("points").toString()));
     }
 }

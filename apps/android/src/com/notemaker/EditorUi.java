@@ -96,6 +96,7 @@ final class EditorUi {
         railRule(rail);
         tool(rail, "page", "Pages", "Page actions");
         rail.addView(new View(app), new LinearLayout.LayoutParams(1, 0, 1));
+        tool(rail, "agent", "Agent", "Open Agent");
         tool(rail, "more", "More", "More tools");
         body.addView(divider(), new LinearLayout.LayoutParams(dp(1), -1));
 
@@ -157,6 +158,7 @@ final class EditorUi {
     }
     private String actionIcon(String label){
         String s=label.toLowerCase(java.util.Locale.ROOT);
+        if(s.equals("agent"))return "agent";
         if(s.contains("undo"))return "undo";if(s.contains("redo"))return "redo";
         if(s.contains("layer"))return "layers";if(s.contains("picture")||s.contains("artwork"))return "insert";
         if(s.startsWith("pen")||s.contains(" pen")||s.contains("brush")||s.contains("preset"))return "pen";
@@ -234,7 +236,7 @@ final class EditorUi {
                 LinearLayout card=row();card.setGravity(Gravity.CENTER_VERTICAL);card.setPadding(dp(8),dp(10),dp(8),dp(10));
                 card.setBackground(surface(Color.WHITE,INK,0,selected?2:0));
                 card.setContentDescription("Select layer "+layer.optString("name"));
-                card.setOnClickListener(v->{synchronized(app.lock){app.selected=id;app.save();app.update();}});
+                card.setOnClickListener(v->{synchronized(app.lock){app.selectLayer(id);}});
                 card.setOnLongClickListener(v->{layerOptions(id,tools.get("layers"));return true;});
                 Icon eye=icon(forced?"lock":visible?"eye":"hidden",
                     (forced?"Forced visible layer ":visible?"Hide layer ":"Show layer ")+layer.optString("name"),()->{
@@ -267,7 +269,7 @@ final class EditorUi {
                     String name = input.getText().toString().trim();
                     if (name.isEmpty()) name = "Layer " + (app.layers.size() + 1);
                     synchronized (app.lock) {
-                        app.selected = MainActivity.id();
+                        app.deselect(); app.resetDrawingGesture(); app.selected = MainActivity.id();
                         app.enqueue(MainActivity.obj("kind", "layer", "layer", app.selected, "name", name, "force", false));
                         app.save();app.update();
                     }
@@ -287,7 +289,7 @@ final class EditorUi {
             }
         });
         menuAction(box, "Draw on this layer", true, () -> {
-            synchronized (app.lock) { app.selected = id; app.hidden.remove(id); app.save(); app.update(); }
+            synchronized (app.lock) { app.hidden.remove(id); app.selectLayer(id); }
         });
         menuAction(box, "Rename layer…", true, () -> app.renameLayer(id));
         menuAction(box, "Archive layer", !id.equals("base"), () -> new AlertDialog.Builder(app).setTitle("Archive layer?").setMessage("This hides the layer and its contents. Undo restores it.").setNegativeButton("Cancel",null).setPositiveButton("Archive",(dialog,which)->app.layerCommand("hide",id,null)).show());
@@ -327,6 +329,7 @@ final class EditorUi {
         if(Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind))app.selecting=kind.equals("select");
         LinearLayout box;
         switch (kind) {
+            case "agent": dismissPopup();app.agent.show();return;
             case "layers": box=layersPanel();break;
             case "template": box=templatePanel();break;
             case "insert":
@@ -567,11 +570,11 @@ final class EditorUi {
     }
 
     private LinearLayout eraserPanel() {
-        LinearLayout box=popupBody("Eraser", "Erase ink on the selected layer. Each gesture saves as one action.");
+        LinearLayout box=popupBody("Eraser", "Erase items on the selected layer. Each gesture saves as one action.");
         box.setTag(400);
         LinearLayout modes=row();
         for(String mode:new String[]{"stroke","partial","area"}){
-            String label=Character.toUpperCase(mode.charAt(0))+mode.substring(1)+" erase";
+            String label=mode.equals("stroke")?"Whole item":Character.toUpperCase(mode.charAt(0))+mode.substring(1)+" erase";
             modes.addView(choice("eraser",label,()->app.eraserMode.equals(mode),()->{app.eraserMode=mode;app.update();},true),new LinearLayout.LayoutParams(0,dp(72),1));
         }
         box.addView(modes);section(box,"Options");
@@ -662,16 +665,12 @@ final class EditorUi {
     private void chooseEntities(){
         ArrayList<Map<String,Object>> entities=new ArrayList<>();ArrayList<String> labels=new ArrayList<>();
         synchronized(app.lock){
-            for(Map.Entry<String,Map<String,Object>> entry:app.model.objects.entrySet()){
-                Map<String,Object> object=entry.getValue();if(((Number)object.get("page")).intValue()!=app.page||Boolean.FALSE.equals(app.model.objectActive.get(entry.getKey()))||app.canvas==null||!app.canvas.visible(String.valueOf(object.get("layer"))))continue;
-                String leaseActor=leaseActor("object",entry.getKey());String label=com.notemaker.core.ShapeCatalog.name(String.valueOf(object.get("shape")))+" · "+entry.getKey().substring(0,Math.min(8,entry.getKey().length()))+(leaseActor==null?"":" · Locked by "+leaseActor);entities.add(com.notemaker.core.Json.object("kind","object","id",entry.getKey()));labels.add(label);
-            }
-            for(Map.Entry<String,org.json.JSONObject> entry:app.strokes.entrySet()){
-                org.json.JSONObject stroke=entry.getValue();if(stroke.optInt("page")!=app.page||Boolean.FALSE.equals(app.active.get(entry.getKey()))||app.canvas==null||!app.canvas.visible(stroke.optString("layer")))continue;
-                String leaseActor=leaseActor("stroke",entry.getKey());entities.add(com.notemaker.core.Json.object("kind","stroke","id",entry.getKey()));labels.add("Ink stroke · "+entry.getKey().substring(0,Math.min(8,entry.getKey().length()))+(leaseActor==null?"":" · Locked by "+leaseActor));
+            if(app.canvas!=null&&app.canvas.visible(app.selected))for(com.notemaker.core.DrawItem item:app.layerEditor().items()){
+                String owner=leaseActor(item.kind,item.id),label=item.kind.equals("stroke")?"Ink stroke":com.notemaker.core.ShapeCatalog.name(String.valueOf(item.content.get("shape")));
+                entities.add(item.ref());labels.add(label+" · "+item.id.substring(0,Math.min(8,item.id.length()))+(owner==null?"":" · Locked by "+owner));
             }
         }
-        if(labels.isEmpty()){Toast.makeText(app,"There are no objects or strokes on this page",Toast.LENGTH_SHORT).show();return;}
+        if(labels.isEmpty()){Toast.makeText(app,"There are no items on this layer and page",Toast.LENGTH_SHORT).show();return;}
         boolean[] checked=new boolean[labels.size()];for(int i=0;i<entities.size();i++)for(Map<String,Object> selected:app.selectedEntities)if(entities.get(i).equals(selected))checked[i]=true;
         new AlertDialog.Builder(app).setTitle("Select entities").setMultiChoiceItems(labels.toArray(new String[0]),checked,(dialog,index,value)->checked[index]=value)
                 .setNegativeButton("Cancel",null).setPositiveButton("Select",(dialog,which)->{ArrayList<Map<String,Object>> chosen=new ArrayList<>();for(int i=0;i<checked.length;i++)if(checked[i])chosen.add(entities.get(i));if(app.selectionSession!=null){app.deselect();app.selecting=true;}if(chosen.isEmpty())app.selecting=false;else app.startSelection(chosen);}).show();
@@ -824,7 +823,7 @@ final class EditorUi {
                 JSONObject stroke=entry.getValue();if(!entry.getKey().equals(app.canvas.current)&&layer.equals(stroke.optString("layer"))&&stroke.optInt("page")==app.page&&!Boolean.FALSE.equals(app.active.get(entry.getKey())))settled.put(entry.getKey(),stroke);
             }
             raster.draw(c,settled,image->{image.clipRect(1,dp(16),w-1,h-1);image.translate((w-1000*scale)/2,dp(16));image.scale(scale,scale);},(image,stroke)->{
-                JSONObject preview=MainActivity.obj("color",stroke.optInt("color"),"width",Math.max(stroke.optDouble("width"),dp(1.4f)/scale),"points",stroke.optJSONArray("points"));app.canvas.drawStroke(image,preview);
+                JSONObject preview=MainActivity.obj("kind","stroke","color",stroke.optInt("color"),"brush",stroke.optString("brush","pen"),"erasures",stroke.optJSONArray("erasures"),"width",Math.max(stroke.optDouble("width"),dp(1.4f)/scale),"points",stroke.optJSONArray("points"));app.canvas.drawStroke(image,preview);
             });
             c.save();c.clipRect(1,dp(16),w-1,h-1);c.translate((w-1000*scale)/2,dp(16));c.scale(scale,scale);
             if(layer.equals(app.selected)&&app.canvas.points!=null)app.canvas.drawStroke(c,app.canvas.stroke());
@@ -852,6 +851,14 @@ final class EditorUi {
             paint.setColor(color); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.7f);
             paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND);
             switch (kind) {
+                case "agent":
+                    canvas.drawRoundRect(4,7,20,21,3,3,paint);
+                    path(canvas,12,7,12,4);canvas.drawCircle(12,2.5f,1.5f,paint);
+                    path(canvas,2,11,2,17);path(canvas,22,11,22,17);
+                    path(canvas,9,17,15,17);
+                    paint.setStyle(Paint.Style.FILL);
+                    canvas.drawCircle(8.5f,12,1.5f,paint);canvas.drawCircle(15.5f,12,1.5f,paint);
+                    break;
                 case "undo": path(canvas,8,5,3,10,8,15);path(canvas,3,10,14,10);canvas.drawArc(new RectF(9,10,21,22),270,150,false,paint);break;
                 case "redo": path(canvas,16,5,21,10,16,15);path(canvas,21,10,10,10);canvas.drawArc(new RectF(3,10,15,22),270,-150,false,paint);break;
                 case "check":path(canvas,4,12,10,18,21,5);break;

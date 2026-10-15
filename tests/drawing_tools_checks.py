@@ -18,16 +18,17 @@ class DrawingToolsChecks(unittest.TestCase):
     def call(self,*args,value=None,ok=True):return self.proxy.cli(*args,value=value,ok=ok)
     def stroke(self,id='s',points=None):
         self.call('stroke','put','-',value=dict(stroke=id,layer='base',page=0,width=2,color=-16777216,points=points or [[0,50,1],[100,50,1]]))
-    def test_partial_eraser_splits_and_undo_restores_as_one_action(self):
+    def test_partial_eraser_masks_and_undo_restores_as_one_action(self):
         self.stroke();before=self.call('log')
-        self.call('erase','-',value=dict(mode='partial',points=[[50,0],[50,100]],radius=9))
-        state=self.call('inspect');self.assertFalse(state['strokeActive']['s'])
-        new=[s for s in state['strokes'] if s['stroke']!='s'];self.assertEqual(len(new),2)
-        self.assertAlmostEqual(new[0]['points'][-1][0],40);self.assertAlmostEqual(new[1]['points'][0][0],60)
+        self.call('erase','-',value=dict(mode='partial',layer='base',points=[[50,0],[50,100]],radius=9))
+        state=self.call('inspect');self.assertNotEqual(state['strokeActive'].get('s'),False)
+        self.assertEqual(len(state['strokes']),1);self.assertEqual(len(state['strokes'][0]['erasures']),1)
+        query=dict(layer='base',region=[[49,49],[51,49],[51,51],[49,51]])
+        self.assertEqual(self.call('selection','query','-',value=query)['items'],[])
         after=self.call('log');self.assertEqual(len(after['pending']),len(before['pending'])+1)
-        self.call('undo');state=self.call('inspect');self.assertTrue(state['strokeActive']['s'])
-        self.assertTrue(all(state['strokeActive'][s['stroke']] is False for s in new))
-        self.call('redo');self.assertFalse(self.call('inspect')['strokeActive']['s'])
+        self.call('undo');state=self.call('inspect');self.assertNotIn('erasures',state['strokes'][0])
+        self.assertEqual(self.call('selection','query','-',value=query)['items'][0]['id'],'s')
+        self.call('redo');self.assertEqual(self.call('selection','query','-',value=query)['items'],[])
     def test_stroke_and_page_erase_cancel_on_invalid_input(self):
         self.stroke();before=self.call('log')
         self.call('erase','-',value=dict(mode='partial',points=[[50,50]],radius=0),ok=False)
@@ -89,7 +90,7 @@ class DrawingToolsChecks(unittest.TestCase):
             dict(object='left',shape='rect',x=10,y=10,w=40,h=30),
             dict(object='right',shape='rect',x=100,y=10,w=40,h=30),
             dict(object='link',shape='arrow',**{'from':'left','to':'right'})]))
-        self.call('selection','select','-',value=dict(session='clipboard',page=0,entities=[dict(kind='object',id=id) for id in ('left','right','link')]))
+        self.call('selection','select','-',value=dict(session='clipboard',layer='diagram',page=0,entities=[dict(kind='object',id=id) for id in ('left','right','link')]))
         copied=self.call('selection','copy','clipboard');self.assertEqual(len(copied['entities']),3)
         before=self.call('log');self.call('selection','paste','-',value=dict(copied,page=1,layer='base',dx=20,dy=30))
         after=self.call('log');self.assertEqual(len(after['pending']),len(before['pending'])+1)

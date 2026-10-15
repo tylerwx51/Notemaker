@@ -154,10 +154,10 @@ class ConflictChecks(unittest.TestCase):
         a,b=self.common_pair(suffix='-page-two',page=2)
         a_dir=a.directory;b_dir=b.directory
         self.link.online=False
-        a.cli('object','update','shared','-',actor='one-actor',value={'x':100})
-        b.cli('object','update','shared','-',actor='one-actor',value={'x':200})
-        a.cli('object','update','shared','-',actor='one-actor',value={'y':80})
-        b.cli('object','update','shared','-',actor='one-actor',value={'y':90})
+        a.cli('object','update','shared','-',actor='one-actor',value={'scope':{'layer':'base','page':2},'x':100})
+        b.cli('object','update','shared','-',actor='one-actor',value={'scope':{'layer':'base','page':2},'x':200})
+        a.cli('object','update','shared','-',actor='one-actor',value={'scope':{'layer':'base','page':2},'y':80})
+        b.cli('object','update','shared','-',actor='one-actor',value={'scope':{'layer':'base','page':2},'y':90})
         for proxy in (a,b):proxy.stop()
         self.proxies=[]
         a=self.proxy('replica-a-restart',directory=a_dir);b=self.proxy('replica-b-restart',directory=b_dir)
@@ -178,8 +178,8 @@ class ConflictChecks(unittest.TestCase):
                 self.document='conflict-'+uuid.uuid4().hex+'-'+upload_order
                 a,b=self.common_pair(suffix='-'+upload_order,page=4)
                 self.link.online=False
-                a.cli('object','hide','shared',actor='same-actor')
-                b.cli('object','update','shared','-',actor='same-actor',value={'x':240})
+                a.cli('object','hide','shared','base','4',actor='same-actor')
+                b.cli('object','update','shared','-',actor='same-actor',value={'scope':{'layer':'base','page':4},'x':240})
                 self.link.online=True
                 first,second=(a,b) if upload_order=='hide-first' else (b,a)
                 first.cli('sync',self.link.target);second.cli('sync',self.link.target);first.cli('sync',self.link.target)

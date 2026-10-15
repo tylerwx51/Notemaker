@@ -8,6 +8,17 @@ public final class Collaboration {
     public static final long LEASE_MILLIS=15000;
     private Collaboration() {}
 
+    /** Resolve a session's entire batch inside its layer before generating changes. */
+    public static void requireSelection(Map<String,Object> state,Model model,String actor,String session,List<Object> entities){
+        expire(state,System.currentTimeMillis());Map<String,Object> leases=map(state.getOrDefault("leases",object()));LayerEditor editor=null;
+        Model.require(!entities.isEmpty(),"Selection needs entities");
+        for(Object value:entities){Map<String,Object> ref=map(value);Map<String,Object> lease=map(leases.getOrDefault(key(string(ref,"kind"),string(ref,"id"),ref.getOrDefault("page",0)),object()));
+            Model.require(session.equals(lease.get("session"))&&actor.equals(lease.get("actor")),"Edit requires an active selection lease for every entity");
+            String layer=(String)lease.getOrDefault("layer","base");int page=((Number)lease.getOrDefault("page",0)).intValue();
+            if(editor==null)editor=new LayerEditor(model,layer,page);else Model.require(editor.layer.equals(layer)&&editor.page==page,"Selection spans layers/pages");
+        }editor.resolve(entities);
+    }
+
     public static String key(String kind,String id,Object page){return String.valueOf(page==null?0:page)+":"+kind+":"+id;}
     public static void expire(Map<String,Object> state,long now){
         Map<String,Object> leases=map(state.getOrDefault("leases",object()));
@@ -75,7 +86,7 @@ public final class Collaboration {
                 double x=num(next,"x"),y=num(next,"y"),w=num(next,"w"),h=num(next,"h");double[] center=point.apply(new double[]{x+w/2,y+h/2});next.put("x",center[0]-w*scale/2);next.put("y",center[1]-h*scale/2);next.put("w",w*scale);next.put("h",h*scale);double oldRotation=((Number)old.getOrDefault("rotation",0)).doubleValue();next.put("rotation",(rotation+((flipX^flipY)?-oldRotation:oldRotation))%360);next.put("flipX",Boolean.TRUE.equals(old.get("flipX"))^flipX);next.put("flipY",Boolean.TRUE.equals(old.get("flipY"))^flipY);
                 if(old.containsKey("fontSize"))next.put("fontSize",num(old,"fontSize")*scale);Model.validate(next);out.add(next);
             }else if(kind.equals("stroke")){Map<String,Object> old=model.strokes.get(id);Model.require(old!=null,"Unknown stroke: "+id);Map<String,Object> next=map(copy(old));List<Object> points=new ArrayList<>();
-                for(Object p:list(old.get("points"))){List<Object> xyz=list(p);double[] target=point.apply(new double[]{num(xyz.get(0)),num(xyz.get(1))});points.add(Arrays.asList(target[0],target[1],xyz.get(2)));}next.put("points",points);next.put("width",num(old,"width")*scale);Model.validate(next);out.add(next);
+                for(Object p:list(old.get("points"))){List<Object> xyz=list(p);double[] target=point.apply(new double[]{num(xyz.get(0)),num(xyz.get(1))});points.add(Arrays.asList(target[0],target[1],xyz.get(2)));}next.put("points",points);next.put("width",num(old,"width")*scale);if(old.containsKey("erasures")){List<Object> masks=new ArrayList<>();for(Object raw:list(old.get("erasures"))){double[][] polygon=Geometry.polygon(raw);for(double[] v:polygon){double x=v[0]*(flipX?-1:1)*scale,y=v[1]*(flipY?-1:1)*scale;v[0]=x*cos-y*sin;v[1]=x*sin+y*cos;}masks.add(Geometry.json(polygon));}next.put("erasures",masks);}Model.validate(next);out.add(next);
             }else throw new IllegalArgumentException("Transform kind must be object or stroke");
         }Model.require(!out.isEmpty()&&out.size()<=200,"Transform needs 1–200 entities");return out;
     }

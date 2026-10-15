@@ -157,7 +157,7 @@ public class MainActivity extends Activity {
         for(Map.Entry<String,Map<String,Object>> entry:model.strokes.entrySet())nextStrokes.put(entry.getKey(),entity("stroke:",entry,strokes));
         layers=nextLayers;strokes=nextStrokes;active.clear();active.putAll(model.active);
         for(JSONObject op:optimistic.values())apply(op);
-        if(!layers.containsKey(selected)||Boolean.FALSE.equals(model.layerActive.get(selected)))selected="base";
+        if(!layers.containsKey(selected)||Boolean.FALSE.equals(model.layerActive.get(selected))){selected="base";deselect();resetDrawingGesture();}
     }
     JSONObject entity(String prefix,Map.Entry<String,Map<String,Object>> entry,Map<String,JSONObject> previous){
         Map<String,Object> old=renderedEntities.put(prefix+entry.getKey(),entry.getValue());JSONObject existing=previous.get(entry.getKey());
@@ -253,7 +253,7 @@ public class MainActivity extends Activity {
         command.addAll(Arrays.asList(arguments));ProcessBuilder builder=new ProcessBuilder(command);builder.environment().put("CLASSPATH",getApplicationInfo().sourceDir);return builder.start();
     }
     void objectDialog(){synchronized(lock){
-        ArrayList<String> ids=new ArrayList<>(model.objects.keySet());String[] labels=new String[ids.size()];for(int i=0;i<ids.size();i++){Map<String,Object> o=model.objects.get(ids.get(i));labels[i]=o.get("shape")+" · "+o.getOrDefault("text",ids.get(i));}
+        ArrayList<String> ids=new ArrayList<>();for(DrawItem item:new LayerEditor(model,selected,page,true).items())if(item.kind.equals("object"))ids.add(item.id);String[] labels=new String[ids.size()];for(int i=0;i<ids.size();i++){Map<String,Object> o=model.objects.get(ids.get(i));labels[i]=o.get("shape")+" · "+o.getOrDefault("text",ids.get(i));}
         new AlertDialog.Builder(this).setTitle("Edit diagram object").setItems(labels,(d,index)->editObject(ids.get(index))).setNegativeButton("Close",null).show();
     }}
     void choosePicture(){
@@ -296,7 +296,7 @@ public class MainActivity extends Activity {
         if(!"object".equals(kind)&&!"stroke".equals(kind))return;
         AppReplica target=replica;final PendingObjectHistory pending;
         synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;update();}
-        Map<String,Object> input=Json.object(kind,id,"color",fillColor);
+        Map<String,Object> input=Json.object(kind,id,"color",fillColor,"layer",selected,"page",page);
         ReplicaService.writes.execute(()->{try{
             target.command(Arrays.asList("fill","-"),input);Map<String,Object> snapshot=target.read();
             runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;try{refreshShared(snapshot);}catch(Exception e){saveError=e.toString();}save();update();});
@@ -316,69 +316,23 @@ public class MainActivity extends Activity {
         }catch(Exception error){runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=error.toString();update();Toast.makeText(this,"Could not update layer: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     void startSelection(List<Map<String,Object>> entities){
-        if(entities==null||entities.isEmpty())return;selecting=true;final long generation=selectionGeneration;AppReplica target=replica;String prior=selectionSession;final long requestSequence=prior==null?++selectionRequestSequence:selectionRequestSequence;Map<String,Object> input=Json.object("page",page,"entities",entities);if(prior!=null)input.put("session",prior);
+        if(entities==null||entities.isEmpty())return;selecting=true;final long generation=selectionGeneration;AppReplica target=replica;String prior=selectionSession;final long requestSequence=prior==null?++selectionRequestSequence:selectionRequestSequence;Map<String,Object> input=Json.object("layer",selected,"page",page,"entities",entities);if(prior!=null)input.put("session",prior);
         ReplicaService.writes.execute(()->{try{Map<String,Object> result=Json.map(target.command(Arrays.asList("selection","select","-"),input));runOnUiThread(()->{
             String acquired=String.valueOf(result.get("session"));if(target!=replica||generation!=selectionGeneration||!selecting||(prior==null&&requestSequence!=selectionRequestSequence)){ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",acquired),null);}catch(Exception error){android.util.Log.w("NoteMaker","Could not release stale selection",error);}});return;}selectionSession=acquired;
             for(Object raw:Json.list(result.getOrDefault("selected",Collections.emptyList()))){Map<String,Object> entity=Json.map(raw);boolean exists=false;for(Map<String,Object> old:selectedEntities)if(Objects.equals(old.get("kind"),entity.get("kind"))&&Objects.equals(old.get("id"),entity.get("id")))exists=true;if(!exists)selectedEntities.add(entity);}
             List<Object> skipped=Json.list(result.getOrDefault("skipped",Collections.emptyList()));selectionSkipped+=skipped.size();if(!skipped.isEmpty())Toast.makeText(this,skipped.size()+" item(s) are locked by another editor",Toast.LENGTH_LONG).show();scheduleHeartbeat();update();
         });}catch(Exception error){runOnUiThread(()->Toast.makeText(this,"Could not select entities: "+error.getMessage(),Toast.LENGTH_LONG).show());}});
     }
-    void selectAt(float x,float y){
-        synchronized(lock){
-            for(Map.Entry<String,Map<String,Object>> entry:model.objects.entrySet()){
-                Map<String,Object> object=entry.getValue();if(((Number)object.get("page")).intValue()!=page||Boolean.FALSE.equals(model.objectActive.get(entry.getKey()))||canvas==null||!canvas.visible(String.valueOf(object.get("layer"))))continue;
-                double left=((Number)object.get("x")).doubleValue(),top=((Number)object.get("y")).doubleValue(),w=((Number)object.get("w")).doubleValue(),h=((Number)object.get("h")).doubleValue(),angle=Math.toRadians(((Number)object.getOrDefault("rotation",0)).doubleValue());
-                double dx=x-left-w/2,dy=y-top-h/2,rx=dx*Math.cos(angle)+dy*Math.sin(angle),ry=-dx*Math.sin(angle)+dy*Math.cos(angle);if(Boolean.TRUE.equals(object.get("flipX")))rx=-rx;if(Boolean.TRUE.equals(object.get("flipY")))ry=-ry;
-                if(Math.abs(rx)<=Math.abs(w)/2+18&&Math.abs(ry)<=Math.abs(h)/2+18){startSelection(Collections.singletonList(Json.object("kind","object","id",entry.getKey())));return;}
-            }
-            for(Map.Entry<String,JSONObject> entry:strokes.entrySet()){
-                JSONObject stroke=entry.getValue();if(stroke.optInt("page")!=page||Boolean.FALSE.equals(active.get(entry.getKey()))||canvas==null||!canvas.visible(stroke.optString("layer")))continue;JSONArray path=stroke.optJSONArray("points");
-                for(int i=0;i<path.length();i++){JSONArray point=path.optJSONArray(i);double px=point.optDouble(0),py=point.optDouble(1);if(i>0){JSONArray prior=path.optJSONArray(i-1);double ax=prior.optDouble(0),ay=prior.optDouble(1),dx=px-ax,dy=py-ay,t=dx*dx+dy*dy==0?0:Math.max(0,Math.min(1,((x-ax)*dx+(y-ay)*dy)/(dx*dx+dy*dy)));px=ax+t*dx;py=ay+t*dy;}if(Math.hypot(px-x,py-y)<=20+stroke.optDouble("width")/2){startSelection(Collections.singletonList(Json.object("kind","stroke","id",entry.getKey())));return;}}
-            }
-        }
-        Toast.makeText(this,"Tap a shape or stroke to select it",Toast.LENGTH_SHORT).show();
-    }
-    void selectAllVisible(){ArrayList<Map<String,Object>> entities=new ArrayList<>();synchronized(lock){for(Map.Entry<String,Map<String,Object>> entry:model.objects.entrySet()){Map<String,Object> object=entry.getValue();if(((Number)object.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(entry.getKey()))&&canvas!=null&&canvas.visible(String.valueOf(object.get("layer"))))entities.add(Json.object("kind","object","id",entry.getKey()));}for(Map.Entry<String,JSONObject> entry:strokes.entrySet()){JSONObject stroke=entry.getValue();if(stroke.optInt("page")==page&&!Boolean.FALSE.equals(active.get(entry.getKey()))&&canvas!=null&&canvas.visible(stroke.optString("layer")))entities.add(Json.object("kind","stroke","id",entry.getKey()));}}startSelection(entities);}
-    void selectWithin(float x0,float y0,float x1,float y1){
-        double l=Math.min(x0,x1),r=Math.max(x0,x1),t=Math.min(y0,y1),b=Math.max(y0,y1);ArrayList<Map<String,Object>> entities=new ArrayList<>();
-        synchronized(lock){
-            for(Map.Entry<String,Map<String,Object>> entry:model.objects.entrySet()){
-                Map<String,Object> o=entry.getValue();if(((Number)o.get("page")).intValue()!=page||Boolean.FALSE.equals(model.objectActive.get(entry.getKey()))||canvas==null||!canvas.visible(String.valueOf(o.get("layer"))))continue;
-                double cx=((Number)o.get("x")).doubleValue()+((Number)o.get("w")).doubleValue()/2,cy=((Number)o.get("y")).doubleValue()+((Number)o.get("h")).doubleValue()/2,hw=Math.abs(((Number)o.get("w")).doubleValue())/2,hh=Math.abs(((Number)o.get("h")).doubleValue())/2,a=Math.toRadians(((Number)o.getOrDefault("rotation",0)).doubleValue()),ex=Math.abs(hw*Math.cos(a))+Math.abs(hh*Math.sin(a)),ey=Math.abs(hw*Math.sin(a))+Math.abs(hh*Math.cos(a));
-                if(cx+ex>=l&&cx-ex<=r&&cy+ey>=t&&cy-ey<=b)entities.add(Json.object("kind","object","id",entry.getKey()));
-            }
-            for(Map.Entry<String,JSONObject> entry:strokes.entrySet()){
-                JSONObject s=entry.getValue();if(s.optInt("page")!=page||Boolean.FALSE.equals(active.get(entry.getKey()))||canvas==null||!canvas.visible(s.optString("layer")))continue;JSONArray points=s.optJSONArray("points");boolean hit=false;
-                for(int i=0;i<points.length()&&!hit;i++){JSONArray p=points.optJSONArray(i);double px=p.optDouble(0),py=p.optDouble(1);hit=px>=l&&px<=r&&py>=t&&py<=b;if(!hit&&i>0){JSONArray q=points.optJSONArray(i-1);hit=segmentIntersectsRect(q.optDouble(0),q.optDouble(1),px,py,l,t,r,b);}}
-                if(hit)entities.add(Json.object("kind","stroke","id",entry.getKey()));
-            }
-        }
-        startSelection(entities);
-    }
+    com.notemaker.core.LayerEditor layerEditor(){return new com.notemaker.core.LayerEditor(model,selected,page);}
+    void selectRegion(double[][] region,boolean topmost){synchronized(lock){if(canvas==null||!canvas.visible(selected))return;List<Object> hits=layerEditor().select(region,topmost,com.notemaker.cli.ItemCoverage::create);ArrayList<Map<String,Object>> refs=new ArrayList<>();for(Object hit:hits)refs.add(Json.map(hit));startSelection(refs);}}
+    void selectAt(float x,float y){double radius=canvas==null?1:6/Math.max(.01,canvas.scale()*canvas.zoom);selectRegion(com.notemaker.core.Geometry.capsule(new double[]{x,y},new double[]{x,y},radius),true);}
+    void selectAllVisible(){selectRegion(null,false);}
+    void selectWithin(float x0,float y0,float x1,float y1){selectRegion(com.notemaker.core.Geometry.rect(Math.min(x0,x1),Math.min(y0,y1),Math.abs(x1-x0),Math.abs(y1-y0)),false);}
     private void addLassoPoint(float x,float y){if(canvas==null)return;ArrayList<float[]> path=canvas.lassoPath;if(path.isEmpty()||Math.hypot(path.get(path.size()-1)[0]-x,path.get(path.size()-1)[1]-y)>=3.5f)path.add(new float[]{x,y});}
-    void selectLasso(List<float[]> polygon){
-        if(polygon.size()<3)return;ArrayList<Map<String,Object>> entities=new ArrayList<>();
-        synchronized(lock){
-            for(Map.Entry<String,Map<String,Object>> entry:model.objects.entrySet()){
-                Map<String,Object> o=entry.getValue();if(((Number)o.get("page")).intValue()!=page||Boolean.FALSE.equals(model.objectActive.get(entry.getKey()))||canvas==null||!canvas.visible(String.valueOf(o.get("layer"))))continue;
-                double cx=((Number)o.get("x")).doubleValue()+((Number)o.get("w")).doubleValue()/2,cy=((Number)o.get("y")).doubleValue()+((Number)o.get("h")).doubleValue()/2,hw=Math.abs(((Number)o.get("w")).doubleValue())/2,hh=Math.abs(((Number)o.get("h")).doubleValue())/2,a=Math.toRadians(((Number)o.getOrDefault("rotation",0)).doubleValue()),ex=Math.abs(hw*Math.cos(a))+Math.abs(hh*Math.sin(a)),ey=Math.abs(hw*Math.sin(a))+Math.abs(hh*Math.cos(a));
-                if(pointInPolygon(cx,cy,polygon)||polygonIntersectsRect(polygon,cx-ex,cy-ey,cx+ex,cy+ey))entities.add(Json.object("kind","object","id",entry.getKey()));
-            }
-            for(Map.Entry<String,JSONObject> entry:strokes.entrySet()){
-                JSONObject s=entry.getValue();if(s.optInt("page")!=page||Boolean.FALSE.equals(active.get(entry.getKey()))||canvas==null||!canvas.visible(s.optString("layer")))continue;JSONArray points=s.optJSONArray("points");boolean hit=false;
-                for(int i=0;i<points.length()&&!hit;i++){JSONArray p=points.optJSONArray(i);double px=p.optDouble(0),py=p.optDouble(1);hit=pointInPolygon(px,py,polygon);if(!hit&&i>0){JSONArray q=points.optJSONArray(i-1);hit=segmentIntersectsPolygon(q.optDouble(0),q.optDouble(1),px,py,polygon);}}
-                if(hit)entities.add(Json.object("kind","stroke","id",entry.getKey()));
-            }
-        }
-        startSelection(entities);
-    }
-    private boolean pointInPolygon(double x,double y,List<float[]> polygon){boolean inside=false;for(int i=0,j=polygon.size()-1;i<polygon.size();j=i++){float[] a=polygon.get(i),b=polygon.get(j);if(((a[1]>y)!=(b[1]>y))&&(x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0]))inside=!inside;}return inside;}
-    private boolean polygonIntersectsRect(List<float[]> p,double l,double t,double r,double b){if(pointInPolygon(l,t,p)||pointInPolygon(r,t,p)||pointInPolygon(r,b,p)||pointInPolygon(l,b,p))return true;for(float[] v:p)if(v[0]>=l&&v[0]<=r&&v[1]>=t&&v[1]<=b)return true;for(int i=0;i<p.size();i++){float[] a=p.get(i),z=p.get((i+1)%p.size());if(segmentIntersectsRect(a[0],a[1],z[0],z[1],l,t,r,b))return true;}return false;}
-    private boolean segmentIntersectsPolygon(double x0,double y0,double x1,double y1,List<float[]> p){if(pointInPolygon(x0,y0,p)||pointInPolygon(x1,y1,p))return true;for(int i=0;i<p.size();i++){float[] a=p.get(i),b=p.get((i+1)%p.size());if(segmentsIntersect(x0,y0,x1,y1,a[0],a[1],b[0],b[1]))return true;}return false;}
-    private boolean segmentsIntersect(double ax,double ay,double bx,double by,double cx,double cy,double dx,double dy){double d1=(bx-ax)*(cy-ay)-(by-ay)*(cx-ax),d2=(bx-ax)*(dy-ay)-(by-ay)*(dx-ax),d3=(dx-cx)*(ay-cy)-(dy-cy)*(ax-cx),d4=(dx-cx)*(by-cy)-(dy-cy)*(bx-cx);return ((d1>=0&&d2<=0)||(d1<=0&&d2>=0))&&((d3>=0&&d4<=0)||(d3<=0&&d4>=0));}
-    private boolean segmentIntersectsRect(double x0,double y0,double x1,double y1,double l,double t,double r,double b){double dx=x1-x0,dy=y1-y0,lo=0,hi=1;double[] p={-dx,dx,-dy,dy},q={x0-l,r-x0,y0-t,b-y0};for(int i=0;i<4;i++){if(Math.abs(p[i])<1e-12){if(q[i]<0)return false;continue;}double u=q[i]/p[i];if(p[i]<0)lo=Math.max(lo,u);else hi=Math.min(hi,u);if(lo>hi)return false;}return true;}
-    Map<String,Object> selectedEntityAt(float x,float y){for(Map<String,Object> entity:selectedEntities){String kind=String.valueOf(entity.get("kind")),id=String.valueOf(entity.get("id"));if(kind.equals("object")){Map<String,Object> o=model.objects.get(id);if(o==null)continue;double w=((Number)o.get("w")).doubleValue(),h=((Number)o.get("h")).doubleValue(),dx=x-((Number)o.get("x")).doubleValue()-w/2,dy=y-((Number)o.get("y")).doubleValue()-h/2,a=Math.toRadians(((Number)o.getOrDefault("rotation",0)).doubleValue()),rx=dx*Math.cos(a)+dy*Math.sin(a),ry=-dx*Math.sin(a)+dy*Math.cos(a);if(Boolean.TRUE.equals(o.get("flipX")))rx=-rx;if(Boolean.TRUE.equals(o.get("flipY")))ry=-ry;if(Math.abs(rx)<=Math.abs(w)/2+18&&Math.abs(ry)<=Math.abs(h)/2+18)return entity;}else{JSONObject s=strokes.get(id);if(s==null)continue;JSONArray ps=s.optJSONArray("points");for(int i=0;i<ps.length();i++){JSONArray p=ps.optJSONArray(i);double px=p.optDouble(0),py=p.optDouble(1);if(i>0){JSONArray q=ps.optJSONArray(i-1);double ax=q.optDouble(0),ay=q.optDouble(1),dx=px-ax,dy=py-ay,den=dx*dx+dy*dy,t=den==0?0:Math.max(0,Math.min(1,((x-ax)*dx+(y-ay)*dy)/den));px=ax+t*dx;py=ay+t*dy;}if(Math.hypot(px-x,py-y)<20+s.optDouble("width")/2)return entity;}}}return null;}
-    void deselectEntity(String kind,String id){if(selectionSession==null)return;ArrayList<Map<String,Object>> remaining=new ArrayList<>();for(Map<String,Object> entity:selectedEntities)if(!(kind.equals(entity.get("kind"))&&id.equals(entity.get("id"))))remaining.add(entity);String session=selectionSession;AppReplica target=replica;final long generation=selectionGeneration;selectionSession=null;selectedEntities.clear();pendingTransform=null;selecting=true;if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",session),null);if(!remaining.isEmpty()){if(generation!=selectionGeneration||!selecting||target!=replica)return;Map<String,Object> request=Json.object("page",page,"entities",remaining);Map<String,Object> result=Json.map(target.command(Arrays.asList("selection","select","-"),request));String acquired=String.valueOf(result.get("session"));runOnUiThread(()->{if(target!=replica||generation!=selectionGeneration||!selecting){ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",acquired),null);}catch(Exception error){android.util.Log.w("NoteMaker","Could not release stale selection",error);}});return;}selectionSession=acquired;for(Object raw:Json.list(result.getOrDefault("selected",Collections.emptyList())))selectedEntities.add(Json.map(raw));selectionSkipped+=Json.list(result.getOrDefault("skipped",Collections.emptyList())).size();scheduleHeartbeat();update();});}else runOnUiThread(this::update);}catch(Exception error){runOnUiThread(()->Toast.makeText(this,"Could not release item lock: "+error.getMessage(),Toast.LENGTH_LONG).show());}});update();}
+    void selectLasso(List<float[]> polygon){if(polygon.size()<3)return;double[][] p=new double[polygon.size()][2];for(int i=0;i<p.length;i++){p[i][0]=polygon.get(i)[0];p[i][1]=polygon.get(i)[1];}selectRegion(p,false);}
+    Map<String,Object> selectedEntityAt(float x,float y){double radius=6/Math.max(.01,canvas.scale()*canvas.zoom);double[][] region=com.notemaker.core.Geometry.capsule(new double[]{x,y},new double[]{x,y},radius);com.notemaker.core.LayerEditor editor=layerEditor();for(Map<String,Object> ref:selectedEntities){try{if(editor.resolve(String.valueOf(ref.get("kind")),String.valueOf(ref.get("id"))).intersects(region,com.notemaker.cli.ItemCoverage::create))return ref;}catch(IllegalArgumentException stale){}}return null;}
+    void selectLayer(String layer){if(!Objects.equals(selected,layer)){boolean selectionTool=selecting;deselect();resetDrawingGesture();selected=layer;selecting=selectionTool;}save();update();}
+    void deselectEntity(String kind,String id){if(selectionSession==null)return;ArrayList<Map<String,Object>> remaining=new ArrayList<>();for(Map<String,Object> entity:selectedEntities)if(!(kind.equals(entity.get("kind"))&&id.equals(entity.get("id"))))remaining.add(entity);String session=selectionSession;AppReplica target=replica;final long generation=selectionGeneration;selectionSession=null;selectedEntities.clear();pendingTransform=null;selecting=true;if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",session),null);if(!remaining.isEmpty()){if(generation!=selectionGeneration||!selecting||target!=replica)return;Map<String,Object> request=Json.object("layer",selected,"page",page,"entities",remaining);Map<String,Object> result=Json.map(target.command(Arrays.asList("selection","select","-"),request));String acquired=String.valueOf(result.get("session"));runOnUiThread(()->{if(target!=replica||generation!=selectionGeneration||!selecting){ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",acquired),null);}catch(Exception error){android.util.Log.w("NoteMaker","Could not release stale selection",error);}});return;}selectionSession=acquired;for(Object raw:Json.list(result.getOrDefault("selected",Collections.emptyList())))selectedEntities.add(Json.map(raw));selectionSkipped+=Json.list(result.getOrDefault("skipped",Collections.emptyList())).size();scheduleHeartbeat();update();});}else runOnUiThread(this::update);}catch(Exception error){runOnUiThread(()->Toast.makeText(this,"Could not release item lock: "+error.getMessage(),Toast.LENGTH_LONG).show());}});update();}
     private void scheduleHeartbeat(){
         if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);
         if(selectionSession==null)return;final String session=selectionSession;final AppReplica target=replica;
@@ -477,9 +431,9 @@ public class MainActivity extends Activity {
         LinearLayout box=new LinearLayout(this);box.setOrientation(1);box.setPadding(24,8,24,8);box.addView(content);box.addView(size);box.addView(bold);box.addView(italic);box.addView(underline);box.addView(new TextView(this){{setText("Font");}});box.addView(family);box.addView(new TextView(this){{setText("Alignment");}});box.addView(alignment);
         new AlertDialog.Builder(this).setTitle("Place text").setMessage("Enter text, then tap the canvas to position it.").setView(box).setNegativeButton("Cancel",null).setPositiveButton("Continue",(d,w)->{try{String value=content.getText().toString();float font=Float.parseFloat(size.getText().toString());if(value.trim().isEmpty()||Float.isNaN(font)||Float.isInfinite(font)||font<1||font>500)throw new IllegalArgumentException("Enter text and a font size from 1 to 500");pendingText=value;pendingTextSize=font;pendingTextBold=bold.isChecked();pendingTextItalic=italic.isChecked();pendingTextUnderline=underline.isChecked();pendingTextFamily=family.getSelectedItem().toString();pendingTextAlignment=alignment.getSelectedItem().toString();setDrawingTool("text");}catch(Exception e){Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();}}).show();
     }
-    void resetDrawingGesture(){drawingShape=null;pendingText=null;if(canvas!=null){canvas.shapeDragging=false;canvas.points=null;canvas.current=null;canvas.invalidate();}}
+    void resetDrawingGesture(){drawingShape=null;pendingText=null;if(canvas!=null){canvas.shapeDragging=false;canvas.points=null;canvas.current=null;canvas.eraserPoints=null;canvas.invalidate();}}
     void editObject(String id){synchronized(lock){
-        Map<String,Object> original=model.objects.get(id);if(original==null)return;
+        Map<String,Object> original=new LayerEditor(model,selected,page,true).resolve("object",id).content;final String editLayer=selected;final int editPage=page;
         LinearLayout form=new LinearLayout(this);form.setOrientation(1);form.setPadding(24,12,24,12);Map<String,EditText> fields=new LinkedHashMap<>();
         boolean svg="svg".equals(original.get("shape"));
         String[] keys=svg?new String[]{"x","y","w","h"}:new String[]{"text","x","y","w","h","fontSize"};
@@ -497,10 +451,10 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Edit object").setView(form).setPositiveButton("Save",(d,w)->{
             try{synchronized(lock){Map<String,Object> patch=Json.object();for(Map.Entry<String,EditText> f:fields.entrySet())patch.put(f.getKey(),f.getKey().equals("text")?f.getValue().getText().toString():Double.parseDouble(f.getValue().getText().toString()));
                 if(boldField!=null){patch.put("bold",boldField.isChecked());patch.put("italic",italicField.isChecked());patch.put("underline",underlineField.isChecked());patch.put("fontFamily",familyField.getSelectedItem().toString());patch.put("alignment",alignmentField.getSelectedItem().toString());}
-                persist(Arrays.asList("object","update",id,"-"),patch,null);undo.add("object-action");redo.clear();save();update();}
+                if(!editLayer.equals(selected)||editPage!=page)throw new IllegalStateException("Editing layer changed");patch.put("scope",Json.object("layer",editLayer,"page",editPage));persist(Arrays.asList("object","update",id,"-"),patch,null);undo.add("object-action");redo.clear();save();update();}
             }catch(Exception e){Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();}
         }).setNeutralButton(Boolean.FALSE.equals(model.objectActive.get(id))?"Restore":"Erase",(d,w)->{
-            try{synchronized(lock){persist(Arrays.asList("object",Boolean.FALSE.equals(model.objectActive.get(id))?"show":"hide",id),null,null);undo.add("object-action");redo.clear();save();update();}}catch(Exception e){Toast.makeText(this,e.getMessage(),1).show();}
+            try{synchronized(lock){if(!editLayer.equals(selected)||editPage!=page)throw new IllegalStateException("Editing layer changed");persist(Arrays.asList("object",Boolean.FALSE.equals(model.objectActive.get(id))?"show":"hide",id,editLayer,String.valueOf(editPage)),null,null);undo.add("object-action");redo.clear();save();update();}}catch(Exception e){Toast.makeText(this,e.getMessage(),1).show();}
         }).setNegativeButton("Cancel",null).show();
     }}
 
@@ -513,27 +467,7 @@ public class MainActivity extends Activity {
         float scale(){return Math.min(getWidth()/1000f,getHeight()/1400f);}
         float x(float x){return (x-offsetX)/(scale()*zoom);}float y(float y){return (y-offsetY)/(scale()*zoom);}
         boolean visible(String layer){JSONObject l=layers.get(layer);return l!=null&&!Boolean.FALSE.equals(model.layerActive.get(layer))&&(l.optBoolean("force")||!hidden.contains(layer));}
-        void drawStroke(Canvas c,JSONObject stroke){
-            JSONArray ps=stroke.optJSONArray("points");if(ps==null||ps.length()==0)return;
-            int original=stroke.optInt("color"),alpha=original>>>24;String kind=stroke.optString("brush","pen");
-            if(kind.equals("marker"))alpha=Math.min(alpha,128);else if(kind.equals("pencil")||kind.equals("charcoal"))alpha=Math.min(alpha,190);
-            int ink=(original&0x00ffffff)|(alpha<<24);
-            float factor=kind.equals("marker")||kind.equals("neoBrush")?1.8f:kind.equals("brush")||kind.equals("charcoal")?1.35f:kind.equals("latinCalligraphy")||kind.equals("asiaCalligraphy")?1.5f:kind.equals("pencil")||kind.equals("fountain")||kind.equals("oily")?.82f:1f;
-            paint.setColor(ink);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStyle(Paint.Style.STROKE);
-            float px=0,py=0,pw=0;
-            for(int i=0;i<ps.length();i++){
-                JSONArray point=ps.optJSONArray(i);float x=(float)point.optDouble(0),y=(float)point.optDouble(1);
-                float w=(float)(stroke.optDouble("width")*factor*(.25+.75*point.optDouble(2)));
-                if(i>0){float segmentWidth=(pw+w)/2f;double angle=Math.atan2(y-py,x-px);
-                    if(kind.equals("latinCalligraphy")||kind.equals("asiaCalligraphy")){double nib=kind.equals("latinCalligraphy")?Math.PI/4:Math.PI/3;segmentWidth*=.12+.88*Math.abs(Math.sin(angle-nib));}
-                    paint.setStrokeWidth(segmentWidth);c.drawLine(px,py,x,y,paint);
-                }
-                if(kind.equals("square")){paint.setStyle(Paint.Style.FILL);c.drawRect(x-w/2f,y-w/2f,x+w/2f,y+w/2f,paint);paint.setStyle(Paint.Style.STROKE);}
-                else {paint.setStyle(Paint.Style.FILL);c.drawCircle(x,y,w/2f,paint);paint.setStyle(Paint.Style.STROKE);}
-                px=x;py=y;pw=w;
-            }
-            paint.setStyle(Paint.Style.STROKE);
-        }
+        void drawStroke(Canvas c,JSONObject stroke){Render.drawStroke(Json.map(Json.parse(stroke.toString())),new com.notemaker.cli.Png(c));}
         // Cache settled ink at display resolution; extending a page draws only the new strokes.
         final LinkedHashMap<String,InkCache> ink=new LinkedHashMap<String,InkCache>(4,.75f,true);
         String inkTransform="";

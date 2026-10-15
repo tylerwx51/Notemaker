@@ -1,5 +1,134 @@
 # Verification
 
+## Erase latency investigation — 2026-10-14
+
+Captured the physical NoteAir6C's app files read-only and profiled a disposable
+copy of `Drawing object protocol.` using the installed APK's Java core and native
+Android coverage renderer. The selected base layer/page contained 36 active items
+and 3,296 stroke points. Neither the installed APK nor the original note was
+modified. Temporary device replicas were removed after testing.
+
+Added `tests/LatencyProbe.java` and `tests/drawing_latency.py`; the latter compiles
+and runs the probe through the Nix toolchain, supports JVM and physical Android
+execution, and requires an explicit capture and a fresh output directory.
+All writes go through shared Store/LocalProxy actions in the disposable replica.
+The marker check prevents accidentally targeting an ordinary replica directory.
+
+Final tablet run:
+
+```sh
+nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --output .test-artifacts/latency/tablet-final-profile --serial eac89823'
+```
+
+| Phase | Measured time |
+| --- | --- |
+| Cold state read/replay | 150 ms |
+| Warm state read | 0.15–0.25 ms |
+| Single-region hit tests across selected layer | 1,274 ms |
+| Coverage factory portion of those hit tests | 1,271 ms (36 calls) |
+| Repeated erase geometry | 1,246–1,249 ms |
+| Complete local proxy erase command | 1,253–1,300 ms |
+| Snapshot following erase | 1.17–1.27 ms |
+| Snapshot to model | about 0.47 ms |
+| Undo | about 4 ms |
+| 120-point swipe command | 1,264 ms |
+| Full page PNG rendering and encoding | 94 ms |
+| Fifth erase in an immediately submitted five-request burst | 6,801 ms |
+| Experimental conservative ink bounds filter, cold coverage cache | 1.76 ms |
+
+The burst intentionally uses the same region: the first erase changes content,
+and the later requests report no matching content, but still take about 1.37
+seconds apiece. Request four completes after 5.43 seconds and request five waits
+5.43 seconds before starting. The single-thread executor mirrors the app writer
+queue, but this is a controlled backend benchmark, not recorded touchscreen input.
+
+Root cause: `DrawItem.intersects` constructs exact coverage before its bounds
+rejection. `DrawingActions.erase` calls this for all items in the scoped layer.
+Android `ItemCoverage` unions the painted segment/dot paths repeatedly when
+building stroke coverage. The 16-item LRU churns while scanning this layer of 36
+items. Coverage generation accounts for over 99% of the measured hit-test time.
+The work occurs under Store's transaction/coordination locks, and the Android
+single write queue serializes subsequent erases and other writes behind it.
+This explains how a local geometry cost becomes a multi-second backlog without
+any server dependency.
+
+The test-only bounds experiment clears the coverage cache, conservatively
+rejects distant ink before calling exact coverage, and reduces candidates to
+nine while retaining the same two hits. It is evidence for the optimization
+direction, not a production fix or a general latency guarantee. Production
+coverage, caching and UI behavior remain unchanged in this investigation.
+
+The JVM baseline also reproduced the geometry bottleneck (about 1.4 seconds per
+erase, sub-millisecond snapshots). Physical runs were offline with no upstream;
+connected-server timing, Activity frame presentation and E Ink panel latency
+were not measured. The PNG figure includes rendering and encoding and must not
+be interpreted as touch-to-display latency. Earlier functional emulator tests
+do not cover this real-note erase workload.
+
+Artifacts: `.test-artifacts/latency/tablet-final-profile/timings.jsonl`, with
+earlier repeat runs under `.test-artifacts/latency/`. The capture contains private
+note data and is not committed. Python syntax and `git diff --check` passed.
+
+## Unified item coverage and layer-scoped editing — 2026-10-14
+
+Built JVM CLI, Android CLI and APK through `nix-shell` using
+`apps/cli/build.sh --android` and `apps/android/build.sh`.
+
+The local regression run passed server, CLI, drawing, drawing-tools, coverage,
+browser, selection, conflict and proxy suites (87 cases at that point). Report:
+`.test-artifacts/runs/20261014-154041-029503/report.json`.
+Focused reruns passed ten coverage cases, nine drawing-tools cases and twenty
+selection cases through actual CLI calls. The latest coverage run also verifies
+that masks on appended ink do not reuse old action metadata. Coverage
+includes alpha holes/opaque white pixels, hollow shapes, pressure ink, glyphs,
+layer-scoped direct IDs, atomic masks/undo/redo, transforms, restart persistence,
+flood-fill gaps, empty coverage and retaining both offline mask-conflict versions.
+The browser test also checks masked PNG export and pixels rendered after syncing
+an erased image through a temporary local Python server.
+
+The focused Android coverage check passed on an isolated API 36 emulator,
+including image alpha, native outlines, partial-erasure pixels revealing the
+underlying layer, and releasing selection leases on a layer switch. The broader
+Android run passed fill, selection/preview/transform/delete, foreign leases,
+box/lasso selection, layer compositing, conflict comparison and persistent
+clipboard checks. Its later panel-navigation test exposed outdated menu labels;
+the test now uses the existing Template, Layers and More controls. It also exposed
+lightweight stroke previews lacking a `kind` field; the shared mask reader now
+handles these, and layer thumbnails retain brush and erasure data.
+The final `python3 -u tests/drawing_android.py --coverage-only --panels-only`
+run passed both groups on the rebuilt APK: coverage/layer-switch checks and brush,
+eraser, template, layer-action and toolbar-preference panels. Artifacts are in
+`.test-artifacts/drawing-android/`, including the final `logcat.txt`.
+
+Installed the rebuilt APK on BOOX NoteAir6C `eac89823` through
+`nix-shell --run 'python3 tests/tablet_checks.py --serial eac89823 --install'`.
+The backup retained the previous APK and app data; all 49 app-data/preferences
+files were byte-identical across installation. The installed APK matched SHA256
+`04e5632f5e8ac18f5a68bf760d017e22b20a22890ce324842db8a979377a96a8`.
+The connected smoke check failed because the configured upstream
+`127.0.0.1:8765` was unreachable, with zero pending actions reported. A subsequent
+read-only proxy history query timed out, so post-launch history comparison was
+not completed. Bringing MainActivity to the foreground succeeded; screenshot
+inspection confirmed the editor displays the existing drawing. AndroidRuntime
+logs collected during startup contained no fatal exception.
+Artifacts: `.test-artifacts/tablet/20261014-185835-448778/`.
+
+No E Ink/stylus validation or remote server rollout was performed.
+Raster coverage uses a one-local-unit grid; font/SVG edge behavior
+follows the platform renderer. See ADR 0011 for memory bounds and upgrade scope.
+
+## Agent robot toolbar shortcut — 2026-10-14
+
+Added an original monochrome vector robot above More in the left rail. It opens
+the existing Agent interface directly; the More shortcut uses the same icon.
+Built with `nix-shell --run 'apps/android/build.sh'` and installed through the
+backed-up tablet check on BOOX `eac89823`. All 43 app-data files and 544 existing
+actions were preserved. Sync connected with zero pending actions, and no fatal
+exceptions were found. Android UI automation tapped Open Agent, verified its
+Close control, and returned to the editor. The toolbar screenshot was inspected.
+Artifacts: `.test-artifacts/tablet/20261014-115346-194797/`.
+APK: `5b47aed9a8c12bf3eb9e24a9b6ec96a0308a46700abe49e2a08f584176c512b4`.
+
 ## BOOX-style editor organization and menus — 2026-10-14
 
 Reorganized the Android editor into a narrow left rail, top-bar drawing/history

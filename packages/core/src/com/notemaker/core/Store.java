@@ -51,10 +51,16 @@ public final class Store {
         return commit(actor,build,Collections.emptyList());
     }
     public Map<String,Object> commit(String actor,Actions.Build build,List<Object> dependencies) throws Exception {
+        return commit(actor,build,dependencies,null,Collections.emptyList());
+    }
+    public Map<String,Object> commitSelected(String actor,String session,List<Object> entities,Actions.Build build,List<Object> dependencies) throws Exception {
+        return commit(actor,build,dependencies,session,entities);
+    }
+    private Map<String,Object> commit(String actor,Actions.Build build,List<Object> dependencies,String requiredSession,List<Object> selected) throws Exception {
         Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         final Map<String,Object> result=object();
         edit(state->{
-            Model model=Store.model(state);Model baseline=new Model(model);List<Object> requested=build.create(model),ops=new ArrayList<>();
+            Model model=Store.model(state);if(requiredSession!=null)Collaboration.requireSelection(state,model,actor,requiredSession,selected);Model baseline=new Model(model);List<Object> requested=build.create(model),ops=new ArrayList<>();
             for(Object value:requested){Map<String,Object> op=map(value);ops.add(op);String kind=string(op,"kind");
                 String key=kind.equals("object")?"object":kind.equals("layer")?"layer":kind.equals("stroke")?"stroke":null;
                 if(key!=null&&!(key.equals("object")?model.objects:key.equals("layer")?model.layers:model.strokes).containsKey(op.get(key)))ops.add(object("kind",key.equals("stroke")?"active":key+"-active",key,op.get(key),"active",true));

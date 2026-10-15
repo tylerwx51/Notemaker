@@ -152,6 +152,7 @@ class DrawingBrowser(unittest.TestCase):
                     'color': -16777216, 'width': 2, 'fill': -16777216
                 })
                 cli_svg = out / 'cli-render.svg'
+                cli('erase','-',value=dict(mode='partial',layer='base',radius=8,points=[[740,100],[740,180]]))
                 cli_png = out / 'cli-render.png'
                 cli('export', str(cli_svg))
                 cli('export', str(cli_png))
@@ -167,7 +168,8 @@ class DrawingBrowser(unittest.TestCase):
                 self.assertGreater(cli_png.stat().st_size, 500)
                 png_width,png_height,cli_pixel=read_rgba_png(cli_png)
                 self.assertEqual((png_width,png_height),(1000,1400))
-                self.assertGreater(cli_pixel(740,140)[2],200)
+                self.assertGreater(cli_pixel(720,140)[2],200)
+                self.assertGreater(min(cli_pixel(740,140)[:3]),245)
                 self.assertGreater(cli_pixel(550,130)[0],200)
                 for index in range(5):
                     self.assertGreater(sum(1 for y in range(615,730) for x in range(70+index*170,200+index*170)
@@ -179,7 +181,7 @@ class DrawingBrowser(unittest.TestCase):
                                        if cli_pixel(x,y)[2]>180 and cli_pixel(x,y)[0]<80),100)
                 cli('sync', server_url)
                 events = json.load(urllib.request.urlopen(server_url + '/api/events?document=' + document))['events']
-                self.assertEqual(len(events), 16)
+                self.assertEqual(len(events), 17)
                 preview_entity={'kind':'object','id':'preview-target','page':0}
                 cli('selection','select','-',value={'session':'browser-preview','page':0,'entities':[preview_entity]})
                 cli('transform','preview','-',value={'session':'browser-preview','entities':[preview_entity],'transform':{'dx':300}})
@@ -209,10 +211,10 @@ class DrawingBrowser(unittest.TestCase):
                 deadline = time.monotonic() + 20
                 while time.monotonic() < deadline:
                     state = debug.evaluate('({cursor:typeof cursor==="undefined"?null:cursor,count:typeof ops==="undefined"?null:ops.length,status:document.querySelector("#status")?.textContent||"",canvas:!!document.querySelector("canvas")})')
-                    if state['cursor'] == 16 and 'Connected' in state['status']:
+                    if state['cursor'] == 17 and 'Connected' in state['status']:
                         break
                     time.sleep(.2)
-                self.assertEqual(state['cursor'], 16, state)
+                self.assertEqual(state['cursor'], 17, state)
                 self.assertIn('Connected', state['status'])
 
                 pixels = debug.evaluate('''(()=>{
@@ -223,7 +225,7 @@ class DrawingBrowser(unittest.TestCase):
                   return {triangleInterior:p(180,190),triangleCorner:p(103,103),starInterior:p(380,170),starCorner:p(302,102),line:p(520,290),
                     cubeEdge:p(560,105),cubeInterior:p(550,130),threeD:[0,1,2,3,4].map(i=>regionCount(70+i*170,610,200+i*170,735,(r,g,b)=>r<80&&g<80&&b<80)),
                     threeDFill:[0,1,2,3,4].map(i=>regionCount(70+i*170,610,200+i*170,735,(r,g,b)=>r>180&&g>180&&b<120)),
-                    picture:p(740,140),styledInk:boundsInText(),rotated:p(150,460),rotationVoid:p(200,410),
+                    picture:p(720,140),pictureHole:p(740,140),styledInk:boundsInText(),rotated:p(150,460),rotationVoid:p(200,410),
                     attachedArrow:p(800,440),unrotatedConnectorGap:p(787,434),
                     previewMoved:p(450,925),previewOriginal:p(150,925),
                     red:bounds((r,g,b,a)=>a>0&&r>220&&g<40&&b<40),green:bounds((r,g,b,a)=>a>0&&g>100&&r<40&&b<40),
@@ -238,6 +240,7 @@ class DrawingBrowser(unittest.TestCase):
                     return {count:n,bounds:[minX,minY,maxX,maxY]};}
                 })()''')
                 self.assertGreater(pixels['triangleInterior'][0], 220, pixels)
+                self.assertTrue(all(channel>245 for channel in pixels['pictureHole'][:3]),pixels)
                 self.assertLess(pixels['triangleInterior'][1], 40, pixels)
                 self.assertLess(pixels['triangleInterior'][2], 40, pixels)
                 self.assertTrue(all(channel > 245 for channel in pixels['triangleCorner'][:3]), pixels)
@@ -284,7 +287,7 @@ class DrawingBrowser(unittest.TestCase):
                 self.assertTrue(all(channel>245 for channel in reverted['m'][:3]),reverted)
                 self.assertLess(max(reverted['o'][:3]),40,reverted)
                 cli('selection','deselect','browser-preview')
-                self.assertEqual(len(json.load(urllib.request.urlopen(server_url + '/api/events?document=' + document))['events']),16)
+                self.assertEqual(len(json.load(urllib.request.urlopen(server_url + '/api/events?document=' + document))['events']),17)
                 print('PASS triangle/star fills and signed line render in live server viewer', flush=True)
             finally:
                 if debug:

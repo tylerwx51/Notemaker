@@ -162,7 +162,7 @@ try:
         state=tablet('diagram','add','-',value=EXAMPLE,concurrent=True)
         assert len(state['model']['objects'])==8 and state['strokes']==1 and state['pending']>0,state
         print('PASS app-spawned CLI and pen input share local state offline',flush=True)
-        tablet('object','update','app','-',value={'x':125,'text':'Offline agent edit'})
+        tablet('object','update','app','-',value={'scope':{'layer':'architecture','page':0},'x':125,'text':'Offline agent edit'})
         state=instrument('state')
         assert state['model']['objects'][0]['text']=='Offline agent edit'
         tablet('undo');state=tablet('undo')
@@ -198,14 +198,14 @@ try:
         wait(lambda:not replica()['pending'])
         desktop('sync',f'http://127.0.0.1:{PORT}')
         assert len(desktop('inspect')['objects'])==9
-        desktop('object','update','cli','-',value={'text':'Desktop agent','x':580})
+        desktop('object','update','cli','-',value={'scope':{'layer':'architecture','page':0},'text':'Desktop agent','x':580})
         desktop('layer','put','-',value={'layer':'test-layer','name':'Forced layer','force':True})
         desktop('sync',f'http://127.0.0.1:{PORT}')
         wait(lambda:object_snapshot('cli').get('text')=='Desktop agent')
         print('PASS desktop CLI ↔ server ↔ Android local state convergence',flush=True)
         server.terminate();server.wait(timeout=10);server=None
-        tablet('object','hide','app')
-        desktop('object','update','app','-',value={'x':250})
+        tablet('object','hide','app','architecture','0')
+        desktop('object','update','app','-',value={'scope':{'layer':'architecture','page':0},'x':250})
         server=subprocess.Popen(['python3',str(ROOT/'apps/server/server.py'),'--host','127.0.0.1','--port',str(PORT),'--database',temp+'/server.sqlite3'],stdout=(OUT/'server.log').open('a'),stderr=subprocess.STDOUT)
         wait(lambda:urllib.request.urlopen(f'http://127.0.0.1:{PORT}/api/info',timeout=2).status==200)
         wait(lambda:not replica()['pending'])
@@ -232,9 +232,9 @@ try:
         before=len(desktop('inspect')['strokes'])
         instrument('draw',shift='150')
         wait(lambda:len(desktop('inspect')['strokes'])==before+1)
-        tablet('object','update','cli','-',value={'text':'Selected proxy'})
+        tablet('object','update','cli','-',value={'scope':{'layer':'architecture','page':0},'text':'Selected proxy'})
         assert next(o for o in desktop('inspect')['objects'] if o['object']=='cli')['text']=='Selected proxy'
-        desktop('object','update','cli','-',value={'text':'SSE update'})
+        desktop('object','update','cli','-',value={'scope':{'layer':'architecture','page':0},'text':'SSE update'})
         wait(lambda:next(o for o in instrument('state')['model']['objects'] if o['object']=='cli')['text']=='SSE update')
         print('PASS app and spawned CLI use selected proxy; SSE refreshes remote editor',flush=True)
         state=instrument('configure',document='remote-pages',type='pages',proxyUrl=f'http://127.0.0.1:{desktop_proxy.port}',proxyToken=desktop_proxy.descriptor['token'])
