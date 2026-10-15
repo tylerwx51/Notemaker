@@ -18,6 +18,11 @@ public class Integration extends Instrumentation {
             app.canvas.onTouchEvent(event);event.recycle();
         }
     }
+    static MotionEvent touch(long start,long time,int action,int count,float x0,float y0,float x1,float y1){
+        MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[count];MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[count];
+        for(int i=0;i<count;i++){properties[i]=new MotionEvent.PointerProperties();properties[i].id=i;properties[i].toolType=MotionEvent.TOOL_TYPE_FINGER;coords[i]=new MotionEvent.PointerCoords();coords[i].x=(i==0?x0:x1);coords[i].y=(i==0?y0:y1);coords[i].pressure=1;coords[i].size=1;}
+        return MotionEvent.obtain(start,time,action,count,properties,coords,0,0,1,1,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0);
+    }
     static void copy(java.io.InputStream in,java.io.OutputStream out){try{byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}catch(java.io.IOException e){throw new RuntimeException(e);}}
     @Override public void onCreate(Bundle args){arguments=args;start();}
     @Override public void onStart(){
@@ -131,12 +136,29 @@ public class Integration extends Instrumentation {
                     if(action.equals("erase")){app.erase=true;float shift=Float.parseFloat(arguments.getString("shift","0"));app.canvas.eraseAt((200+shift)*app.canvas.scale(),(266+shift)*app.canvas.scale());app.save();}
                     app.update();
                 }
+            if(action.equals("gesture-routing")){
+                app.setDrawingTool(null);int strokesBefore=app.strokes.size();long start=SystemClock.uptimeMillis();float scale=app.canvas.scale();
+                MotionEvent down=touch(start,start,MotionEvent.ACTION_DOWN,1,100*scale,200*scale,0,0);app.canvas.onTouchEvent(down);down.recycle();
+                MotionEvent move=touch(start,start+20,MotionEvent.ACTION_MOVE,1,180*scale,260*scale,0,0);app.canvas.onTouchEvent(move);move.recycle();
+                MotionEvent up=touch(start,start+40,MotionEvent.ACTION_UP,1,180*scale,260*scale,0,0);app.canvas.onTouchEvent(up);up.recycle();
+                if(app.canvas.points!=null||app.canvas.current!=null||app.strokes.size()!=strokesBefore)throw new IllegalStateException("Finger drag created a pen stroke");
+                float oldX=app.canvas.offsetX,oldY=app.canvas.offsetY,oldZoom=app.canvas.zoom;
+                down=touch(start+100,start+100,MotionEvent.ACTION_DOWN,1,100*scale,100*scale,0,0);app.canvas.onTouchEvent(down);down.recycle();
+                down=touch(start+100,start+110,MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),2,100*scale,100*scale,200*scale,100*scale);app.canvas.onTouchEvent(down);down.recycle();
+                move=touch(start+100,start+130,MotionEvent.ACTION_MOVE,2,140*scale,130*scale,240*scale,130*scale);app.canvas.onTouchEvent(move);move.recycle();
+                up=touch(start+100,start+150,MotionEvent.ACTION_POINTER_UP|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),2,140*scale,130*scale,240*scale,130*scale);app.canvas.onTouchEvent(up);up.recycle();
+                up=touch(start+100,start+170,MotionEvent.ACTION_UP,1,140*scale,130*scale,0,0);app.canvas.onTouchEvent(up);up.recycle();
+                if(Math.abs(app.canvas.offsetX-oldX)<20||Math.abs(app.canvas.offsetY-oldY)<15||Math.abs(app.canvas.zoom-oldZoom)>.05f)throw new IllegalStateException("Two-finger move did not pan the page cleanly");
+            }
             });
             if(action.equals("draw")){
                 drainWrites();waitForIdleSync();org.json.JSONObject completed=app.strokes.get(drawnStroke[0]);int stored=completed==null||completed.optJSONArray("points")==null?0:completed.optJSONArray("points").length();
+                if(arguments.getString("tool","stylus").equals("finger")){if(drawnStroke[0]!=null||maxGesturePoints[0]!=0||stored!=0)throw new IllegalStateException("Finger input created a pen stroke");}
+                else {
                 // ACTION_UP appends the final sample and clears the in-flight list, so the
                 // last observable in-gesture length is 11 while the persisted stroke has 12.
                 if(maxGesturePoints[0]<11||stored<12)throw new IllegalStateException("Canvas stroke lost move samples: observed="+maxGesturePoints[0]+" stored="+stored+" stroke="+drawnStroke[0]);
+                }
             }
             if(action.equals("remote-preview")){
                 drainWrites();waitForIdleSync();long revisionBefore=app.revision;java.util.ArrayList<String> undoBefore=new java.util.ArrayList<>(app.undo);Bitmap before=captureCanvas(app);

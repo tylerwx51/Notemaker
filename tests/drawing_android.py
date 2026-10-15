@@ -152,6 +152,9 @@ def main():
                 env=env, stdout=log, stderr=subprocess.STDOUT)
             wait_ready()
             adb('install', '-r', str(APK))
+            instrument('configure', document='android-gesture-routing', host='offline')
+            instrument('gesture-routing')
+            print('PASS Android finger rejection and two-finger page pan')
             if '--coverage-only' in sys.argv or '--panels-only' in sys.argv:
                 instrument('configure', document='android-coverage', host='offline')
                 if '--coverage-only' in sys.argv:

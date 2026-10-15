@@ -559,17 +559,17 @@ public class MainActivity extends Activity {
                 scaling.onTouchEvent(event);int action=event.getActionMasked();float sx=event.getX(),sy=event.getY();
                 if(event.getPointerCount()>1){
                     if(action==MotionEvent.ACTION_POINTER_DOWN){lastGestureX=centroidX(event);lastGestureY=centroidY(event);}
-                    if(action==MotionEvent.ACTION_MOVE){float cx=centroidX(event),cy=centroidY(event);offsetX+=cx-lastGestureX;offsetY+=cy-lastGestureY;lastGestureX=cx;lastGestureY=cy;}
+                    if(action==MotionEvent.ACTION_MOVE&&!scaling.isInProgress()){float cx=centroidX(event),cy=centroidY(event);offsetX+=cx-lastGestureX;offsetY+=cy-lastGestureY;lastGestureX=cx;lastGestureY=cy;}
                     if(shapeDragging)shapeDragging=false;if(eraserPoints!=null)eraserPoints=null;points=null;current=null;transforming=false;lassoing=false;invalidate();return true;
                 }
                 boolean stylus=event.getToolType(event.getActionIndex())==MotionEvent.TOOL_TYPE_STYLUS||event.getToolType(event.getActionIndex())==MotionEvent.TOOL_TYPE_ERASER;
                 if(pan){if(action==MotionEvent.ACTION_DOWN){lastX=sx;lastY=sy;}if(action==MotionEvent.ACTION_MOVE&&!scaling.isInProgress()&&event.getPointerCount()==1){offsetX+=sx-lastX;offsetY+=sy-lastY;invalidate();}lastX=sx;lastY=sy;return true;}
-                if(!stylus)return true;
                 if(action==MotionEvent.ACTION_DOWN){
                     if(!visible(selected)){Toast.makeText(MainActivity.this,"Show the selected layer to draw on it",0).show();return true;}
                     if(fillTapMode){fillTapMode=false;fillAt(x(sx),y(sy));invalidate();return true;}
                     if(selecting){if(selectedEntities.isEmpty()){lassoing=true;lassoStartX=lassoEndX=x(sx);lassoStartY=lassoEndY=y(sy);lassoPath.clear();lassoPath.add(new float[]{lassoStartX,lassoStartY});}else{Map<String,Object> hit=selectedEntityAt(x(sx),y(sy));if(hit!=null){deselectEntity(String.valueOf(hit.get("kind")),String.valueOf(hit.get("id")));return true;}transforming=true;transformStartX=x(sx);transformStartY=y(sy);transformDeltaX=transformDeltaY=0;}return true;}
                     if(drawingShape!=null){float dx=x(sx),dy=y(sy);if(!type.equals("infinite")&&(dx<0||dy<0||dx>1000||dy>1400))return true;shapeStartX=shapeEndX=dx;shapeStartY=shapeEndY=dy;shapeDragging=true;invalidate();return true;}
+                    if(!stylus)return true;
                     if(erase){eraserPoints=new JSONArray();erasePoint(sx,sy);invalidate();}
                     else{current=id();points=new JSONArray();point(sx,sy,event.getPressure());if(!scribbleToErase)emit();}
                 }

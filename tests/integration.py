@@ -200,9 +200,9 @@ try:
         same_image()
         report(f'PASS {doc_type} document drawing and synchronization')
     instrument(SERIALS[1], 'draw', tool='finger', shift=120)
-    wait_until(lambda: converged(2))
+    wait_until(lambda: converged(1))
     same_image()
-    report('PASS finger drawing merges with stylus drawing')
+    report('PASS finger input is ignored by the pen tool')
     # Verify partial strokes reach the other running app before finger-up.
     for serial in SERIALS:
         adb(serial, 'shell', 'settings', 'put', 'system', 'screen_off_timeout', '2147483647')
