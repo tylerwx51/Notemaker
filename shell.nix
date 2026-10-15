@@ -59,7 +59,7 @@ let
   };
 in
 pkgs.mkShell {
-  packages = [ android.androidsdk pkgs.jdk17 (pkgs.python3.withPackages (ps: [ ps.pyyaml ps.hypothesis ])) pkgs.chromium pkgs.zip pkgs.unzip pkgs.jadx pkgs.apktool emulator headless pkgs.git pkgs.jujutsu pkgs.openssh pkgs.tmux pkgs.iproute2 pkgs.bubblewrap pkgs.nodejs ];
+  packages = [ android.androidsdk pkgs.jdk17 (pkgs.python3.withPackages (ps: [ ps.pyyaml ps.hypothesis ps.matplotlib ])) pkgs.chromium pkgs.zip pkgs.unzip pkgs.jadx pkgs.apktool emulator headless pkgs.git pkgs.jujutsu pkgs.openssh pkgs.tmux pkgs.iproute2 pkgs.bubblewrap pkgs.nodejs ];
   ANDROID_HOME = sdk;
   ANDROID_SDK_ROOT = sdk;
   JAVA_HOME = pkgs.jdk17.home;

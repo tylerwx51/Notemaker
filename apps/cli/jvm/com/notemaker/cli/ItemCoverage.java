@@ -11,7 +11,7 @@ public final class ItemCoverage implements Coverage, Render.Surface {
     private final Area area=new Area();
     private boolean raster;
     private final java.util.List<double[][]> masks=new ArrayList<>();
-    private static final Map<Map<String,Object>,Coverage> CACHE=new LinkedHashMap<Map<String,Object>,Coverage>(16,.75f,true){protected boolean removeEldestEntry(Map.Entry<Map<String,Object>,Coverage> e){return size()>16;}};
+    private static final Map<Map<String,Object>,Coverage> CACHE=new LinkedHashMap<Map<String,Object>,Coverage>(16,.75f,true){protected boolean removeEldestEntry(Map.Entry<Map<String,Object>,Coverage> e){return size()>10000;}};
     public static synchronized Coverage create(Map<String,Object> item){
         Map<String,Object> key=new LinkedHashMap<>(item);for(String k:Arrays.asList("id","actor","seq","at","action","session","bases","visibility","object","stroke","layer","page"))key.remove(k);
         Coverage cached=CACHE.get(key);if(cached!=null)return cached;

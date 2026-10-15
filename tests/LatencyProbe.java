@@ -7,6 +7,13 @@ import static com.notemaker.core.Json.*;
 /** Run only against a disposable replica copy; emits phase timings as JSON lines. */
 public final class LatencyProbe {
     interface Work { Object run() throws Exception; }
+    static void memory(String phase) throws Exception {
+        System.gc();Thread.sleep(100);System.gc();
+        Runtime runtime=Runtime.getRuntime();Map<String,Object> out=object("phase",phase,"heap_bytes",runtime.totalMemory()-runtime.freeMemory());
+        try {out.put("native_bytes",Class.forName("android.os.Debug").getMethod("getNativeHeapAllocatedSize").invoke(null));}catch(ClassNotFoundException ignored){}
+        try(BufferedReader reader=new BufferedReader(new FileReader("/proc/self/status"))){String line;while((line=reader.readLine())!=null)if(line.startsWith("VmRSS:"))out.put("rss_kib",Long.parseLong(line.trim().split("\\s+")[1]));}
+        System.out.println(write(out));
+    }
     static Object timed(String phase, Work work) throws Exception {
         long start=System.nanoTime();Object result=work.run();
         System.out.println(write(object("phase",phase,"ms",(System.nanoTime()-start)/1e6)));
@@ -22,6 +29,7 @@ public final class LatencyProbe {
         LayerEditor editor=new LayerEditor(model,layer,page);
         int points=0;for(DrawItem item:editor.items())if(item.kind.equals("stroke"))points+=list(item.content.get("points")).size();
         System.out.println(write(object("items",editor.items().size(),"points",points,"layer",layer,"page",page)));
+        memory("memory_before_coverage");
         for(int i=0;i<3;i++)timed("warm_read",()->store.read());
         // Use a real ink point, retaining the note's item sizes and brush geometry.
         double x=200,y=200;
@@ -34,6 +42,7 @@ public final class LatencyProbe {
         long[] factoryCost={0,0};Coverage.Factory measured=o->{long start=System.nanoTime();Coverage result=ItemCoverage.create(o);factoryCost[0]+=System.nanoTime()-start;factoryCost[1]++;return result;};
         timed("all_item_hit_tests",()->{for(DrawItem item:editor.items()){long start=System.nanoTime();boolean hit=item.intersects(region,measured);costs.add(object("id",item.id,"kind",item.kind,"points",item.kind.equals("stroke")?list(item.content.get("points")).size():0,"ms",(System.nanoTime()-start)/1e6,"hit",hit));}return null;});
         System.out.println(write(object("coverage_factory_ms",factoryCost[0]/1e6,"coverage_factory_calls",factoryCost[1])));
+        memory("memory_after_coverage");
         costs.sort((a,b)->Double.compare(number(b,"ms"),number(a,"ms")));
         System.out.println(write(object("slowest",costs.subList(0,Math.min(10,costs.size())))));
         for(int i=0;i<3;i++)timed("erase_geometry",()->DrawingActions.erase(model,input,ItemCoverage::create));
