@@ -482,10 +482,10 @@ public class MainActivity extends Activity {
         final Map<String,ErasePreview> erasePreviews=new LinkedHashMap<>();
         boolean pendingErase(String kind,String id,String layer){for(ErasePreview preview:erasePreviews.values())if(preview.layer.equals(layer)&&preview.page==page&&preview.hidden.contains(kind+":"+id))return true;return false;}
         Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
-        float zoom=1,offsetX=0,offsetY=0,lastX,lastY;
+        float zoom=1,offsetX=0,offsetY=0,lastX,lastY,lastGestureX,lastGestureY;
         JSONArray points,eraserPoints;String current;long lastSent;
         ScaleGestureDetector scaling;
-        CanvasView(Context context){super(context);setBackgroundColor(Color.WHITE);scaling=new ScaleGestureDetector(context,new ScaleGestureDetector.SimpleOnScaleGestureListener(){@Override public boolean onScale(ScaleGestureDetector d){if(!pan)return false;float old=zoom;zoom=Math.max(.2f,Math.min(5,zoom*d.getScaleFactor()));offsetX=d.getFocusX()-(d.getFocusX()-offsetX)*zoom/old;offsetY=d.getFocusY()-(d.getFocusY()-offsetY)*zoom/old;invalidate();return true;}});}
+        CanvasView(Context context){super(context);setBackgroundColor(Color.WHITE);scaling=new ScaleGestureDetector(context,new ScaleGestureDetector.SimpleOnScaleGestureListener(){@Override public boolean onScale(ScaleGestureDetector d){float old=zoom;zoom=Math.max(.2f,Math.min(5,zoom*d.getScaleFactor()));offsetX=d.getFocusX()-(d.getFocusX()-offsetX)*zoom/old;offsetY=d.getFocusY()-(d.getFocusY()-offsetY)*zoom/old;invalidate();return true;}});}
         float scale(){return Math.min(getWidth()/1000f,getHeight()/1400f);}
         float x(float x){return (x-offsetX)/(scale()*zoom);}float y(float y){return (y-offsetY)/(scale()*zoom);}
         boolean visible(String layer){JSONObject l=layers.get(layer);return l!=null&&!Boolean.FALSE.equals(model.layerActive.get(layer))&&(l.optBoolean("force")||!hidden.contains(layer));}
@@ -557,8 +557,14 @@ public class MainActivity extends Activity {
             if(inputStarted==0)inputStarted=System.nanoTime();
             synchronized(lock){
                 scaling.onTouchEvent(event);int action=event.getActionMasked();float sx=event.getX(),sy=event.getY();
+                if(event.getPointerCount()>1){
+                    if(action==MotionEvent.ACTION_POINTER_DOWN){lastGestureX=centroidX(event);lastGestureY=centroidY(event);}
+                    if(action==MotionEvent.ACTION_MOVE){float cx=centroidX(event),cy=centroidY(event);offsetX+=cx-lastGestureX;offsetY+=cy-lastGestureY;lastGestureX=cx;lastGestureY=cy;}
+                    if(shapeDragging)shapeDragging=false;if(eraserPoints!=null)eraserPoints=null;points=null;current=null;transforming=false;lassoing=false;invalidate();return true;
+                }
+                boolean stylus=event.getToolType(event.getActionIndex())==MotionEvent.TOOL_TYPE_STYLUS||event.getToolType(event.getActionIndex())==MotionEvent.TOOL_TYPE_ERASER;
                 if(pan){if(action==MotionEvent.ACTION_DOWN){lastX=sx;lastY=sy;}if(action==MotionEvent.ACTION_MOVE&&!scaling.isInProgress()&&event.getPointerCount()==1){offsetX+=sx-lastX;offsetY+=sy-lastY;invalidate();}lastX=sx;lastY=sy;return true;}
-                if(event.getPointerCount()>1){if(shapeDragging)shapeDragging=false;if(eraserPoints!=null)eraserPoints=null;invalidate();return true;}
+                if(!stylus)return true;
                 if(action==MotionEvent.ACTION_DOWN){
                     if(!visible(selected)){Toast.makeText(MainActivity.this,"Show the selected layer to draw on it",0).show();return true;}
                     if(fillTapMode){fillTapMode=false;fillAt(x(sx),y(sy));invalidate();return true;}
@@ -592,5 +598,7 @@ public class MainActivity extends Activity {
                 invalidate();return true;
             }
         }
+        float centroidX(MotionEvent e){float value=0;for(int i=0;i<e.getPointerCount();i++)value+=e.getX(i);return value/e.getPointerCount();}
+        float centroidY(MotionEvent e){float value=0;for(int i=0;i<e.getPointerCount();i++)value+=e.getY(i);return value/e.getPointerCount();}
     }
 }
