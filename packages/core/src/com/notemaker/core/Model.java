@@ -96,8 +96,9 @@ public final class Model {
                 id(o,"stroke");drawing(o);if(o.containsKey("brush"))require(Arrays.asList("pen","pencil","marker","brush","oily","fountain","charcoal","neoBrush","latinCalligraphy","asiaCalligraphy","square").contains(string(o,"brush")),"Unknown brush");List<Object> points=list(o.get("points"));require(points.size()>0&&points.size()<=10000,"Invalid points");
                 for(Object p:points){List<Object> xyz=list(p);require(xyz.size()==3,"Point needs x, y, pressure");for(Object n:xyz)require(n instanceof Number&&Double.isFinite(((Number)n).doubleValue())&&Math.abs(((Number)n).doubleValue())<=1000000,"Invalid point");double pressure=((Number)xyz.get(2)).doubleValue();require(pressure>=0&&pressure<=1,"Invalid pressure");}break;
             case "object":
-                id(o,"object");drawing(o);String shape=string(o,"shape");require(ShapeCatalog.known(shape),"Unknown shape");
+                id(o,"object");drawing(o);String shape=string(o,"shape");require(ShapeCatalog.known(shape)||shape.equals("template"),"Unknown shape");
                 if(shape.equals("svg"))SvgAsset.validate(string(o,"svg"));
+                if(shape.equals("template")){require(Arrays.asList("ruled","grid","dots").contains(string(o,"template")),"Unknown infinite template");range(o,"spacing",8,1000000);}
                 if(shape.equals("image"))ImageAsset.validate(string(o,"image"));
                 for(String key:Arrays.asList("bold","italic","underline","flipX","flipY"))if(o.containsKey(key))bool(o,key);
                 if(o.containsKey("rotation"))range(o,"rotation",-360,360);

@@ -50,6 +50,7 @@ public final class Render {
     private static void drawObjectMasked(Model m,Map<String,Object> o,Surface c){c.beginErase(DrawItem.erasures(o));try{drawObjectRaw(m,o,c);}finally{c.endErase();}}
     private static void drawObjectRaw(Model m,Map<String,Object> o,Surface c){
         double x=number(o,"x"),y=number(o,"y"),w=number(o,"w"),h=number(o,"h"),width=number(o,"width");int color=((Number)o.get("color")).intValue();String shape=string(o,"shape");
+        if(shape.equals("template"))return; // Infinite guides are generated against the live viewport by the tablet renderer.
         if(shape.equals("svg")){c.svg(x,y,w,h,string(o,"svg"));return;}
         if(shape.equals("image")){c.image(x,y,w,h,string(o,"image"));return;}
         if(shape.equals("arrow")||shape.equals("arrowLine")){

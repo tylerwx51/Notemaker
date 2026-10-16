@@ -491,6 +491,19 @@ public class MainActivity extends Activity {
         float x(float x){return (x-offsetX)/(scale()*zoom);}float y(float y){return (y-offsetY)/(scale()*zoom);}
         boolean visible(String layer){JSONObject l=layers.get(layer);return l!=null&&!Boolean.FALSE.equals(model.layerActive.get(layer))&&(l.optBoolean("force")||!hidden.contains(layer));}
         void drawStroke(Canvas c,JSONObject stroke){Render.drawStroke(Json.map(Json.parse(stroke.toString())),new com.notemaker.cli.Png(c));}
+        void drawInfiniteTemplate(Canvas c,Map<String,Object> guide){
+            String pattern=String.valueOf(guide.get("template"));double spacing=((Number)guide.get("spacing")).doubleValue();float unit=scale()*zoom;
+            if(unit<=0)return;Rect bounds=c.getClipBounds();if(bounds.isEmpty())return;double densityStep=Math.max(1,Math.ceil(5/(spacing*unit)));densityStep=Math.max(densityStep,Math.ceil(Math.sqrt(((double)bounds.width()*bounds.height())/3000)/spacing));spacing*=densityStep;
+            double left=Math.floor(bounds.left/spacing)*spacing,top=Math.floor(bounds.top/spacing)*spacing;
+            int color=((Number)guide.get("color")).intValue();paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(.35f,1/unit));paint.setPathEffect(null);
+            if("dots".equals(pattern)){
+                paint.setStyle(Paint.Style.FILL);float radius=Math.max(.7f,1.6f/unit);for(double y=top;y<=bounds.bottom;y+=spacing)for(double x=left;x<=bounds.right;x+=spacing)c.drawCircle((float)x,(float)y,radius,paint);
+            }else{
+                for(double y=top;y<=bounds.bottom;y+=spacing)c.drawLine(bounds.left,(float)y,bounds.right,(float)y,paint);
+                if("grid".equals(pattern))for(double x=left;x<=bounds.right;x+=spacing)c.drawLine((float)x,bounds.top,(float)x,bounds.bottom,paint);
+            }
+            paint.setStyle(Paint.Style.FILL);
+        }
         // Cache settled ink at display resolution; extending a page draws only the new strokes.
         final LinkedHashMap<String,InkCache> ink=new LinkedHashMap<String,InkCache>(4,.75f,true);
         String inkTransform="";
@@ -522,6 +535,7 @@ public class MainActivity extends Activity {
                 if(useInkCache&&!previewing)settledInk(c,layer);
                 else {c.save();transform(c);for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject s=e.getValue();if(!e.getKey().equals(current)&&layer.equals(s.optString("layer"))&&s.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)&&!(previewing&&previewed("stroke",e.getKey())))drawStroke(c,s);}c.restore();}
                 c.save();transform(c);
+                if(type.equals("infinite"))for(Map<String,Object> guide:model.objects.values())if(layer.equals(guide.get("layer"))&&"template".equals(guide.get("shape"))&&((Number)guide.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(guide.get("object")))&&!pendingErase("object",String.valueOf(guide.get("object")),layer))drawInfiniteTemplate(c,guide);
                 if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)&&!(previewing&&previewed("object",e.getKey())))Render.drawObject(model,o,new com.notemaker.cli.Png(c));}
                 if(layer.equals(selected)&&points!=null&&current!=null)drawStroke(c,stroke());c.restore();
                 c.restore();
