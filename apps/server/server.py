@@ -58,8 +58,14 @@ def validate(op, nested=False):
     elif kind == 'object':
         if not all(isinstance(op.get(k), str) and 0 < len(op[k]) <= 200 for k in ('object', 'layer')):
             raise ValueError('Invalid object identity')
-        if op.get('shape') not in ('rect', 'ellipse', 'text', 'line', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'svg', 'image', 'cube', 'cylinder', 'cone', 'sphere', 'pyramid', 'trapezoid', 'triangle45', 'triangle60', 'triangle90', 'wave', 'curve', 'polyline', 'regularPolygon', 'circle', 'rectangle', 'rhombus', 'arrowLine', 'waveLine', 'regularHexagon'):
+        if op.get('shape') not in ('rect', 'ellipse', 'text', 'line', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'svg', 'image', 'cube', 'cylinder', 'cone', 'sphere', 'pyramid', 'trapezoid', 'triangle45', 'triangle60', 'triangle90', 'wave', 'curve', 'polyline', 'regularPolygon', 'circle', 'rectangle', 'rhombus', 'arrowLine', 'waveLine', 'regularHexagon', 'template'):
             raise ValueError('Invalid shape')
+        if op['shape'] == 'template':
+            if op.get('template') not in ('ruled', 'grid', 'dots'):
+                raise ValueError('Invalid infinite template')
+            spacing=op.get('spacing')
+            if type(spacing) not in (int,float) or not math.isfinite(spacing) or not 8 <= spacing <= 1000000:
+                raise ValueError('Invalid template spacing')
         if op['shape'] == 'svg':
             validate_svg(op.get('svg'))
         if op['shape'] == 'image':

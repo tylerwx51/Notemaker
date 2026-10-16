@@ -341,6 +341,7 @@ final class EditorUi {
             case "more":
                 box=popupBody("More", "");
                 menuAction(box,"Toolbar preferences…",true,()->showPopup(preferencesPanel(),tools.get("more"),false));
+                menuAction(box,"Network settings…",true,()->showPopup(networkSettingsPanel(),tools.get("more"),false));
                 menuAction(box,"Pen presets…",true,()->showPopup(presetPanel(),tools.get("pen"),false));
                 menuAction(box,"Undo and redo",true,()->openTool("history",tools.get("more")));
                 menuAction(box,"Agent",true,()->app.agent.show());
@@ -539,6 +540,25 @@ final class EditorUi {
         CheckBox labels=new CheckBox(app);labels.setText("Show tool labels");labels.setTextColor(INK);labels.setButtonTintList(ColorStateList.valueOf(INK));labels.setChecked(showToolLabels);box.addView(labels);
         labels.setOnCheckedChangeListener((button,checked)->{showToolLabels=checked;app.getSharedPreferences("settings",0).edit().putBoolean("showToolLabels",checked).apply();for(Tool item:tools.values())item.label.setVisibility(checked?View.VISIBLE:View.GONE);});
         menuAction(box,"Save current pen as preset…",true,()->savePenPreset());
+        return box;
+    }
+
+    private LinearLayout networkSettingsPanel(){
+        LinearLayout box=popupBody("Network settings","Choose where notes sync and where the editing service runs.");
+        box.setTag(480);
+        EditText server=new EditText(app);server.setSingleLine();server.setText(MainActivity.serverAddressForSettings(app.host));server.setHint("192.168.50.180");
+        server.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        box.addView(text("Notes server address",12,INK,true));box.addView(server);
+        EditText serverPort=new EditText(app);serverPort.setSingleLine();serverPort.setText(MainActivity.serverPortForSettings(app.host));serverPort.setHint("8765");serverPort.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        box.addView(text("Server port",12,INK,true));box.addView(serverPort);
+        TextView serverHelp=text("Leave the address blank for local-only notes. A blank port uses 8765. For the Android emulator, use 10.0.2.2. On your LAN, enter the computer running NoteMaker, for example 192.168.50.180.",11,MUTED,false);serverHelp.setPadding(0,dp(4),0,dp(8));box.addView(serverHelp);
+        EditText proxy=new EditText(app);proxy.setSingleLine();proxy.setText(app.proxyUrl);proxy.setHint("Optional editing proxy URL");proxy.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        box.addView(text("Editing proxy URL",12,INK,true));box.addView(proxy);
+        EditText token=new EditText(app);token.setSingleLine();token.setText(app.proxyToken);token.setHint("Proxy bearer token");token.setInputType( android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        box.addView(text("Editing proxy token",12,INK,true));box.addView(token);
+        TextView proxyHelp=text("Optional. Leave both proxy fields blank to use this device’s local editing service. A proxy URL requires a token.",11,MUTED,false);proxyHelp.setPadding(0,dp(4),0,dp(8));box.addView(proxyHelp);
+        menuAction(box,"Save network settings",true,()->app.saveNetworkSettings(server.getText().toString(),serverPort.getText().toString(),proxy.getText().toString(),token.getText().toString()));
+        menuAction(box,"Done",true,()->dismissPopup());
         return box;
     }
 

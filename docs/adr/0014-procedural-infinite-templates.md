@@ -17,18 +17,20 @@ document origin. Use a medium-dark default, 1.4 screen-pixel rule/grid lines,
 and 4.2 screen-pixel dot diameters. Increase spacing at low zoom so dots remain
 around five screen pixels apart and the visible dot count stays near 3,000.
 Render legacy light-gray infinite templates using the darker default. Keep fixed
-and paged template SVG behavior unchanged.
+and paged template SVG behavior unchanged. The main server validates and
+replicates the compact template object like other object snapshots. Network
+viewers draw it within their current infinite-canvas viewport.
 
 ## Consequences
 
 Panning and zooming require only a viewport redraw; the document does not gain
-per-mark objects or a canvas-sized bitmap. The current browser viewer and
-non-Android export renderers do not draw the internal infinite-template object;
-they remain read-only/general-purpose renderers and need their own bounded
-viewport implementation if infinite template previews are required there.
+per-mark objects or a canvas-sized bitmap. Non-Android export renderers do not
+draw the internal infinite-template object; they need their own bounded viewport
+implementation if infinite template exports are required there.
 
 ## Verification
 
 The Android and Android CLI builds succeed. A CLI operation on an infinite
-document stores one compact template object. E Ink refresh and stylus behavior
-still require validation on BOOX hardware.
+document stores one compact template object. Server validation and proxy
+replication preserve its `template` and `spacing` fields. E Ink refresh and
+stylus behavior still require validation on BOOX hardware.

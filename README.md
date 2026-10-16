@@ -92,10 +92,11 @@ python3 apps/server/server.py --database notemaker.sqlite3
 
 The server listens on all interfaces at port 8765 by default. Open
 `http://localhost:8765` on this computer to view a document. On the tablet, open
-**Notes → Open or create document**, enter `http://<this-computer-LAN-address>:8765` and a document name,
-and choose a type when creating a new document. Allow inbound TCP 8765 in the
-computer's firewall if needed. For the emulator, use `http://10.0.2.2:8765`.
-The server URL can be left blank for local-only editing.
+**More → Network settings**, enter the computer's LAN address and port (blank
+port defaults to 8765), and set the document name in **Notes → Open or create
+document**. Allow inbound TCP 8765 in the computer's firewall if needed. For the
+emulator, use address `10.0.2.2`. Leave the server address blank for local-only
+editing.
 Server flags include `--host`, `--port`, and `--database`; no remote deployment is
 performed. No authentication is enabled; this version is for a trusted network.
 

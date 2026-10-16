@@ -81,7 +81,7 @@ public class MainActivity extends Activity {
         scribbleToErase=prefs.getBoolean("scribbleToErase",false);
         freeformLasso=prefs.getBoolean("freeformLasso",false);
         try{String savedClipboard=prefs.getString("selectionClipboard","");if(!savedClipboard.isEmpty())selectionClipboard=Json.map(Json.parse(savedClipboard));}catch(Exception ignored){}
-        host=prefs.getString("host",host);document=prefs.getString("document",document);proxyUrl=prefs.getString("proxyUrl","");proxyToken=prefs.getString("proxyToken","");
+        try{host=normalizeServerAddress(prefs.getString("host",host));}catch(Exception invalidSavedHost){host="";}document=prefs.getString("document",document);proxyUrl=prefs.getString("proxyUrl","");proxyToken=prefs.getString("proxyToken","");
         load("fixed");
         agent=new AgentUi(this);
         editor=new EditorUi(this);
@@ -200,19 +200,53 @@ public class MainActivity extends Activity {
     }}
     void documentDialog(){
         LinearLayout fields=new LinearLayout(this);fields.setOrientation(1);fields.setPadding(editor.dp(24),editor.dp(8),editor.dp(24),editor.dp(8));
-        EditText server=new EditText(this);server.setSingleLine();server.setText(host);server.setHint("Server URL (optional), e.g. http://192.168.50.180:8765");fields.addView(server);
-        EditText endpoint=new EditText(this);endpoint.setSingleLine();endpoint.setText(proxyUrl);endpoint.setHint("Editing proxy URL (blank: this device)");fields.addView(endpoint);
-        EditText credential=new EditText(this);credential.setSingleLine();credential.setText(proxyToken);credential.setHint("Editing proxy token");credential.setInputType(129);fields.addView(credential);
         EditText name=new EditText(this);name.setSingleLine();name.setText(document);name.setHint("Document name (same on both clients)");fields.addView(name);
         Spinner types=new Spinner(this);types.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Fixed page","Multiple pages","Infinite canvas"}));types.setSelection(type.equals("pages")?1:type.equals("infinite")?2:0);fields.addView(types);
         new AlertDialog.Builder(this).setTitle("Open or create document").setMessage("Type is used when creating a new document. Existing documents retain their type.").setView(fields).setPositiveButton("Open",(d,w)->{
-            String selectedProxy=endpoint.getText().toString().trim().replaceAll("/+$",""),selectedToken=credential.getText().toString().trim();
-            if(!selectedProxy.isEmpty()&&(!(selectedProxy.startsWith("http://")||selectedProxy.startsWith("https://"))||selectedToken.isEmpty())){Toast.makeText(this,"Enter a proxy HTTP(S) URL and token",1).show();return;}
-            String next=name.getText().toString().trim(),url=server.getText().toString().trim().replaceAll("/+$","");
-            if(next.isEmpty()||!(url.isEmpty()||url.startsWith("http://")||url.startsWith("https://"))){Toast.makeText(this,"Enter a document name and an optional HTTP(S) URL",1).show();return;}
-            deselect();synchronized(lock){save();document=next;host=url;proxyUrl=selectedProxy;proxyToken=selectedToken;connected=false;load(new String[]{"fixed","pages","infinite"}[types.getSelectedItemPosition()]);canvas.zoom=1;canvas.offsetX=canvas.offsetY=0;}
-            getSharedPreferences("settings",0).edit().putString("host",host).putString("document",document).putString("proxyUrl",proxyUrl).putString("proxyToken",proxyToken).apply();configureProxy();update();
+            String next=name.getText().toString().trim();
+            if(next.isEmpty()){Toast.makeText(this,"Enter a document name",1).show();return;}
+            deselect();synchronized(lock){save();document=next;connected=false;load(new String[]{"fixed","pages","infinite"}[types.getSelectedItemPosition()]);canvas.zoom=1;canvas.offsetX=canvas.offsetY=0;}
+            getSharedPreferences("settings",0).edit().putString("document",document).apply();configureProxy();update();
         }).setNegativeButton("Cancel",null).show();
+    }
+    static String normalizeServerAddress(String value) throws Exception {
+        String address=value.trim().replaceAll("/+$","");if(address.isEmpty())return "";
+        if(!(address.startsWith("http://")||address.startsWith("https://")))address="http://"+address;
+        URI uri=new URI(address);if(uri.getHost()==null||uri.getPort()>65535||uri.getPort()==0)throw new IllegalArgumentException("invalid server address");
+        if(uri.getPort()<0){String authority=uri.getRawAuthority();address=uri.getScheme()+"://"+authority+":8765"+(uri.getRawPath()==null?"":uri.getRawPath())+(uri.getRawQuery()==null?"":"?"+uri.getRawQuery())+(uri.getRawFragment()==null?"":"#"+uri.getRawFragment());}
+        return address.replaceAll("/+$","");
+    }
+    static String serverAddressForSettings(String value){
+        if(value==null||value.trim().isEmpty())return "";
+        try{URI uri=new URI(value);String host=uri.getHost();if(host!=null)return host;}
+        catch(Exception ignored){}
+        return value;
+    }
+    static String serverPortForSettings(String value){
+        if(value==null||value.trim().isEmpty())return "";
+        try{int port=new URI(value).getPort();return port<=0||port==8765?"":String.valueOf(port);}
+        catch(Exception ignored){return "";}
+    }
+    static String composeServerAddress(String addressValue,String portValue,String currentHost) throws Exception {
+        String address=addressValue.trim();if(address.isEmpty()){if(!portValue.trim().isEmpty())throw new IllegalArgumentException("Port requires a server address");return "";}
+        String scheme=currentHost!=null&&currentHost.startsWith("https://")?"https":"http";
+        if(address.startsWith("https://")){scheme="https";address=address.substring(8);}else if(address.startsWith("http://")){scheme="http";address=address.substring(7);}
+        URI parsed=new URI("http://"+address.replaceAll("/+$",""));
+        if(parsed.getHost()==null||parsed.getRawUserInfo()!=null||parsed.getRawPath()!=null&&!parsed.getRawPath().isEmpty()||parsed.getRawQuery()!=null||parsed.getRawFragment()!=null)throw new IllegalArgumentException("Enter only a host or IP address");
+        int port=parsed.getPort();String suppliedPort=portValue.trim();
+        if(!suppliedPort.isEmpty()){try{port=Integer.parseInt(suppliedPort);}catch(NumberFormatException invalid){throw new IllegalArgumentException("Invalid port");}}
+        if(port<0)port=8765;if(port<1||port>65535)throw new IllegalArgumentException("Port must be between 1 and 65535");
+        return scheme+"://"+parsed.getHost()+":"+port;
+    }
+    void saveNetworkSettings(String serverValue,String portValue,String proxyValue,String tokenValue){
+        final String nextHost;try{nextHost=composeServerAddress(serverValue,portValue,host);}catch(Exception invalid){Toast.makeText(this,"Enter a server address and a port from 1 to 65535, or leave the port blank for 8765",Toast.LENGTH_LONG).show();return;}
+        String nextProxy=proxyValue.trim().replaceAll("/+$",""),nextToken=tokenValue.trim();
+        if(!nextProxy.isEmpty()&&(!(nextProxy.startsWith("http://")||nextProxy.startsWith("https://"))||nextToken.isEmpty())){Toast.makeText(this,"Enter a proxy HTTP(S) URL and token, or leave both blank",Toast.LENGTH_LONG).show();return;}
+        boolean changed=!host.equals(nextHost)||!proxyUrl.equals(nextProxy)||!proxyToken.equals(nextToken);
+        if(!changed){editor.dismissPopup();return;}
+        deselect();synchronized(lock){save();host=nextHost;proxyUrl=nextProxy;proxyToken=nextToken;connected=false;load(type);}
+        getSharedPreferences("settings",0).edit().putString("host",host).putString("proxyUrl",proxyUrl).putString("proxyToken",proxyToken).apply();
+        configureProxy();update();Toast.makeText(this,"Network settings saved",Toast.LENGTH_SHORT).show();
     }
     void openDocument(String name, String documentType){
         deselect();

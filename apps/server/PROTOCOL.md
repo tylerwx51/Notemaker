@@ -69,8 +69,8 @@ New operation kinds:
 | `object-active` | `object`, `active` | Last-operation-wins object erasure/restoration, independent of geometry. |
 | `layer-active` | `layer`, `active` | Shared layer erasure/restoration. Base layer cannot be deactivated. |
 
-`shape` is `rect`, `ellipse`, `text`, `arrow`, `line`, `triangle`, `diamond`,
-`pentagon`, `hexagon`, `star`, or `svg`. SVG objects require an
+`shape` includes `rect`, `ellipse`, `text`, `arrow`, `line`, `triangle`, `diamond`,
+`pentagon`, `hexagon`, `star`, `svg`, and `template`. SVG objects require an
 additional `svg` string containing a self-contained static SVG (up to 256 KiB).
 The `x,y,w,h` rectangle is its clipped viewport; the SVG's `preserveAspectRatio`
 controls fitting, defaulting to centered meet. Source is embedded in every
@@ -85,6 +85,12 @@ and `to` reference node centers, with endpoints intersected at node boundaries;
 connectors follow current node geometry. `color`/`fill` are signed 32-bit ARGB;
 `width` is 1–100, `fontSize` 1–500, `text` at most 10,000 characters. Geometry is
 finite and within ±1,000,000 units. Page limits are unchanged.
+
+The internal `template` shape carries infinite-canvas `template` (`ruled`,
+`grid`, or `dots`) and `spacing` fields. It is stored in the ordinary object
+operation and travels through event replication and proxy trees with the rest of
+the document. Clients render the pattern against their current viewport; the
+template remains one compact object regardless of canvas size.
 
 Native polygons use normalized catalog vertices mapped to the object's bounds,
 round outline joins, and optional ARGB fill. Their persisted representation is
