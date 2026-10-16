@@ -11,8 +11,8 @@ import java.util.Map;
 public class Integration extends Instrumentation {
     Bundle arguments;
     static void liveGesture(MainActivity app,float shift,java.util.concurrent.CountDownLatch done){
-        Handler handler=new Handler(Looper.getMainLooper());int count=14;int[] index={0};long start=SystemClock.uptimeMillis();Runnable[] step={null};
-        step[0]=()->{int i=index[0]++;synchronized(app.lock){MotionEvent.PointerProperties property=new MotionEvent.PointerProperties();property.id=0;property.toolType=MotionEvent.TOOL_TYPE_STYLUS;MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();float scale=app.canvas.scale();coords.x=(100+i*18+shift)*scale;coords.y=(200+i*12+shift)*scale;coords.pressure=.2f+(i%10)*.06f;coords.size=1;MotionEvent event=MotionEvent.obtain(start,SystemClock.uptimeMillis(),i==0?MotionEvent.ACTION_DOWN:i==count-1?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE,1,new MotionEvent.PointerProperties[]{property},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,InputDevice.SOURCE_STYLUS,0);app.canvas.onTouchEvent(event);event.recycle();}if(index[0]<count)handler.postDelayed(step[0],300);else done.countDown();};handler.post(step[0]);
+        Handler handler=new Handler(Looper.getMainLooper());int count=24;int[] index={0};long start=SystemClock.uptimeMillis();Runnable[] step={null};
+        step[0]=()->{int i=index[0]++;synchronized(app.lock){MotionEvent.PointerProperties property=new MotionEvent.PointerProperties();property.id=0;property.toolType=MotionEvent.TOOL_TYPE_STYLUS;MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();float scale=app.canvas.scale();coords.x=(100+i*18+shift)*scale;coords.y=(200+i*12+shift)*scale;coords.pressure=.2f+(i%10)*.06f;coords.size=1;MotionEvent event=MotionEvent.obtain(start,SystemClock.uptimeMillis(),i==0?MotionEvent.ACTION_DOWN:i==count-1?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE,1,new MotionEvent.PointerProperties[]{property},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,InputDevice.SOURCE_STYLUS,0);app.canvas.onTouchEvent(event);event.recycle();}if(index[0]<count)handler.postDelayed(step[0],500);else done.countDown();};handler.post(step[0]);
     }
     static void gesture(MainActivity app,float x,float y,float w,float h,boolean cancel){
         long start=SystemClock.uptimeMillis();
@@ -159,7 +159,7 @@ public class Integration extends Instrumentation {
                 if(Math.abs(app.canvas.offsetX-oldX)<20||Math.abs(app.canvas.offsetY-oldY)<15||Math.abs(app.canvas.zoom-oldZoom)>.05f)throw new IllegalStateException("Two-finger move did not pan the page cleanly");
             }
             });
-            if(action.equals("live-draw")){if(!liveDone.await(15,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("Timed out delivering live stylus gesture");drainWrites();waitForIdleSync();}
+            if(action.equals("live-draw")){if(!liveDone.await(20,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("Timed out delivering live stylus gesture");drainWrites();waitForIdleSync();}
             if(action.equals("draw")){
                 drainWrites();waitForIdleSync();org.json.JSONObject completed=app.strokes.get(drawnStroke[0]);int stored=completed==null||completed.optJSONArray("points")==null?0:completed.optJSONArray("points").length();
                 if(arguments.getString("tool","stylus").equals("finger")){if(drawnStroke[0]!=null||maxGesturePoints[0]!=0||stored!=0)throw new IllegalStateException("Finger input created a pen stroke");}

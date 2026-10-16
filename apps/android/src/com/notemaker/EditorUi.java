@@ -182,7 +182,7 @@ final class EditorUi {
     }
 
     void refresh() {
-        setText(title, app.document);
+        setText(title, app.document+(app.model.deleted?" · Deleted":""));
         setText(subtitle, app.type.equals("pages") ? "NOTEBOOK  /  PAGE " + (app.page + 1)
                 : app.type.equals("infinite") ? "INFINITE CANVAS" : "SINGLE PAGE");
         setText(connection, app.saveError!=null ? "Save failed" : app.saving>0 ? (app.replica.remote()?"Saving to proxy…":"Saving on device…") : app.connected
@@ -191,7 +191,7 @@ final class EditorUi {
         if(!app.conflicts.isEmpty())setText(connection,connection.getText()+"  ·  "+app.conflicts.size()+" conflict(s)");
         String mode = app.erase ? "eraser" : app.pan ? "move" : app.drawingShape!=null ? (app.drawingShape.equals("text")?"text":"shapes") : selectedTool;
         for (Map.Entry<String, Tool> entry : tools.entrySet()) entry.getValue().active(entry.getKey().equals(mode));
-        boolean ready=!app.objectHistoryPending();
+        boolean ready=!app.model.deleted&&!app.objectHistoryPending();
         undoButton.setEnabled(ready&&!app.undo.isEmpty());undoButton.setAlpha(undoButton.isEnabled()?1f:.3f);
         redoButton.setEnabled(ready&&!app.redo.isEmpty());redoButton.setAlpha(redoButton.isEnabled()?1f:.3f);
 

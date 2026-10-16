@@ -55,6 +55,26 @@ class ServerChecks(unittest.TestCase):
         self.assertEqual(self.read('one'), rows)
         self.assertEqual(len(self.read('two')), 1)
 
+    def test_deletion_index_is_atomic_and_retains_log(self):
+        doc='delete-index'
+        create=dict(id='create',kind='document',type='fixed')
+        deletion=dict(id='delete',kind='document-delete',actor='human')
+        self.post(doc,[create])
+        with self.assertRaises(urllib.error.HTTPError):
+            self.post(doc,[deletion,dict(create,type='pages')])
+        def info():
+            with urllib.request.urlopen(self.url+'/api/info') as response:
+                return json.load(response)
+        self.assertIn(doc,info()['documents'])
+        self.assertNotIn(doc,info()['deletedDocuments'])
+        self.assertEqual(len(self.read(doc)),1)
+        self.post(doc,[deletion]);self.post(doc,[deletion])
+        self.assertNotIn(doc,info()['documents'])
+        self.assertIn(doc,info()['deletedDocuments'])
+        self.assertEqual(len(self.read(doc)),2)
+        self.post(doc,[dict(create,id='stale-create')])
+        self.assertNotIn(doc,info()['documents'])
+
     def test_collision_rolls_back_entire_batch(self):
         old = dict(id='layer', kind='layer', layer='base', name='First', force=False)
         self.post('atomic', [old])

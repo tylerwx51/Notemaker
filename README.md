@@ -127,6 +127,13 @@ on the selected editing proxy (this device by default), so device files remain
 available offline. **Refresh** reloads the list. Files that exist only on the
 upstream server are not listed; use **Open or create document…** to open those
 by name or change connection settings.
+Hold a file in either browser view and choose **Delete** to delete it locally
+and on the configured server when synchronization succeeds. Cancel leaves it
+unchanged. Deletion works offline, cannot be undone, and reserves that document
+name permanently. Other replicas learn the deletion when they synchronize;
+stale offline edits cannot restore the file. The server retains its operation
+log for replication and history; this is logical deletion, not secure erasure.
+Upgrade the server, app, and CLI/proxies together before using deletion.
 The narrow left rail groups **Template**, **Layers**, **Shapes**, **Fill**,
 **Select**, **Text**, **Insert**, **Move**, **Pages**, **Agent**, and **More**.
 The robot **Agent** button opens the Agent interface directly.
@@ -217,7 +224,7 @@ through Android's UI automation. It temporarily overrides emulator size/density
 for narrow-screen checks and resets those overrides afterward. Test notes are
 retained; screenshots are saved in `.test-artifacts/ui-review/`.
 
-For file browsing, creation, search and offline restart checks on an isolated
+For file browsing, creation, deletion, search and offline restart checks on an isolated
 emulator, run `nix-shell --run 'apps/android/build.sh && python3 tests/files_android.py'`.
 This uses emulator port 5590 and saves artifacts in `.test-artifacts/drawing-android/`.
 

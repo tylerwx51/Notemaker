@@ -16,6 +16,69 @@ CLI = ROOT / 'apps/cli/notemaker'
 EXAMPLE = json.loads((ROOT / 'apps/cli/examples/diagram.json').read_text())
 
 class CliChecks(server_checks.ServerChecks):
+    def test_document_deletion_offline_restart_and_stale_replica(self):
+        from topology_support import http
+        self.cli('document', 'create', 'pages')
+        self.diagram()
+        self.cli('sync', self.url)
+        self.cli('sync', self.url, replica='b')
+        self.cli('object','update','app','-',value={'scope':{'layer':'architecture','page':0},'text':'Stale edit'},replica='b')
+        histories = self.cli('log')['actors']
+        result = self.cli('document', 'delete', actor='human')
+        self.assertTrue(result['deleted'])
+        log = self.cli('log')
+        self.assertEqual(log['pending'][-1]['actor'], 'human')
+        self.cli('document', 'delete')
+        self.assertEqual(self.cli('log')['pending'], log['pending'])
+        self.assertEqual(self.cli('log')['actors'], histories)
+        self.assertNotIn(self.document, self.cli('document','list')['documents'])
+        self.assertTrue(self.cli('status')['deleted'])
+        self.assertEqual(self.cli('inspect')['objects'], [])
+        self.cli('undo', ok=False)
+        self.cli('document','create',ok=False)
+        self.cli('append','-',value={'kind':'document','type':'fixed'},ok=False)
+        proxy = self.proxy('a');proxy.stop();proxy.start()
+        self.assertTrue(proxy.cli('status',direct=True)['deleted'])
+        self.assertNotIn(self.document,proxy.cli('document','list',direct=True)['documents'])
+        self.cli('sync',self.url)
+        info=http(self.url+'/api/info')
+        self.assertNotIn(self.document,info['documents'])
+        self.assertIn(self.document,info['deletedDocuments'])
+        self.cli('sync',self.url,replica='b')
+        self.cli('sync',self.url)
+        self.assertEqual(self.cli('inspect'),self.cli('inspect',replica='b'))
+        self.assertTrue(self.cli('inspect',replica='b')['deleted'])
+        self.assertEqual(self.cli('status',replica='b')['pending'],0)
+        self.cli('sync',self.url,replica='fresh')
+        self.assertTrue(self.cli('inspect',replica='fresh')['deleted'])
+
+    def test_delete_remote_document_by_name_and_reject_nested_delete(self):
+        self.cli('document','create',replica='b')
+        self.cli('sync',self.url,replica='b')
+        self.cli('apply','-',value=[{'kind':'document-delete'}],ok=False)
+        self.cli('append','-',value={'kind':'batch','actions':[{'kind':'document-delete'}]},ok=False)
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError):
+            self.post(self.document,[{'id':'nested-delete','kind':'batch','actions':[{'kind':'document-delete'}]}])
+        self.cli('document','delete')  # no local copy is needed to tombstone a known remote name
+        self.cli('sync',self.url)
+        self.cli('sync',self.url,replica='b')
+        self.assertTrue(self.cli('status',replica='b')['deleted'])
+
+    def test_deletion_through_proxy_tree(self):
+        self.cli('document','create')
+        self.cli('sync',self.url)
+        parent=str(self.proxy('a').descriptor_path)
+        self.cli('sync',parent,replica='child')
+        self.cli('document','delete',replica='child')
+        self.cli('sync',parent,replica='child')
+        self.assertTrue(self.cli('inspect')['deleted'])
+        self.assertGreater(self.cli('status',replica='child')['pending'],0)
+        self.cli('sync',self.url)
+        self.cli('sync',parent,replica='child')
+        self.assertEqual(self.cli('status',replica='child')['pending'],0)
+        self.assertEqual(self.cli('inspect'),self.cli('inspect',replica='child'))
+
     def test_editor_commands_and_snapshot(self):
         self.cli('append','-',value={'kind':'document','type':'pages'},actor='human')
         stroke={'kind':'stroke','stroke':'pen','layer':'base','page':1,'color':-16777216,'width':3,'points':[[10,20,.5]]}

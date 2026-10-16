@@ -34,6 +34,9 @@ for configuring proxies and opening upstream documents not yet replicated.
 This is a browser for NoteMaker documents, not arbitrary Android storage files.
 It does not enumerate upstream-only documents or change replication scope.
 
+[ADR 0013](0013-document-deletion.md) extends this browser with confirmed
+deletion through the shared proxy and excludes tombstoned documents from lists.
+
 ## Verification
 
 Build the APK and run `tests/files_android.py` inside the Nix shell. The isolated

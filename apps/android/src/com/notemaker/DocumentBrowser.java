@@ -58,6 +58,7 @@ final class DocumentBrowser {
         files.setOnItemClickListener((parent,view,position,id)->{
             String name=visible.get(position);dialog.dismiss();app.openDocument(name,"fixed");
         });
+        files.setOnItemLongClickListener((parent,view,position,id)->{delete(visible.get(position));return true;});
         search.addTextChangedListener(new TextWatcher(){
             public void beforeTextChanged(CharSequence s,int start,int count,int after){}
             public void onTextChanged(CharSequence s,int start,int before,int count){filter();}
@@ -144,7 +145,31 @@ final class DocumentBrowser {
         visible.clear();String query=search.getText().toString().trim().toLowerCase(Locale.ROOT);
         for(String name:names)if(name.toLowerCase(Locale.ROOT).contains(query))visible.add(name);
         adapter.notifyDataSetChanged();
-        if(loaded)status.setText(names.isEmpty()?"No files yet. Choose New file to begin.":visible.isEmpty()?"No matching files.":visible.size()+" files · tap to open");
+        if(loaded)status.setText(names.isEmpty()?"No files yet. Choose New file to begin.":visible.isEmpty()?"No matching files.":visible.size()+" files · tap to open · hold to delete");
+    }
+
+    private void delete(String name){
+        AlertDialog confirm=new AlertDialog.Builder(app).setTitle("Delete file?")
+            .setMessage("Delete “"+name+"” from this replica and the server when synchronized? This cannot be undone, and this name cannot be reused.")
+            .setPositiveButton("Delete",null).setNegativeButton("Cancel",null).create();
+        confirm.setOnShowListener(d->confirm.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            confirm.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+            confirm.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);confirm.setCancelable(false);
+            ReplicaService.writes.execute(()->{
+                try{
+                    source.command(name,Arrays.asList("document","delete"),null);
+                    Map<String,Object> snapshot=name.equals(source.document)?source.read():null;
+                    app.runOnUiThread(()->{
+                        confirm.dismiss();if(!current())return;
+                        if(snapshot!=null)try{app.refreshShared(snapshot);app.update();}catch(Exception e){android.util.Log.w("NoteMaker","Deleted file refresh failed",e);}
+                        refresh();
+                    });
+                }catch(Exception e){app.runOnUiThread(()->{
+                    confirm.dismiss();if(!current())return;
+                    Toast.makeText(app,"Could not delete file: "+e.getMessage(),Toast.LENGTH_LONG).show();
+                });}
+            });
+        }));confirm.show();
     }
 
     private void refresh(){

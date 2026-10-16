@@ -47,7 +47,18 @@ public final class Store {
         Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         Model.validate(operation);
         Model.require(write(operation).getBytes(StandardCharsets.UTF_8).length<=3000000,"Action exceeds 3 MB");
-        return edit(state->{Collaboration.requireUnlocked(state,actor,Arrays.asList(operation),System.currentTimeMillis());Map<String,Object> op=map(copy(operation));op.put("id",UUID.randomUUID().toString());op.put("actor",actor);Model.withBases(op,Store.model(state));Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)op.put("session",session);list(state.get("pending")).add(op);});
+        return edit(state->{Model.require(!Store.model(state).deleted,"Document is deleted");Collaboration.requireUnlocked(state,actor,Arrays.asList(operation),System.currentTimeMillis());Map<String,Object> op=map(copy(operation));op.put("id",UUID.randomUUID().toString());op.put("actor",actor);Model.withBases(op,Store.model(state));Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)op.put("session",session);list(state.get("pending")).add(op);});
+    }
+    /** Permanent, idempotent lifecycle action; histories remain in the journal. */
+    public Map<String,Object> deleteDocument(String actor) throws Exception {
+        Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
+        Map<String,Object> result=object("document",document,"deleted",true);
+        edit(state->{
+            if(Store.model(state).deleted)return;
+            String id=Actions.id();
+            list(state.get("pending")).add(object("kind","document-delete","id",id,"actor",actor));
+            state.put("leases",object());state.put("activeSessions",object());result.put("operation",id);
+        });return result;
     }
     public Map<String,Object> commit(String actor,Actions.Build build) throws Exception {
         return commit(actor,build,Collections.emptyList());
@@ -62,14 +73,14 @@ public final class Store {
         Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         final Map<String,Object> result=object();
         edit(state->{
-            Model model=Store.model(state);if(requiredSession!=null)Collaboration.requireSelection(state,model,actor,requiredSession,selected);Model baseline=new Model(model);Timing.mark("geometry_begin");List<Object> requested=build.create(model),ops=new ArrayList<>();Timing.mark("geometry_done");
+            Model model=Store.model(state);Model.require(!model.deleted,"Document is deleted");if(requiredSession!=null)Collaboration.requireSelection(state,model,actor,requiredSession,selected);Model baseline=new Model(model);Timing.mark("geometry_begin");List<Object> requested=build.create(model),ops=new ArrayList<>();Timing.mark("geometry_done");
             for(Object value:requested){Map<String,Object> op=map(value);ops.add(op);String kind=string(op,"kind");
                 String key=kind.equals("object")?"object":kind.equals("layer")?"layer":kind.equals("stroke")?"stroke":null;
                 if(key!=null&&!(key.equals("object")?model.objects:key.equals("layer")?model.layers:model.strokes).containsKey(op.get(key)))ops.add(object("kind",key.equals("stroke")?"active":key+"-active",key,op.get(key),"active",true));
             }
             Model.require(!ops.isEmpty()&&ops.size()<=200,"Action needs 1–200 operations");
             List<Object> inverse=new ArrayList<>();
-            for(Object v:ops){Map<String,Object> op=map(v);Model.require(!Arrays.asList("batch","document").contains(op.get("kind")),"Use document create; nested batches are not allowed");Model.validate(op);inverse.add(0,Actions.inverse(model,op));model.apply(op);}
+            for(Object v:ops){Map<String,Object> op=map(v);Model.require(!Arrays.asList("batch","document","document-delete").contains(op.get("kind")),"Use document create; nested batches are not allowed");Model.validate(op);inverse.add(0,Actions.inverse(model,op));model.apply(op);}
             Timing.mark("inverse_done");
             Collaboration.requireUnlocked(state,actor,ops,System.currentTimeMillis());
             Collaboration.requireUnlocked(state,actor,dependencies,System.currentTimeMillis());
@@ -87,7 +98,7 @@ public final class Store {
     private static Map<String,Object> history(Map<String,Object>state,String actor){Map<String,Object> actors=map(state.get("actors"));actors.putIfAbsent(actor,object("undo",new ArrayList<>(),"redo",new ArrayList<>()));return map(actors.get(actor));}
     public Map<String,Object> history(String actor,boolean redo) throws Exception {
         final Map<String,Object> result=object();
-        edit(state->{Map<String,Object> h=history(state,actor);List<Object> from=list(h.get(redo?"redo":"undo")),to=list(h.get(redo?"undo":"redo"));Model.require(!from.isEmpty(),"No "+(redo?"redo":"undo")+" for actor "+actor);Map<String,Object> entry=map(from.get(from.size()-1));Collaboration.requireUnlocked(state,actor,list(entry.get(redo?"forward":"inverse")),System.currentTimeMillis());from.remove(from.size()-1);to.add(entry);
+        edit(state->{Model.require(!Store.model(state).deleted,"Document is deleted");Map<String,Object> h=history(state,actor);List<Object> from=list(h.get(redo?"redo":"undo")),to=list(h.get(redo?"undo":"redo"));Model.require(!from.isEmpty(),"No "+(redo?"redo":"undo")+" for actor "+actor);Map<String,Object> entry=map(from.get(from.size()-1));Collaboration.requireUnlocked(state,actor,list(entry.get(redo?"forward":"inverse")),System.currentTimeMillis());from.remove(from.size()-1);to.add(entry);
             String id=UUID.randomUUID().toString();Map<String,Object> batch=object("kind","batch","id",id,"actor",actor,"actions",copy(entry.get(redo?"forward":"inverse")));Model.withBases(batch,Store.model(state));Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)batch.put("session",session);list(state.get("pending")).add(batch);result.put("operation",id);
         });return result;
     }

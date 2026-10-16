@@ -119,6 +119,7 @@ def check_panels():
     time.sleep(1)
     state = latest_state()
     assert any(o['shape'] == 'svg' and o.get('layer') == 'template-0' for o in state['model']['objects']), state
+    instrument('configure', document='android-panel-layer-actions', host='offline')
     instrument('layer', layer='ui-layer')
     show_editor()
     tap('Layer actions')

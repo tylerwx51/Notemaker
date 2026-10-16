@@ -130,6 +130,9 @@ def validate(op, nested=False):
         key = 'object' if kind == 'object-active' else 'layer'
         if not isinstance(op.get(key), str) or not isinstance(op.get('active'), bool) or (key == 'layer' and op[key] == 'base'):
             raise ValueError('Invalid visibility')
+    elif kind == 'document-delete':
+        if nested:
+            raise ValueError('Document deletion must be a standalone action')
     elif kind == 'document':
         if op.get('type') not in ('fixed', 'pages', 'infinite'):
             raise ValueError('Unknown document type')
@@ -216,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(200, CHATS.create(body))
                 elif len(parts) == 4 and parts[3] == 'messages':
                     with LOCK:
-                        documents = [row[0] for row in DB.execute('SELECT DISTINCT document FROM events ORDER BY document')]
+                        documents = [row[0] for row in DB.execute('SELECT DISTINCT document FROM events WHERE document NOT IN (SELECT document FROM deleted_documents) ORDER BY document')]
                     self.reply(200, CHATS.send(parts[2], body, documents))
                 elif len(parts) == 4 and parts[3] == 'stop':
                     self.reply(200, CHATS.stop(parts[2]))
@@ -246,8 +249,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == '/api/info':
             with LOCK:
                 identity = DB.execute("SELECT value FROM metadata WHERE key='id'").fetchone()[0]
-                documents = [r[0] for r in DB.execute('SELECT DISTINCT document FROM events')]
-            return self.reply(200, {'id': identity, 'rootId': identity, 'kind': 'server', 'protocol': 3, 'lineage': [], 'documents': documents})
+                documents = [r[0] for r in DB.execute('SELECT DISTINCT document FROM events WHERE document NOT IN (SELECT document FROM deleted_documents)')]
+                deleted = [r[0] for r in DB.execute('SELECT document FROM deleted_documents ORDER BY document')]
+            return self.reply(200, {'id': identity, 'rootId': identity, 'kind': 'server', 'protocol': 3, 'lineage': [], 'documents': documents, 'deletedDocuments': deleted})
         if url.path == '/api/stream':
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -451,6 +455,8 @@ class Handler(BaseHTTPRequestHandler):
                     if existing and existing[0] != payload:
                         raise ValueError('Operation id reused with different contents')
                     DB.execute('INSERT OR IGNORE INTO events(document, operation, payload) VALUES(?,?,?)', (doc, op['id'], payload))
+                    if op['kind'] == 'document-delete':
+                        DB.execute('INSERT OR IGNORE INTO deleted_documents(document) VALUES(?)', (doc,))
             with CHANGES:
                 GENERATION += 1
                 CHANGES.notify_all()
@@ -478,6 +484,7 @@ def main():
     DB.execute('PRAGMA journal_mode=WAL')
     DB.execute('CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT, document TEXT NOT NULL, operation TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(document, operation))')
     DB.execute('CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    DB.execute('CREATE TABLE IF NOT EXISTS deleted_documents(document TEXT PRIMARY KEY)')
     DB.execute('CREATE TABLE IF NOT EXISTS leases(document TEXT NOT NULL, entity TEXT NOT NULL, session TEXT NOT NULL, actor TEXT NOT NULL, expires INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(document,entity))')
     DB.execute('CREATE TABLE IF NOT EXISTS lease_revocations(document TEXT NOT NULL, entity TEXT NOT NULL, session TEXT NOT NULL, actor TEXT NOT NULL, released INTEGER NOT NULL, PRIMARY KEY(document,entity,session,actor))')
     DB.execute('CREATE TABLE IF NOT EXISTS previews(document TEXT NOT NULL, session TEXT NOT NULL, expires INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(document,session))')

@@ -232,3 +232,24 @@ conflicts and batching retain their current format. The durable transport remain
 version 3. All renderers/proxies must be upgraded before using masks: old clients
 can ignore unknown fields and display erased source content. No remote rollout
 is performed by the local implementation change.
+
+## Document deletion
+
+`{"kind":"document-delete","id":"unique-operation-id","actor":"human"}`
+is a standalone lifecycle operation carried by the existing events/replica
+protocol. Nested deletion in a batch is rejected. App and CLI callers submit it
+to their selected local proxy, which journals and forwards it normally.
+
+Deletion is permanent and wins over every creation/content operation, regardless
+of order. Replay exposes `deleted:true`, clears the effective drawing, and ignores
+subsequent content operations. Already queued stale operations are still accepted
+and acknowledged so offline replicas can drain their queues and converge. New
+local edits and undo/redo against a known tombstone are rejected. Operation logs,
+cursors, identities and actor histories remain intact; names cannot be reused.
+
+The server stores a transactional `deleted_documents` index alongside its events.
+`GET /api/info` excludes these names from `documents` and returns them separately
+in `deletedDocuments`. Replication and audit endpoints remain readable by name
+and continue to return the complete log. Server agent document choices exclude
+deleted names. No HTTP DELETE or physical purge is provided. Upgrade all peers
+before using this new operation kind.

@@ -53,6 +53,33 @@ result, inspect `log` before retrying. Synchronization retries are idempotent.
 No command contacts an AI provider. Proxy commands contact the selected proxy,
 which synchronizes configured documents automatically; upstream addresses and
 credentials are not embedded in source.
+
+## Delete a document
+
+```sh
+apps/cli/notemaker --proxy-file /path/to/replica/proxy.json --document unwanted-note --actor human document delete
+```
+
+Returns `{"document":"unwanted-note","deleted":true,"operation":"…"}` after
+the selected proxy durably saves one deletion action. Repeating deletion returns
+`deleted:true` without another action (and omits `operation`). This command is
+idempotent, unlike ordinary content edits. It needs no JSON input or server
+connection. The proxy synchronizes the deletion automatically when connected;
+`sync [UPSTREAM]` can request a pass. Success means local persistence, not a
+server acknowledgement; inspect `status.pending` to check outstanding actions.
+
+Deletion removes the file from `document list` locally and from the server's
+active document list after sync. `inspect` and `status` expose `deleted:true`.
+Other replicas receive the tombstone through ordinary synchronization, including
+replicas with stale pending edits. The tombstone permanently wins over edits and
+creation, so the name cannot be reused. Content edits and undo/redo are rejected
+once the replica knows it is deleted. Actor histories and operation logs remain
+available for audit and replication; deletion does not erase stored bytes.
+
+You can delete a known server document by name even before downloading it; an
+unknown name is also permanently tombstoned. Use the exact intended name.
+No direct server mutation or standalone `--state` write is involved. Upgrade
+the app, CLI/proxies and server together before using document deletion.
 The current trusted-LAN server has no authentication.
 
 ## Actions

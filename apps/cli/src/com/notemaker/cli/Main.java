@@ -22,7 +22,7 @@ public final class Main {
         + "--proxy-file FILE          Selected proxy; default NOTEMAKER_PROXY_FILE\n"
         + "--help                     Show this help without contacting a server\n\n"
         + "serve [PORT [UPSTREAM]]     Start replica proxy; upstream URL or descriptor\n"
-        + "document create [fixed|pages|infinite] | document list\ninspect | status | log\n"
+        + "document create [fixed|pages|infinite] | document delete | document list\ninspect | status | log\n"
         + "diagram add FILE|-         Atomic new layer and editable diagram objects\n"
         + "svg add FILE.svg|- [PLACEMENT.json]   Place SVG; optional {x,y,w,h,layer,page,object}\n"
         + "shape list                   List supported editable shapes\n"
@@ -50,7 +50,8 @@ public final class Main {
         + "Edits require a running selected proxy and work offline; document list lists local documents only.\n"
         + "JSON on stdout (except help); JSON errors on stderr and exit 1.\n"
         + "Mutations are not idempotent: inspect log before retrying a lost result.\n"
-        + "sync retries are idempotent. See apps/cli/README.md for input schemas.\n\n"
+        + "sync and document delete retries are idempotent. Deletion is permanent; names cannot be reused.\n"
+        + "See apps/cli/README.md for input schemas.\n\n"
         + "Examples:\n"
         + "  notemaker --document notes status\n"
         + "  notemaker --proxy-file /path/to/replica/proxy.json --document notes sync http://127.0.0.1:8765\n";
@@ -92,8 +93,9 @@ public final class Main {
             }
 
             case "document":{
-                require(a.size()>=1,"document create|list");String sub=a.remove(0);
-                if(sub.equals("list")){arity(a,0);List<Object> documents=new ArrayList<>();File[] files=directory.listFiles((d,n)->n.startsWith("document-")&&n.endsWith(".json"));if(files!=null)for(File f:files){Map<String,Object>s=map(parse(new String(Files.readAllBytes(f.toPath()),StandardCharsets.UTF_8)));documents.add(s.getOrDefault("document",f.getName()));}return object("documents",documents);}
+                require(a.size()>=1,"document create|delete|list");String sub=a.remove(0);
+                if(sub.equals("list")){arity(a,0);List<Object> documents=new ArrayList<>();File[] files=directory.listFiles((d,n)->n.startsWith("document-")&&n.endsWith(".json"));if(files!=null)for(File f:files){Map<String,Object>s=map(parse(new String(Files.readAllBytes(f.toPath()),StandardCharsets.UTF_8)));String name=String.valueOf(s.getOrDefault("document",f.getName()));if(!new Store(directory,name).model().deleted)documents.add(name);}return object("documents",documents);}
+                if(sub.equals("delete")){arity(a,0);return store.deleteDocument(actor);}
                 require(sub.equals("create")&&a.size()<=1,"document create [fixed|pages|infinite]");String type=a.isEmpty()?"fixed":a.get(0);Map<String,Object> op=object("kind","document","type",type);Model.validate(op);
                 store.edit(s->{require(list(s.get("events")).isEmpty()&&list(s.get("pending")).isEmpty(),"Document already exists");op.put("id",Actions.id());op.put("actor",actionActor);list(s.get("pending")).add(op);});return object("document",doc,"type",type);
             }
@@ -115,7 +117,7 @@ public final class Main {
                 }
                 store.edit(s->s.putAll(preferences));return object("saved",true);
             }
-            case "status":{arity(a,0);Map<String,Object>s=store.read();return object("document",doc,"cursor",s.get("cursor"),"pending",list(s.get("pending")).size(),"revision",s.get("revision"),"serverId",s.get("serverId"));}
+            case "status":{arity(a,0);Map<String,Object>s=store.read();return object("document",doc,"deleted",Store.model(s).deleted,"cursor",s.get("cursor"),"pending",list(s.get("pending")).size(),"revision",s.get("revision"),"serverId",s.get("serverId"));}
             case "log":arity(a,0);return store.read();
             case "undo":case "redo":arity(a,0);return store.history(actor,command.equals("redo"));
             case "diagram":arity(a,2);require(a.get(0).equals("add"),"diagram add FILE|-");Map<String,Object> diagram=map(input(a.get(1)));return store.commit(actor,m->Actions.diagram(m,diagram));

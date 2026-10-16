@@ -288,7 +288,17 @@ class DrawingBrowser(unittest.TestCase):
                 self.assertLess(max(reverted['o'][:3]),40,reverted)
                 cli('selection','deselect','browser-preview')
                 self.assertEqual(len(json.load(urllib.request.urlopen(server_url + '/api/events?document=' + document))['events']),17)
+                cli('document','delete')
+                cli('sync',server_url)
+                deadline=time.monotonic()+10
+                while time.monotonic()<deadline:
+                    if debug.evaluate("ops.some(o=>o.kind==='document-delete')"):break
+                    time.sleep(.2)
+                self.assertTrue(debug.evaluate("ops.some(o=>o.kind==='document-delete')"))
+                self.assertEqual(debug.evaluate("document.querySelector('#layers').children.length"),0)
+                self.assertTrue(debug.evaluate("Array.from(ctx.getImageData(0,100,1000,1300).data).every(v=>v===255)"))
                 print('PASS triangle/star fills and signed line render in live server viewer', flush=True)
+                print('PASS synced document deletion clears live browser content and layers',flush=True)
             finally:
                 if debug:
                     debug.sock.close()

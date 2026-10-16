@@ -150,6 +150,7 @@ public class MainActivity extends Activity {
         if(state.get("clipboard") instanceof Map){Map<String,Object> sharedClipboard=Json.map(state.get("clipboard"));long sharedAt=((Number)sharedClipboard.getOrDefault("copiedAt",0L)).longValue(),localAt=((Number)selectionClipboard.getOrDefault("copiedAt",0L)).longValue();boolean sharedHasItems=!Json.list(sharedClipboard.getOrDefault("entities",Collections.emptyList())).isEmpty(),localHasItems=!Json.list(selectionClipboard.getOrDefault("entities",Collections.emptyList())).isEmpty();if(sharedAt>=localAt&&(sharedHasItems||!localHasItems))selectionClipboard=sharedClipboard;}
         getSharedPreferences("settings",0).edit().putString("selectionClipboard",Json.write(selectionClipboard)).apply();schedulePreviewExpiry();
         model=Store.model(state);type=model.type;documentSeen=eventCount+pendingCount>0;
+        if(model.deleted){optimistic.clear();resetDrawingGesture();deselect();}
         LinkedHashMap<String,JSONObject> nextLayers=new LinkedHashMap<>(),nextStrokes=new LinkedHashMap<>();
         ArrayList<Map.Entry<String,Map<String,Object>>> orderedLayers=new ArrayList<>(model.layers.entrySet());
         orderedLayers.sort(java.util.Comparator.comparingDouble(entry -> entry.getValue().get("order") instanceof Number ? ((Number)entry.getValue().get("order")).doubleValue() : 0d));
@@ -509,6 +510,7 @@ public class MainActivity extends Activity {
             cache.draw(c,visible,this::transform,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
+            if(model.deleted){c.drawColor(Color.WHITE);paint.setColor(Color.BLACK);paint.setTextSize(32);c.drawText("Document deleted · open another file from Notes",24,60,paint);return;}
             if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
             if(getWidth()==0||getHeight()==0)return;
             String key=document+"/"+page+"/"+type+"/"+getWidth()+"/"+getHeight()+"/"+zoom+"/"+offsetX+"/"+offsetY;
@@ -554,6 +556,7 @@ public class MainActivity extends Activity {
         void eraseAt(float sx,float sy){JSONArray path=new JSONArray();path.put(new JSONArray(Arrays.asList(x(sx),y(sy))));applyErase("stroke",selected,page,path,eraserRadius);}
         boolean scribble(JSONArray path){if(path==null||path.length()<7)return false;double minX=Double.MAX_VALUE,minY=Double.MAX_VALUE,maxX=-1,maxY=-1;int changes=0,previous=0;double spanX=0,spanY=0;for(int i=0;i<path.length();i++){JSONArray p=path.optJSONArray(i);double px=p.optDouble(0),py=p.optDouble(1);minX=Math.min(minX,px);maxX=Math.max(maxX,px);minY=Math.min(minY,py);maxY=Math.max(maxY,py);if(i>0){JSONArray a=path.optJSONArray(i-1);double dx=px-a.optDouble(0),dy=py-a.optDouble(1);if(Math.abs(dx)>Math.abs(dy)){int sign=dx>2?1:dx< -2?-1:0;if(sign!=0){if(previous!=0&&sign!=previous)changes++;previous=sign;}}else{int sign=dy>2?1:dy< -2?-1:0;if(sign!=0){if(previous!=0&&sign!=previous)changes++;previous=sign;}}}}spanX=maxX-minX;spanY=maxY-minY;return changes>=3&&Math.max(spanX,spanY)>=Math.max(30,eraserRadius*2);}
         @Override public boolean onTouchEvent(MotionEvent event){
+            if(model.deleted)return true;
             if(inputStarted==0)inputStarted=System.nanoTime();
             synchronized(lock){
                 scaling.onTouchEvent(event);int action=event.getActionMasked();float sx=event.getX(),sy=event.getY();

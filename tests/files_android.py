@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """File browsing and creation on an isolated offline Android emulator."""
 import os
+import re
+import xml.etree.ElementTree as ET
 import subprocess
 import tempfile
 import time
@@ -10,6 +12,14 @@ import drawing_android as ui
 def browse():
     ui.tap('Document actions')
     ui.tap('Browse files…')
+    time.sleep(.5)
+
+
+def hold_file(name):
+    node = next(n for n in ET.fromstring(ui.ui_dump()).iter('node') if n.attrib.get('text') == name)
+    left, top, right, bottom = map(int, re.findall(r'\d+', node.attrib['bounds']))
+    x, y = str((left+right)//2), str((top+bottom)//2)
+    ui.adb('shell','input','swipe',x,y,x,y,'1000')
     time.sleep(.5)
 
 
@@ -78,7 +88,27 @@ def main():
                 ui.screenshot('files-browser')
                 ui.tap('Browser-test')
                 assert ui.latest_state()['type'] == 'pages'
-                print('PASS grid previews, list mode persistence, offline creation, validation, search, selection, restart and retained type')
+                browse()
+                hold_file('Browser-test')
+                ui.tap('Cancel')
+                assert 'Browser-test' in ui.ui_dump()
+                hold_file('Browser-test')
+                # Exact button text avoids matching the confirmation title.
+                node=next(n for n in ET.fromstring(ui.ui_dump()).iter('node') if n.attrib.get('text','').casefold() == 'delete')
+                left,top,right,bottom=map(int,re.findall(r'\d+',node.attrib['bounds']))
+                ui.adb('shell','input','tap',str((left+right)//2),str((top+bottom)//2))
+                time.sleep(1)
+                assert 'Browser-test' not in ui.ui_dump()
+                ui.tap('Close')
+                assert 'Deleted' in ui.ui_dump()
+                ui.screenshot('files-deleted')
+                ui.adb('shell','am','force-stop','com.notemaker')
+                ui.adb('shell','am','start','-W','-n','com.notemaker/.MainActivity')
+                browse()
+                assert 'Browser-test' not in ui.ui_dump()
+                ui.tap('Original')
+                assert not ui.latest_state()['model']['deleted']
+                print('PASS file browser, offline creation, deletion confirmation/cancel, active-file deletion and restart persistence')
             finally:
                 try:
                     (ui.OUT / 'files-logcat.txt').write_text(ui.adb('logcat', '-d', '-t', '2000'))

@@ -49,8 +49,8 @@ def instrument(action,**kwargs):
     assert f'PASS {action}' in out,out
     state=json.loads(adb('shell','run-as','com.notemaker','cat','files/integration.json'))
     (OUT/'latest-state.json').write_text(json.dumps(state,indent=2))
-    adb('shell','am','start','-W','-n','com.notemaker/.MainActivity')
-    wait(lambda: 'com.notemaker/.MainActivity' in adb('shell','dumpsys','activity','activities'))
+    adb('shell','am','start','-W','-f','0x10000000','-n','com.notemaker/.MainActivity')
+    wait(lambda: bool(re.search(r'topResumedActivity=.*com\.notemaker/\.MainActivity', adb('shell','dumpsys','activity','activities'))),15)
     return state
 
 def encoded(value):return base64.b64encode(json.dumps(value).encode()).decode()

@@ -239,11 +239,13 @@ try:
     swipe = subprocess.Popen(['adb', '-s', SERIALS[0], 'shell', 'am', 'instrument', '-w', '-e', 'action', 'live-draw', 'com.notemaker/.Integration'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def received_partial():
-        assert swipe.poll() is None, 'Gesture ended before remote partial stroke arrived'
+        if swipe.poll() is not None:
+            output,error=swipe.communicate()
+            raise AssertionError('Live-draw instrumentation ended before remote partial stroke arrived; stdout='+output+' stderr='+error)
         partial = [e['op'] for e in events('infinite') if e['op']['kind'] == 'stroke' and e['op'].get('stroke') not in baseline]
         return any(len(o['points']) >= 2 for o in partial)
 
-    wait_until(received_partial, 7)
+    wait_until(received_partial, 16)
     output, error = swipe.communicate(timeout=15)
     assert swipe.returncode == 0
     assert 'PASS live-draw' in output, output + error

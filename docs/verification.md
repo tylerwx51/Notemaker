@@ -1060,3 +1060,53 @@ started at y=1725, the message field ended at y=1589, and Send ended at y=1679.
 Hiding the keyboard restored Send to its original y=2275 position. Screenshots
 and `layout-check.json` record these physical-device measurements. The local
 server required no restart for these Android-only UI changes.
+
+## Document deletion (2026-10-14)
+
+Built JVM and Android CLI artifacts and the Android APK through `nix-shell`.
+`tests/cli_checks.py` passed all 20 tests at the first full run, including
+offline deletion, restart, direct read-only listing, retained actor histories,
+idempotent retries, stale/fresh replica convergence, and remote-only names.
+The subsequently added proxy-tree deletion test also passed. All six server
+checks passed, including rollback of the deletion index with a rejected event
+transaction and preservation of the replication log.
+
+`tests/drawing_browser.py` passed in headless Chromium, including live removal
+of the displayed drawing and layer controls after a CLI deletion synchronized.
+
+`tests/files_android.py` passed on an isolated API 36 emulator, including the
+existing browser/creation checks, canceling deletion, deleting the active file,
+displaying its deleted state, restarting offline, and opening another file.
+The confirmation button selector matches Android's uppercase label. Screenshot:
+`.test-artifacts/drawing-android/files-deleted.png`.
+
+No existing user documents were deleted. All deletion checks used temporary
+replicas and databases. No deployment to an existing server or physical BOOX
+installation was performed; E Ink behavior remains untested on hardware.
+
+### Document deletion deployment (2026-10-14)
+
+At the user's request, restarted the desktop primary with its existing database
+and Pi configuration, restarted the desktop replica, and installed the APK on
+BOOX `eac89823` with the backed-up upgrade workflow. The server and desktop proxy
+now run in tmux sessions `notemaker-primary` and `notemaker-desktop`. The server
+database identity remains `2220a9fd-fead-4f9a-a601-14f5cd7ca87e`.
+
+The tablet upgrade preserved all 52 private files/preferences and all 380 actions
+in its selected document, `Drawing object protocol.`. Installed APK SHA-256:
+`65aac256947ddbc5c45f5854cde74a2b09ee249a355d7c8a4c9cf395e7584ca6`.
+The USB reverse tunnel for port 8765 is active, and the tablet reconnected with
+no pending actions. Tablet backup and checks:
+`.test-artifacts/tablet/20261014-220233-350507/`.
+
+Deleted all seven `Drawing-check-*` documents through actual CLI commands to
+the tablet's selected local proxy, using actor `deployment-delete`. Confirmed
+all seven tombstones on the primary, tablet and desktop, with no pending actions
+and no matching entries in their active document lists. The eight other server
+documents remain listed, and all 1,449 existing server events remain unchanged.
+Logical deletion retains those historical events as designed.
+
+The database backup, desktop/agent replica backups, exact deletion inventory,
+operation receipts and verification report are under
+`.test-artifacts/delete-deploy-20261014-220228/`. No Phenom II deployment was
+needed; the existing primary is this development computer.

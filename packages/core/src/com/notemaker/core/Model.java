@@ -7,6 +7,7 @@ import static com.notemaker.core.Json.*;
 public final class Model {
     public String type="fixed";
     private boolean documentSeen;
+    public boolean deleted;
     public final Map<String,String> versions=new LinkedHashMap<>();
     public final Map<String,String> versionActors=new LinkedHashMap<>();
     public final Map<String,Map<String,Object>> conflicts=new LinkedHashMap<>();
@@ -25,18 +26,19 @@ public final class Model {
     private void putItem(Map<String,Object> o,Map<String,Map<String,Object>> table,String kind){Map<String,Object> old=table.put(string(o,kind),o);if(itemIndex!=null){if(old!=null&&!itemScope(old).equals(itemScope(o)))itemIndex.get(itemScope(old)).remove(kind+":"+string(o,kind));indexItem(o);}}
     public Model(){layers.put("base",object("kind","layer","layer","base","name","Layer 1","force",false));}
     /** Entity snapshots are immutable after publication; copy only the indexes. */
-    public Model(Model other){type=other.type;documentSeen=other.documentSeen;layers.putAll(other.layers);strokes.putAll(other.strokes);objects.putAll(other.objects);active.putAll(other.active);objectActive.putAll(other.objectActive);layerActive.putAll(other.layerActive);versions.putAll(other.versions);versionActors.putAll(other.versionActors);conflicts.putAll(other.conflicts);conflictActive.putAll(other.conflictActive);}
+    public Model(Model other){type=other.type;deleted=other.deleted;documentSeen=other.documentSeen;layers.putAll(other.layers);strokes.putAll(other.strokes);objects.putAll(other.objects);active.putAll(other.active);objectActive.putAll(other.objectActive);layerActive.putAll(other.layerActive);versions.putAll(other.versions);versionActors.putAll(other.versionActors);conflicts.putAll(other.conflicts);conflictActive.putAll(other.conflictActive);}
     public static Model fromJson(Map<String,Object> value){
-        Model model=new Model();model.type=string(value,"type");model.documentSeen=true;
+        Model model=new Model();model.type=string(value,"type");model.documentSeen=true;model.layers.clear();
         for(String key:Arrays.asList("layers","strokes","objects"))for(Object op:list(value.get(key)))model.apply(map(op));
         for(Map.Entry<String,Object> e:map(value.get("strokeActive")).entrySet())model.active.put(e.getKey(),(Boolean)e.getValue());
         for(Map.Entry<String,Object> e:map(value.get("objectActive")).entrySet())model.objectActive.put(e.getKey(),(Boolean)e.getValue());
         for(Map.Entry<String,Object> e:map(value.get("layerActive")).entrySet())model.layerActive.put(e.getKey(),(Boolean)e.getValue());for(Map.Entry<String,Object> e:map(value.getOrDefault("versions",object())).entrySet())model.versions.put(e.getKey(),(String)e.getValue());
         for(Map.Entry<String,Object> e:map(value.getOrDefault("versionActors",object())).entrySet())model.versionActors.put(e.getKey(),(String)e.getValue());
-        for(Object c:list(value.getOrDefault("conflicts",Collections.emptyList())))model.conflicts.put(string(map(c),"id"),map(c));return model;
+        for(Object c:list(value.getOrDefault("conflicts",Collections.emptyList())))model.conflicts.put(string(map(c),"id"),map(c));model.deleted=Boolean.TRUE.equals(value.get("deleted"));return model;
     }
     public Model(Map<String,Object> state){this();for(Object v:list(state.get("events")))apply(map(v));for(Object v:list(state.get("pending")))apply(map(v));}
     public void apply(Map<String,Object> op){
+        if(deleted)return;
         String operation=(String)op.get("id");List<Object> actions="batch".equals(op.get("kind"))?list(op.get("actions")):Arrays.asList(op);
         Map<String,Object> bases=map(op.getOrDefault("bases",object())),visibility=map(op.getOrDefault("visibility",object()));Map<String,Map<String,Object>> before=new LinkedHashMap<>();Map<String,Boolean> beforeActive=new HashMap<>();Map<String,String> oldVersions=new HashMap<>();
         for(Object value:actions){String key=entityKey(map(value));if(key!=null&&!before.containsKey(key)){before.put(key,snapshot(key));beforeActive.put(key,isActive(key));oldVersions.put(key,versions.getOrDefault(key,""));}}
@@ -64,6 +66,7 @@ public final class Model {
         switch(string(op,"kind")){
             case "batch":for(Object a:list(op.get("actions")))applyRaw(map(a));break;
             case "conflict-status":conflictActive.put(string(op,"conflict"),(Boolean)op.get("active"));break;
+            case "document-delete":deleted=true;strokes.clear();objects.clear();layers.clear();active.clear();objectActive.clear();layerActive.clear();conflicts.clear();itemIndex=null;break;
             case "document":if(!documentSeen){type=string(op,"type");documentSeen=true;}break;
             case "layer":layers.put(string(op,"layer"),op);break;
             case "stroke":putItem(op,strokes,"stroke");break;
@@ -74,14 +77,15 @@ public final class Model {
             default:throw new IllegalArgumentException("Unknown operation kind: "+op.get("kind"));
         }
     }
-    public Map<String,Object> json(){return object("type",type,"layers",new ArrayList<>(layers.values()),"strokes",new ArrayList<>(strokes.values()),"objects",new ArrayList<>(objects.values()),"strokeActive",active,"objectActive",objectActive,"layerActive",layerActive,"versions",versions,"versionActors",versionActors,"conflicts",visibleConflicts());}
+    public Map<String,Object> json(){return object("type",type,"deleted",deleted,"layers",new ArrayList<>(layers.values()),"strokes",new ArrayList<>(strokes.values()),"objects",new ArrayList<>(objects.values()),"strokeActive",active,"objectActive",objectActive,"layerActive",layerActive,"versions",versions,"versionActors",versionActors,"conflicts",visibleConflicts());}
     public static void validate(Map<String,Object> o){
         String kind=string(o,"kind");
         for(String key:Arrays.asList("actor","session"))if(o.containsKey(key))id(o,key);
         if(o.containsKey("bases")){Map<String,Object> bases=map(o.get("bases"));require(bases.size()<=200,"Too many base versions");for(Map.Entry<String,Object> e:bases.entrySet())require(e.getKey().length()<=220&&e.getValue() instanceof String&&((String)e.getValue()).length()<=200,"Invalid base version");}
         if(o.containsKey("visibility")){Map<String,Object> visibility=map(o.get("visibility"));require(visibility.size()<=200,"Too many visibility entries");for(Map.Entry<String,Object> e:visibility.entrySet())require(e.getKey().length()<=220&&e.getValue() instanceof Boolean,"Invalid branch visibility");}
         switch(kind){
-            case "batch":List<Object> actions=list(o.get("actions"));require(!actions.isEmpty()&&actions.size()<=200,"Batch needs 1–200 actions");for(Object a:actions){Map<String,Object> op=map(a);require(!"batch".equals(op.get("kind")),"Nested batch");validate(op);}break;
+            case "batch":List<Object> actions=list(o.get("actions"));require(!actions.isEmpty()&&actions.size()<=200,"Batch needs 1–200 actions");for(Object a:actions){Map<String,Object> op=map(a);require(!Arrays.asList("batch","document-delete").contains(op.get("kind")),"Nested batch or document deletion");validate(op);}break;
+            case "document-delete":break;
             case "conflict-status":id(o,"conflict");bool(o,"active");break;
             case "document":require(Arrays.asList("fixed","pages","infinite").contains(string(o,"type")),"Unknown document type");break;
             case "layer":id(o,"layer");id(o,"name");bool(o,"force");if(o.containsKey("order"))range(o,"order",-1000000,1000000);break;
