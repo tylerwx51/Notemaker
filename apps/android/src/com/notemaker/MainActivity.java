@@ -260,7 +260,7 @@ public class MainActivity extends Activity {
         command.addAll(Arrays.asList(arguments));ProcessBuilder builder=new ProcessBuilder(command);builder.environment().put("CLASSPATH",getApplicationInfo().sourceDir);return builder.start();
     }
     void objectDialog(){synchronized(lock){
-        ArrayList<String> ids=new ArrayList<>();for(DrawItem item:new LayerEditor(model,selected,page,true).items())if(item.kind.equals("object"))ids.add(item.id);String[] labels=new String[ids.size()];for(int i=0;i<ids.size();i++){Map<String,Object> o=model.objects.get(ids.get(i));labels[i]=o.get("shape")+" · "+o.getOrDefault("text",ids.get(i));}
+        ArrayList<String> ids=new ArrayList<>();for(Map<String,Object> object:model.objects.values())if(((Number)object.getOrDefault("page",0)).intValue()==page)ids.add(String.valueOf(object.get("object")));String[] labels=new String[ids.size()];for(int i=0;i<ids.size();i++){Map<String,Object> o=model.objects.get(ids.get(i));labels[i]=o.get("shape")+" · "+o.getOrDefault("text",ids.get(i));}
         new AlertDialog.Builder(this).setTitle("Edit diagram object").setItems(labels,(d,index)->editObject(ids.get(index))).setNegativeButton("Close",null).show();
     }}
     void choosePicture(){
@@ -453,7 +453,7 @@ public class MainActivity extends Activity {
     }
     void resetDrawingGesture(){drawingShape=null;pendingText=null;if(canvas!=null){canvas.shapeDragging=false;canvas.points=null;canvas.current=null;canvas.eraserPoints=null;canvas.invalidate();}}
     void editObject(String id){synchronized(lock){
-        Map<String,Object> original=new LayerEditor(model,selected,page,true).resolve("object",id).content;final String editLayer=selected;final int editPage=page;
+        Map<String,Object> original=model.objects.get(id);if(original==null)return;final String editLayer=String.valueOf(original.getOrDefault("layer","base"));final int editPage=((Number)original.getOrDefault("page",0)).intValue();
         LinearLayout form=new LinearLayout(this);form.setOrientation(1);form.setPadding(24,12,24,12);Map<String,EditText> fields=new LinkedHashMap<>();
         boolean svg="svg".equals(original.get("shape"));
         String[] keys=svg?new String[]{"x","y","w","h"}:new String[]{"text","x","y","w","h","fontSize"};
@@ -471,10 +471,10 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Edit object").setView(form).setPositiveButton("Save",(d,w)->{
             try{synchronized(lock){Map<String,Object> patch=Json.object();for(Map.Entry<String,EditText> f:fields.entrySet())patch.put(f.getKey(),f.getKey().equals("text")?f.getValue().getText().toString():Double.parseDouble(f.getValue().getText().toString()));
                 if(boldField!=null){patch.put("bold",boldField.isChecked());patch.put("italic",italicField.isChecked());patch.put("underline",underlineField.isChecked());patch.put("fontFamily",familyField.getSelectedItem().toString());patch.put("alignment",alignmentField.getSelectedItem().toString());}
-                if(!editLayer.equals(selected)||editPage!=page)throw new IllegalStateException("Editing layer changed");patch.put("scope",Json.object("layer",editLayer,"page",editPage));persist(Arrays.asList("object","update",id,"-"),patch,null);undo.add("object-action");redo.clear();save();update();}
+                patch.put("scope",Json.object("layer",editLayer,"page",editPage));persist(Arrays.asList("object","update",id,"-"),patch,null);undo.add("object-action");redo.clear();save();update();}
             }catch(Exception e){Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();}
         }).setNeutralButton(Boolean.FALSE.equals(model.objectActive.get(id))?"Restore":"Erase",(d,w)->{
-            try{synchronized(lock){if(!editLayer.equals(selected)||editPage!=page)throw new IllegalStateException("Editing layer changed");persist(Arrays.asList("object",Boolean.FALSE.equals(model.objectActive.get(id))?"show":"hide",id,editLayer,String.valueOf(editPage)),null,null);undo.add("object-action");redo.clear();save();update();}}catch(Exception e){Toast.makeText(this,e.getMessage(),1).show();}
+            try{synchronized(lock){persist(Arrays.asList("object",Boolean.FALSE.equals(model.objectActive.get(id))?"show":"hide",id,editLayer,String.valueOf(editPage)),null,null);undo.add("object-action");redo.clear();save();update();}}catch(Exception e){Toast.makeText(this,e.getMessage(),1).show();}
         }).setNegativeButton("Cancel",null).show();
     }}
 

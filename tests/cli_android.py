@@ -49,7 +49,8 @@ def instrument(action,**kwargs):
     assert f'PASS {action}' in out,out
     state=json.loads(adb('shell','run-as','com.notemaker','cat','files/integration.json'))
     (OUT/'latest-state.json').write_text(json.dumps(state,indent=2))
-    adb('shell','am','start','-f','0x20000000','-n','com.notemaker/.MainActivity')
+    adb('shell','am','start','-W','-n','com.notemaker/.MainActivity')
+    wait(lambda: 'com.notemaker/.MainActivity' in adb('shell','dumpsys','activity','activities'))
     return state
 
 def encoded(value):return base64.b64encode(json.dumps(value).encode()).decode()
@@ -68,10 +69,17 @@ def object_snapshot(object_id):
     return result
 
 def tap(value):
-    adb('shell','uiautomator','dump','/data/local/tmp/cli-ui.xml')
-    tree=ET.fromstring(adb('shell','cat','/data/local/tmp/cli-ui.xml'))
-    node=next((n for n in tree.iter('node') if n.attrib.get('content-desc')==value or n.attrib.get('text','').casefold()==value.casefold()),None)
-    assert node is not None,f'Missing UI control: {value}'
+    node=None
+    for _ in range(15):
+        adb('shell','uiautomator','dump','/data/local/tmp/cli-ui.xml')
+        tree=ET.fromstring(adb('shell','cat','/data/local/tmp/cli-ui.xml'))
+        node=next((n for n in tree.iter('node') if n.attrib.get('content-desc')==value or n.attrib.get('text','').casefold()==value.casefold()),None)
+        if node is not None:break
+        time.sleep(.4)
+    if node is None:
+        (OUT/'missing-ui.xml').write_bytes(ET.tostring(tree))
+        (OUT/'missing-ui.png').write_bytes(subprocess.check_output(['adb','-s',SERIAL,'exec-out','screencap','-p']))
+        raise AssertionError(f'Missing UI control after waiting for the editor: {value}')
     left,top,right,bottom=map(int,re.findall(r'\d+',node.attrib['bounds']))
     adb('shell','input','tap',str((left+right)//2),str((top+bottom)//2));time.sleep(.3)
 
@@ -188,7 +196,7 @@ try:
         (OUT/'object-editor.png').write_bytes(subprocess.check_output(['adb','-s',SERIAL,'exec-out','screencap','-p']))
         tap('Erase')
         state=tablet('inspect');assert state['model']['objectActive']['app'] is False
-        tap('Undo and redo');tap('Undo')
+        tap('More tools');tap('Undo and redo');tap('Undo')
         state=tablet('inspect');assert state['model']['objectActive']['app'] is True
         print('PASS object editor erasure and human undo visible to CLI',flush=True)
         # Reset only the reserved desktop test replica by assigning a fresh state directory.

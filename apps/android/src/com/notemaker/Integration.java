@@ -10,11 +10,17 @@ import java.util.Map;
 /** Drives the real Activity and Canvas with pressure-bearing input events. */
 public class Integration extends Instrumentation {
     Bundle arguments;
+    static void liveGesture(MainActivity app,float shift,java.util.concurrent.CountDownLatch done){
+        Handler handler=new Handler(Looper.getMainLooper());int count=14;int[] index={0};long start=SystemClock.uptimeMillis();Runnable[] step={null};
+        step[0]=()->{int i=index[0]++;synchronized(app.lock){MotionEvent.PointerProperties property=new MotionEvent.PointerProperties();property.id=0;property.toolType=MotionEvent.TOOL_TYPE_STYLUS;MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();float scale=app.canvas.scale();coords.x=(100+i*18+shift)*scale;coords.y=(200+i*12+shift)*scale;coords.pressure=.2f+(i%10)*.06f;coords.size=1;MotionEvent event=MotionEvent.obtain(start,SystemClock.uptimeMillis(),i==0?MotionEvent.ACTION_DOWN:i==count-1?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE,1,new MotionEvent.PointerProperties[]{property},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,InputDevice.SOURCE_STYLUS,0);app.canvas.onTouchEvent(event);event.recycle();}if(index[0]<count)handler.postDelayed(step[0],300);else done.countDown();};handler.post(step[0]);
+    }
     static void gesture(MainActivity app,float x,float y,float w,float h,boolean cancel){
         long start=SystemClock.uptimeMillis();
         for(int i=0;i<3;i++){
             int action=i==0?MotionEvent.ACTION_DOWN:i==1?MotionEvent.ACTION_MOVE:cancel?MotionEvent.ACTION_CANCEL:MotionEvent.ACTION_UP;
-            MotionEvent event=MotionEvent.obtain(start,start+i*20,action,(x+(i==0?0:w))*app.canvas.scale(),(y+(i==0?0:h))*app.canvas.scale(),0);
+            MotionEvent.PointerProperties property=new MotionEvent.PointerProperties();property.id=0;property.toolType=MotionEvent.TOOL_TYPE_STYLUS;
+            MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();coords.x=(x+(i==0?0:w))*app.canvas.scale();coords.y=(y+(i==0?0:h))*app.canvas.scale();coords.pressure=.7f;coords.size=1;
+            MotionEvent event=MotionEvent.obtain(start,start+i*20,action,1,new MotionEvent.PointerProperties[]{property},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,android.view.InputDevice.SOURCE_STYLUS,0);
             app.canvas.onTouchEvent(event);event.recycle();
         }
     }
@@ -53,20 +59,22 @@ public class Integration extends Instrumentation {
                 try(java.io.OutputStream input=child.getOutputStream()){input.write(android.util.Base64.decode(arguments.getString("input",""),android.util.Base64.DEFAULT));}
             }
             final String[] drawnStroke={null};final int[] maxGesturePoints={0};
+            java.util.concurrent.CountDownLatch liveDone=new java.util.concurrent.CountDownLatch(1);
             runOnMainSync(()->{
                 synchronized(app.lock){
                     if(action.equals("configure")){
                         app.save();app.document=arguments.getString("document","integration");app.host=arguments.getString("host","http://10.0.2.2:8765");app.proxyUrl=arguments.getString("proxyUrl","");app.proxyToken=arguments.getString("proxyToken","");app.load(arguments.getString("type","fixed"));
                         app.configureProxy();app.getSharedPreferences("settings",0).edit().putString("host",app.host).putString("document",app.document).putString("proxyUrl",app.proxyUrl).putString("proxyToken",app.proxyToken).commit();
                     }
+                    if(action.equals("live-draw")){liveGesture(app,Float.parseFloat(arguments.getString("shift","0")),liveDone);}
                     if(action.equals("draw")||action.equals("cli-concurrent")){
                         app.setDrawingTool(null);
                         app.color=Integer.parseInt(arguments.getString("color","-16777216"));app.width=10;app.erase=false;app.pan=false;
-                        float shift=Float.parseFloat(arguments.getString("shift","0")),scale=app.canvas.scale();long start=SystemClock.uptimeMillis();
-                        for(int i=0;i<12;i++){
+                        float shift=Float.parseFloat(arguments.getString("shift","0")),scale=app.canvas.scale();long start=SystemClock.uptimeMillis();int count=12;
+                        for(int i=0;i<count;i++){
                             MotionEvent.PointerProperties property=new MotionEvent.PointerProperties();property.id=0;property.toolType=arguments.getString("tool","stylus").equals("finger")?MotionEvent.TOOL_TYPE_FINGER:MotionEvent.TOOL_TYPE_STYLUS;
                             MotionEvent.PointerCoords coords=new MotionEvent.PointerCoords();coords.x=(100+i*30+shift)*scale;coords.y=(200+i*20+shift)*scale;coords.pressure=.2f+i*.06f;coords.size=1;
-                            MotionEvent event=MotionEvent.obtain(start,start+i*20,i==0?MotionEvent.ACTION_DOWN:i==11?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE,1,new MotionEvent.PointerProperties[]{property},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,property.toolType==MotionEvent.TOOL_TYPE_FINGER?android.view.InputDevice.SOURCE_TOUCHSCREEN:android.view.InputDevice.SOURCE_STYLUS,0);
+                            MotionEvent event=MotionEvent.obtain(start,start+i*20,i==0?MotionEvent.ACTION_DOWN:i==count-1?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE,1,new MotionEvent.PointerProperties[]{property},new MotionEvent.PointerCoords[]{coords},0,0,1,1,0,0,property.toolType==MotionEvent.TOOL_TYPE_FINGER?android.view.InputDevice.SOURCE_TOUCHSCREEN:android.view.InputDevice.SOURCE_STYLUS,0);
                             app.canvas.onTouchEvent(event);if(i==0)drawnStroke[0]=app.canvas.current;if(app.canvas.points!=null)maxGesturePoints[0]=Math.max(maxGesturePoints[0],app.canvas.points.length());event.recycle();
                         }
                     }
@@ -151,6 +159,7 @@ public class Integration extends Instrumentation {
                 if(Math.abs(app.canvas.offsetX-oldX)<20||Math.abs(app.canvas.offsetY-oldY)<15||Math.abs(app.canvas.zoom-oldZoom)>.05f)throw new IllegalStateException("Two-finger move did not pan the page cleanly");
             }
             });
+            if(action.equals("live-draw")){if(!liveDone.await(15,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("Timed out delivering live stylus gesture");drainWrites();waitForIdleSync();}
             if(action.equals("draw")){
                 drainWrites();waitForIdleSync();org.json.JSONObject completed=app.strokes.get(drawnStroke[0]);int stored=completed==null||completed.optJSONArray("points")==null?0:completed.optJSONArray("points").length();
                 if(arguments.getString("tool","stylus").equals("finger")){if(drawnStroke[0]!=null||maxGesturePoints[0]!=0||stored!=0)throw new IllegalStateException("Finger input created a pen stroke");}

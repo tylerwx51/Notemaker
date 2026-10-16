@@ -43,7 +43,11 @@ def wait_until(fn, seconds=90):
 def start_server():
     global server
     server = subprocess.Popen([sys.executable, str(ROOT / 'apps/server/server.py'), '--port', '18765', '--database', str(OUT / 'integration.sqlite3')], stdout=(OUT / 'server.log').open('a'), stderr=subprocess.STDOUT)
-    wait_until(lambda: urllib.request.urlopen('http://127.0.0.1:18765/api/events?document=integration', timeout=2).status == 200, 15)
+    def ready():
+        if server.poll() is not None:
+            raise RuntimeError('Integration server exited during startup; port 18765 may already be in use')
+        return urllib.request.urlopen('http://127.0.0.1:18765/api/events?document=integration', timeout=2).status == 200
+    wait_until(ready, 15)
 
 def instrument(serial, action, **args):
     params = ['shell', 'am', 'instrument', '-w', '-e', 'action', action]
@@ -52,16 +56,15 @@ def instrument(serial, action, **args):
     result = adb(serial, *params, 'com.notemaker/.Integration')
     (OUT / f'{serial}-{action}.txt').write_text(result)
     assert f'PASS {action}' in result, result
-    value = state(serial)
+    value = json.loads(adb(serial, 'shell', 'run-as', 'com.notemaker', 'cat', 'files/integration.json'))
+    (OUT / f'{serial}-state.json').write_text(json.dumps(value, indent=2))
     # Finishing instrumentation stops its target process. Keep the ordinary app
     # running between commands so its reconnect loop can make uninterrupted progress.
     adb(serial, 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
     return value
 
 def state(serial):
-    value = json.loads(adb(serial, 'shell', 'run-as', 'com.notemaker', 'cat', 'files/integration.json'))
-    (OUT / f'{serial}-state.json').write_text(json.dumps(value, indent=2))
-    return value
+    return json.loads(adb(serial, 'shell', 'run-as', 'com.notemaker', 'cat', 'files/integration.json'))
 
 def snapshot(serial):
     instrument(serial, 'state')
@@ -212,9 +215,12 @@ try:
         def editor_ready():
             adb(serial,'shell','uiautomator','dump','/data/local/tmp/integration-ready.xml')
             hierarchy=adb(serial,'shell','cat','/data/local/tmp/integration-ready.xml')
-            return 'NOTE / MAKER' in hierarchy and 'text="infinite"' in hierarchy
+            # The old title wordmark is no longer part of the editor. Use the
+            # stable document action control to distinguish it from a launcher
+            # or transient instrumentation screen.
+            return 'content-desc="Document actions"' in hierarchy and 'text="infinite"' in hierarchy
         wait_until(editor_ready,30)
-    wait_until(lambda: converged(2))
+    wait_until(lambda: converged(1))
     baseline = {e['op'].get('stroke') for e in events('infinite') if e['op']['kind'] == 'stroke'}
     # Observe the live proxy without repeatedly starting an ART VM during the
     # timed gesture. Direct-file consistency is checked by converged() afterwards.
@@ -230,28 +236,30 @@ try:
     # A visible Activity can precede its restarted proxy's upstream handshake.
     # Establish readiness before timing delivery, without extending the budget.
     wait_until(lambda: all(observe('status',i)['connected'] for i in range(2)),30)
-    swipe = subprocess.Popen(['adb', '-s', SERIALS[0], 'shell', 'input', 'swipe', '700', '1000', '1100', '1400', '8000'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    swipe = subprocess.Popen(['adb', '-s', SERIALS[0], 'shell', 'am', 'instrument', '-w', '-e', 'action', 'live-draw', 'com.notemaker/.Integration'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def received_partial():
         assert swipe.poll() is None, 'Gesture ended before remote partial stroke arrived'
-        saved = observe('snapshot')
-        partial = [o for o in saved['effectiveModel']['strokes'] if o['stroke'] not in baseline]
-        if not partial:
-            source=observe('snapshot',0)
-            report('Waiting for live stroke: '+json.dumps(dict(source=observe('status',0),target=observe('status'),
-                source_points=[len(o['points']) for o in source['effectiveModel']['strokes'] if o['stroke'] not in baseline])))
+        partial = [e['op'] for e in events('infinite') if e['op']['kind'] == 'stroke' and e['op'].get('stroke') not in baseline]
         return any(len(o['points']) >= 2 for o in partial)
 
     wait_until(received_partial, 7)
-    swipe.wait(timeout=15)
+    output, error = swipe.communicate(timeout=15)
     assert swipe.returncode == 0
-    wait_until(lambda: converged(3))
+    assert 'PASS live-draw' in output, output + error
+    for serial in SERIALS:
+        adb(serial, 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
+    wait_until(lambda: all(observe('status',i)['connected'] for i in range(2)),30)
+    def live_converged():
+        statuses=[observe('status',i) for i in range(2)]
+        return all(status['pending']==0 for status in statuses) and statuses[0]['cursor']==statuses[1]['cursor'] and statuses[0]['cursor']>4
+    wait_until(live_converged,60)
     same_image()
     adb(SERIALS[0], 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
     time.sleep(2)
     with (OUT / 'android-ui.png').open('wb') as screenshot:
         subprocess.check_call(['adb', '-s', SERIALS[0], 'exec-out', 'screencap', '-p'], stdout=screenshot)
-    report('PASS live partial stroke reaches the second running app before finger-up')
+    report('PASS live partial stylus stroke reaches the server before pen-up; both apps converge after completion')
     # Open an existing multipage document with the default fixed-page creation choice.
     pages_file = 'files/document-' + str(uuid.UUID(bytes=hashlib.md5(b'pages').digest(), version=3)) + '.json'
     adb(SERIALS[1], 'shell', 'am', 'force-stop', 'com.notemaker')

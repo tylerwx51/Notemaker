@@ -142,7 +142,9 @@ try:
             for name, args, output in fixtures:
                 event = dict(kind='tool', id=name, name=name, args=json.dumps(args), status='done', text=output)
                 db.execute('INSERT INTO chat_events(chat,payload) VALUES(?,?)', (tool_chat,json.dumps(event)))
-        tap('Agent'); tap('Tool examples · idle')
+        tap('Agent'); tap('Refresh')
+        wait(lambda: any(n.get('text') == 'Tool examples · idle' for n in tree().iter('node')))
+        tap('Tool examples · idle')
         wait(lambda: any('read apps/cli/README.md' in n.get('text','') for n in tree().iter('node')))
         tap('▸ read apps/cli/README.md · done')
         labels = [n.get('text','') for n in tree().iter('node')]

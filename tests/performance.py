@@ -30,7 +30,16 @@ def check(metrics):
     for key, allowance in [('handler', 8), ('dispatch', 20), ('input_to_draw', 25), ('frame', 25)]:
         assert last[key]['p95_ms'] <= first[key]['p95_ms'] * 2 + allowance, (key, first[key], last[key])
 
-assert SERIAL not in subprocess.check_output(['adb', 'devices'], text=True), 'Reserved emulator is already running'
+def wait_for_reserved_emulator_release(seconds=30):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        devices = subprocess.check_output(['adb', 'devices'], text=True)
+        if SERIAL not in devices:
+            return
+        time.sleep(.5)
+    raise AssertionError(f'Reserved emulator {SERIAL} is still registered after {seconds}s')
+
+wait_for_reserved_emulator_release()
 with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
     env = dict(os.environ, ANDROID_AVD_HOME=temp+'/avd')
     if Path('/run/opengl-driver/lib').exists():

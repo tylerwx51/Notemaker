@@ -86,7 +86,7 @@ def check_browser(out, port, expected_cursor, debug_port=19222, svg_exports=Fals
         assert debug, f'Chromium debugging connection failed: {last_error}'
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            result = debug.evaluate('({cursor, count:ops.length, status:document.querySelector("#status").textContent})')
+            result = debug.evaluate('(()=>{const status=document.querySelector("#status").textContent;const match=status.match(/(\\d+) events$/);return {cursor:match?Number(match[1]):-1,status}})()')
             if result.get('cursor') == expected_cursor:
                 break
             time.sleep(.5)

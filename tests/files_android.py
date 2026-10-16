@@ -14,7 +14,10 @@ def browse():
 
 
 def main():
-    assert ui.SERIAL not in ui.run('adb', 'devices'), 'Reserved emulator already running'
+    deadline=time.monotonic()+30
+    while ui.SERIAL in ui.run('adb', 'devices') and time.monotonic()<deadline:
+        time.sleep(.5)
+    assert ui.SERIAL not in ui.run('adb', 'devices'), f'Reserved emulator {ui.SERIAL} is still running'
     with tempfile.TemporaryDirectory(prefix='notemaker-files-') as temp:
         with (ui.OUT / 'files-emulator.log').open('w') as log:
             emulator = subprocess.Popen(
