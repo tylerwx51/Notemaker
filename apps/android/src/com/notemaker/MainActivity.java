@@ -294,7 +294,8 @@ public class MainActivity extends Activity {
         if(!Arrays.asList("ruled","grid","dots","planner","blank").contains(template))return;
         AppReplica target=replica;final PendingObjectHistory pending;
         synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;update();}
-        Map<String,Object> input=Json.object("template",template,"layer",selected,"page",page,"x",0,"y",0,"w",1000,"h",1400,"spacing",32,"color",0xffc8ccc8);
+        int templateColor=type.equals("infinite")?0xff777777:0xffc8ccc8;
+        Map<String,Object> input=Json.object("template",template,"layer",selected,"page",page,"x",0,"y",0,"w",1000,"h",1400,"spacing",32,"color",templateColor);
         ReplicaService.writes.execute(()->{try{
             target.command(Arrays.asList("template","add","-"),input);Map<String,Object> snapshot=target.read();
             runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;try{refreshShared(snapshot);}catch(Exception e){saveError=e.toString();}save();update();});
@@ -495,9 +496,9 @@ public class MainActivity extends Activity {
             String pattern=String.valueOf(guide.get("template"));double spacing=((Number)guide.get("spacing")).doubleValue();float unit=scale()*zoom;
             if(unit<=0)return;Rect bounds=c.getClipBounds();if(bounds.isEmpty())return;double densityStep=Math.max(1,Math.ceil(5/(spacing*unit)));densityStep=Math.max(densityStep,Math.ceil(Math.sqrt(((double)bounds.width()*bounds.height())/3000)/spacing));spacing*=densityStep;
             double left=Math.floor(bounds.left/spacing)*spacing,top=Math.floor(bounds.top/spacing)*spacing;
-            int color=((Number)guide.get("color")).intValue();paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(.35f,1/unit));paint.setPathEffect(null);
+            int color=((Number)guide.get("color")).intValue();if(color==0xffc8ccc8||color==0xffcccccc)color=0xff777777;paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(Math.max(1.4f/unit,1/unit));paint.setPathEffect(null);
             if("dots".equals(pattern)){
-                paint.setStyle(Paint.Style.FILL);float radius=Math.max(.7f,1.6f/unit);for(double y=top;y<=bounds.bottom;y+=spacing)for(double x=left;x<=bounds.right;x+=spacing)c.drawCircle((float)x,(float)y,radius,paint);
+                paint.setStyle(Paint.Style.FILL);float radius=Math.max(2.1f/unit,1.6f/unit);for(double y=top;y<=bounds.bottom;y+=spacing)for(double x=left;x<=bounds.right;x+=spacing)c.drawCircle((float)x,(float)y,radius,paint);
             }else{
                 for(double y=top;y<=bounds.bottom;y+=spacing)c.drawLine(bounds.left,(float)y,bounds.right,(float)y,paint);
                 if("grid".equals(pattern))for(double x=left;x<=bounds.right;x+=spacing)c.drawLine((float)x,bounds.top,(float)x,bounds.bottom,paint);

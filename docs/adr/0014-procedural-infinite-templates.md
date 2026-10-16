@@ -13,9 +13,11 @@ whole canvas. Rendering marks outside the viewport also wastes memory and CPU.
 For infinite documents, store ruled, grid, and dot backgrounds as one shared
 template object containing its pattern, spacing, and color. Generate marks in
 Android from the current viewport in document coordinates, aligned to the
-document origin. Increase spacing at low zoom so dots remain around five screen
-pixels apart and the visible dot count stays near 3,000. Keep fixed and paged
-template SVG behavior unchanged.
+document origin. Use a medium-dark default, 1.4 screen-pixel rule/grid lines,
+and 4.2 screen-pixel dot diameters. Increase spacing at low zoom so dots remain
+around five screen pixels apart and the visible dot count stays near 3,000.
+Render legacy light-gray infinite templates using the darker default. Keep fixed
+and paged template SVG behavior unchanged.
 
 ## Consequences
 
