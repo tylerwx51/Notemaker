@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 import tablet_checks
 import network_checks
-from run import plan, execute
+from run import plan, execute, recent_averages, claims_conflict
 from tablet_checks import verify_history
 from network_checks import check
 from topology_support import Proxy, eventually
@@ -21,6 +21,23 @@ import server_checks
 
 
 class FrameworkChecks(unittest.TestCase):
+    def test_scheduler_uses_recent_suite_history_and_preserves_resource_claims(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            history = root / '.test-artifacts/runs/timing-history.json'
+            history.parent.mkdir(parents=True)
+            history.write_text(json.dumps({'runs': [
+                {'timestamp': str(i), 'results': [{'name': 'sample', 'status': 'pass', 'seconds': i} ]}
+                for i in range(1, 8)
+            ]}))
+            self.assertEqual(recent_averages(root, limit=5)['sample'], 5.0)
+        self.assertTrue(claims_conflict('files_android', {'emu:5590'}, 0))
+        self.assertTrue(claims_conflict('performance', set(), 1))
+        self.assertTrue(claims_conflict('chat_ui', {'performance'}, 0))
+        self.assertFalse(claims_conflict('drawing_android', {'emu:5584'}, 1))
+        self.assertTrue(claims_conflict('integration', set(), 1, isolated_networks=True))
+        self.assertTrue(claims_conflict('cli_android', {'integration'}, 2, isolated_networks=True))
+
     def test_default_is_independent_of_devices(self):
         selected = plan(['local'], None)
         self.assertTrue(selected)

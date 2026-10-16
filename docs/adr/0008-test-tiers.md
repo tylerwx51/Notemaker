@@ -22,8 +22,27 @@ Each run records build/suite outcomes and logs, distinguishing pass, fail and
 skip. Missing optional resources skip only their external checks;
 `--require-resources` turns those skips into a failing result for lab automation.
 An explicitly configured network that cannot converge fails. Suites run
-sequentially so emulator ports and performance measurements do not conflict.
-Existing individual test entry points remain supported.
+through a longest-estimated-first worker pool of at most four concurrent
+processes. Per-suite duration estimates use the mean of the last five completed
+runs, with seeded estimates before history exists. In direct mode, resource
+claims serialize tests that reserve the same emulator, server, or browser port.
+Performance measurements do not overlap other emulator suites. The default
+pool is two on the development host after a four-worker run caused substantial
+swap use; it can be configured from one to four with `--jobs`. The worker pool
+shares host CPU, memory and kernel. Existing individual test entry points
+remain supported.
+
+The root Nix shell supplies Docker and rootless networking tools. With
+`--containers`, every suite runs in a rootless Docker container with its own
+network namespace, ADB server, and temporary directory. This removes fixed
+port and local-service conflicts across suites. The workspace is bind-mounted
+so logs, reports, screenshots and diagnostic artifacts remain in the same
+`.test-artifacts` tree. The Nix store is mounted read-only and emulator
+containers receive `/dev/kvm`. Containers still share host CPU, memory and
+kernel; the default pool remains two and performance suites remain exclusive
+of other emulator suites. The daemon and test image are started/built explicitly
+using the documented `notemaker-dockerd` and `tests/container-image.nix`
+commands.
 
 Tablet smoke checks use the existing embedded proxy without changing documents.
 Installation is separately requested. It stops the app, backs up the APK and

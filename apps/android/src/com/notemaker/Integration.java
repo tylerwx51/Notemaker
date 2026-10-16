@@ -203,29 +203,29 @@ public class Integration extends Instrumentation {
                     ReplicaService.ensure(app).execute(com.notemaker.core.Json.object("document",app.document,"actor","remote-editor","args",cliArgs,"input",com.notemaker.core.Json.parse(new String(android.util.Base64.decode(arguments.getString("input",""),android.util.Base64.DEFAULT),"UTF-8"))));
                 }
                 runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id",arguments.getString("object","locked-object")))));
-                waitUntil(()->app.selectionSkipped>0,10000,"locked selection result");drainWrites();waitForIdleSync();
+                waitForSelectionCondition(app,()->app.selectionSkipped>0,"locked selection result");drainWrites();waitForIdleSync();
                 if(!app.selectedEntities.isEmpty()||app.selectionSkipped!=1)throw new IllegalStateException("Locked selection was acquired instead of skipped");
                 runOnMainSync(app::deselect);drainWrites();
             }
             if(action.equals("clipboard")){
                 runOnMainSync(()->app.enqueue(MainActivity.obj("kind","object","object","clipboard-object","shape","rect","layer",app.selected,"page",app.page,"x",120,"y",120,"w",80,"h",60,"color",Color.BLACK,"width",4,"fontSize",24,"text","")));
                 drainWrites();waitForIdleSync();runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","clipboard-object"))));
-                waitUntil(()->app.selectionSession!=null,10000,"clipboard selection");runOnMainSync(app::copySelection);waitUntil(()->!com.notemaker.core.Json.list(app.selectionClipboard.getOrDefault("entities",java.util.Collections.emptyList())).isEmpty(),10000,"selection copied to proxy clipboard");
+                waitForSelection(app,1,"clipboard selection");runOnMainSync(app::copySelection);waitUntil(()->!com.notemaker.core.Json.list(app.selectionClipboard.getOrDefault("entities",java.util.Collections.emptyList())).isEmpty(),10000,"selection copied to proxy clipboard");
                 drainWrites();waitForIdleSync();runOnMainSync(app::deselect);drainWrites();
             }
             if(action.equals("lasso")){
                 drainWrites();waitForIdleSync();runOnMainSync(()->{app.selecting=true;gesture(app,50,50,500,500,false);});
-                waitUntil(()->app.selectedEntities.size()==2,10000,"lasso selection");drainWrites();waitForIdleSync();
+                waitForSelectionCondition(app,()->app.selectedEntities.size()==2,"lasso selection");drainWrites();waitForIdleSync();
                 boolean objectSelected=false,strokeSelected=false;for(Map<String,Object> entity:app.selectedEntities){objectSelected|="lasso-object".equals(entity.get("id"));strokeSelected|="lasso-stroke".equals(entity.get("id"));}
                 if(!objectSelected||!strokeSelected)throw new IllegalStateException("Lasso missed object or stroke: "+app.selectedEntities);
-                runOnMainSync(app::deselect);drainWrites();runOnMainSync(()->app.selectAt(400,250));waitUntil(()->app.selectedEntities.size()==1,10000,"stroke midpoint selection");
+                runOnMainSync(app::deselect);drainWrites();runOnMainSync(()->app.selectAt(400,250));waitForSelectionCondition(app,()->app.selectedEntities.size()==1,"stroke midpoint selection");
                 if(!"lasso-stroke".equals(app.selectedEntities.get(0).get("id")))throw new IllegalStateException("Stroke midpoint hit test failed: "+app.selectedEntities);
                 runOnMainSync(app::deselect);drainWrites();
             }
             if(action.equals("freeform-lasso")){
                 drainWrites();waitForIdleSync();long start=SystemClock.uptimeMillis();float[][] path={{100,100},{300,100},{100,300},{100,100}};
                 runOnMainSync(()->{app.selecting=true;for(int i=0;i<path.length;i++){int mode=i==0?MotionEvent.ACTION_DOWN:i==path.length-1?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE;MotionEvent event=MotionEvent.obtain(start,start+i*40,mode,path[i][0]*app.canvas.scale(),path[i][1]*app.canvas.scale(),0);app.canvas.onTouchEvent(event);event.recycle();}});
-                waitUntil(()->app.selectedEntities.size()==1,10000,"freeform lasso selection");drainWrites();waitForIdleSync();
+                waitForSelectionCondition(app,()->app.selectedEntities.size()==1,"freeform lasso selection");drainWrites();waitForIdleSync();
                 if(!"lasso-inside".equals(app.selectedEntities.get(0).get("id")))throw new IllegalStateException("Freeform lasso selected outside its polygon: "+app.selectedEntities);
                 runOnMainSync(app::deselect);drainWrites();
             }
@@ -245,7 +245,7 @@ public class Integration extends Instrumentation {
                 runOnMainSync(()->{app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item")));app.editor.openTool("pen",app.canvas);});release.countDown();drainWrites();waitForIdleSync();drainWrites();
                 Map<String,Object> state=app.replica.read();Map<String,Object> leases=com.notemaker.core.Json.map(state.getOrDefault("leases",java.util.Collections.emptyMap()));String key=app.page+":object:tool-switch-item";
                 if(app.selectionSession!=null||!app.selectedEntities.isEmpty()||leases.containsKey(key))throw new IllegalStateException("A late selection acquisition survived switching to Pen: session="+app.selectionSession+" leases="+leases);
-                runOnMainSync(()->{app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item")));});waitUntil(()->app.selectionSession!=null,10000,"active selection for Select mode");String session=app.selectionSession;
+                runOnMainSync(()->{app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item")));});waitForSelection(app,1,"active selection for Select mode");String session=app.selectionSession;
                 runOnMainSync(()->app.editor.openTool("select",app.canvas));drainWrites();state=app.replica.read();leases=com.notemaker.core.Json.map(state.getOrDefault("leases",java.util.Collections.emptyMap()));if(!session.equals(app.selectionSession)||!leases.containsKey(key))throw new IllegalStateException("Opening Select mode discarded the current selection");
                 String modelBefore=com.notemaker.core.Json.write(app.model.json());java.util.ArrayList<String> undoBefore=new java.util.ArrayList<>(app.undo);long revisionBefore=app.revision;
                 runOnMainSync(()->app.previewSelection(1,120,20));waitUntil(()->app.transformPreviews.containsKey(session),10000,"active transform preview before tool switch");
@@ -253,24 +253,24 @@ public class Integration extends Instrumentation {
                 if(app.selectionSession!=null||!app.selectedEntities.isEmpty()||leases.containsKey(key)||previews.containsKey(session))throw new IllegalStateException("Switching to Pen retained a lease or transform preview: leases="+leases+" previews="+previews);
                 if(!modelBefore.equals(com.notemaker.core.Json.write(app.model.json()))||!undoBefore.equals(app.undo)||revisionBefore!=app.revision)throw new IllegalStateException("Cancelling the preview on tool switch changed drawing state or history");
                 for(String kind:new String[]{"eraser","move","shapes","text","fill"}){
-                    runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item"))));waitUntil(()->app.selectionSession!=null,10000,"selection before "+kind+" switch");
+                    runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item"))));waitForSelection(app,1,"selection before "+kind+" switch");
                     final String selectedTool=kind;runOnMainSync(()->app.editor.openTool(selectedTool,app.canvas));drainWrites();waitForIdleSync();drainWrites();state=app.replica.read();leases=com.notemaker.core.Json.map(state.getOrDefault("leases",java.util.Collections.emptyMap()));
                     if(app.selectionSession!=null||!app.selectedEntities.isEmpty()||leases.containsKey(key))throw new IllegalStateException("Switching to "+kind+" retained a selection lease: "+leases);
                 }
-                runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item"))));waitUntil(()->app.selectionSession!=null,10000,"selection before shape setter");runOnMainSync(()->app.setDrawingTool("rect"));drainWrites();waitForIdleSync();drainWrites();state=app.replica.read();leases=com.notemaker.core.Json.map(state.getOrDefault("leases",java.util.Collections.emptyMap()));
+                runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item"))));waitForSelection(app,1,"selection before shape setter");runOnMainSync(()->app.setDrawingTool("rect"));drainWrites();waitForIdleSync();drainWrites();state=app.replica.read();leases=com.notemaker.core.Json.map(state.getOrDefault("leases",java.util.Collections.emptyMap()));
                 if(app.selectionSession!=null||leases.containsKey(key))throw new IllegalStateException("Direct shape selection retained a lease: "+leases);
-                runOnMainSync(()->app.startSelection(java.util.Arrays.asList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item"),com.notemaker.core.Json.object("kind","object","id","tool-switch-item-2"))));waitUntil(()->app.selectionSession!=null&&app.selectedEntities.size()==2,10000,"multi-item selection before deselect race");final java.util.concurrent.CountDownLatch deselectEntered=new java.util.concurrent.CountDownLatch(1),deselectRelease=new java.util.concurrent.CountDownLatch(1);
+                runOnMainSync(()->app.startSelection(java.util.Arrays.asList(com.notemaker.core.Json.object("kind","object","id","tool-switch-item"),com.notemaker.core.Json.object("kind","object","id","tool-switch-item-2"))));waitForSelection(app,2,"multi-item selection before deselect race");final java.util.concurrent.CountDownLatch deselectEntered=new java.util.concurrent.CountDownLatch(1),deselectRelease=new java.util.concurrent.CountDownLatch(1);
                 ReplicaService.writes.execute(()->{deselectEntered.countDown();try{if(!deselectRelease.await(15,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("deselect race gate timed out");}catch(InterruptedException e){Thread.currentThread().interrupt();}});if(!deselectEntered.await(5,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("deselect race gate did not start");
                 runOnMainSync(()->{app.deselectEntity("object","tool-switch-item");app.editor.openTool("move",app.canvas);});deselectRelease.countDown();drainWrites();waitForIdleSync();drainWrites();state=app.replica.read();leases=com.notemaker.core.Json.map(state.getOrDefault("leases",java.util.Collections.emptyMap()));
                 if(app.selectionSession!=null||app.selecting||leases.containsKey(key)||leases.containsKey(app.page+":object:tool-switch-item-2"))throw new IllegalStateException("A delayed per-item deselect reacquired locks after switching tools: "+leases);
             }
             if(action.equals("select-panel")){
-                drainWrites();waitForIdleSync();runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","lasso-object"))));waitUntil(()->app.selectionSession!=null,10000,"selection panel lease");runOnMainSync(()->app.editor.showSelectionPanel());waitForIdleSync();
+                drainWrites();waitForIdleSync();runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","lasso-object"))));waitForSelection(app,1,"selection panel lease");runOnMainSync(()->app.editor.showSelectionPanel());waitForIdleSync();
             }
             if(action.equals("collaboration")){
                 drainWrites();waitForIdleSync();
                 runOnMainSync(()->app.startSelection(java.util.Collections.singletonList(com.notemaker.core.Json.object("kind","object","id","collaboration-object"))));
-                waitUntil(()->app.selectionSession!=null,10000,"selection lease");drainWrites();waitForIdleSync();
+                waitForSelection(app,1,"selection lease");drainWrites();waitForIdleSync();
                 final String session=app.selectionSession;
                 runOnMainSync(()->app.previewTransform(com.notemaker.core.Json.object("scale",1.5,"dx",20,"dy",30,"rotation",30,"flipX",true)));
                 waitUntil(()->!app.transformPreviews.isEmpty(),10000,"transform preview");drainWrites();waitForIdleSync();
@@ -325,6 +325,8 @@ public class Integration extends Instrumentation {
         }catch(Throwable error){result.putString("stream","FAIL: "+error+"\n");finish(Activity.RESULT_CANCELED,result);}
     }
     private void drainWrites() throws Exception {ReplicaService.writes.submit(()->{}).get(30,java.util.concurrent.TimeUnit.SECONDS);}
+    private void waitForSelection(MainActivity app,int count,String label)throws Exception{waitForSelectionCondition(app,()->app.selectionSession!=null&&app.selectedEntities.size()>=count,label);}
+    private void waitForSelectionCondition(MainActivity app,java.util.concurrent.Callable<Boolean> condition,String label)throws Exception{waitUntil(()->app.selectionError!=null||condition.call(),30000,label);if(app.selectionError!=null)throw new IllegalStateException("Could not acquire "+label+": "+app.selectionError);}
     private void waitUntil(java.util.concurrent.Callable<Boolean> condition,long timeout,String label)throws Exception{long deadline=System.currentTimeMillis()+timeout;while(System.currentTimeMillis()<deadline){waitForIdleSync();if(condition.call())return;Thread.sleep(50);}throw new IllegalStateException("Timed out waiting for "+label);}
     private void makeConflictFixture(MainActivity app) throws Exception {
         String id="android-conflict-item";java.io.File root=new java.io.File(app.getCacheDir(),"drawing-conflict-fixture");

@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
     boolean scribbleToErase=false;
     String drawingShape, pendingText;
     String selectionSession;
+    volatile String selectionError;
     volatile long selectionGeneration;
     volatile long selectionRequestSequence;
     final ArrayList<Map<String,Object>> selectedEntities=new ArrayList<>();
@@ -359,12 +360,12 @@ public class MainActivity extends Activity {
         }catch(Exception error){runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=error.toString();update();Toast.makeText(this,"Could not update layer: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     void startSelection(List<Map<String,Object>> entities){
-        if(entities==null||entities.isEmpty())return;selecting=true;final long generation=selectionGeneration;AppReplica target=replica;String prior=selectionSession;final long requestSequence=prior==null?++selectionRequestSequence:selectionRequestSequence;Map<String,Object> input=Json.object("layer",selected,"page",page,"entities",entities);if(prior!=null)input.put("session",prior);
+        if(entities==null||entities.isEmpty())return;selectionError=null;selecting=true;final long generation=selectionGeneration;AppReplica target=replica;String prior=selectionSession;final long requestSequence=prior==null?++selectionRequestSequence:selectionRequestSequence;Map<String,Object> input=Json.object("layer",selected,"page",page,"entities",entities);if(prior!=null)input.put("session",prior);
         ReplicaService.writes.execute(()->{try{Map<String,Object> result=Json.map(target.command(Arrays.asList("selection","select","-"),input));runOnUiThread(()->{
             String acquired=String.valueOf(result.get("session"));if(target!=replica||generation!=selectionGeneration||!selecting||(prior==null&&requestSequence!=selectionRequestSequence)){ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",acquired),null);}catch(Exception error){android.util.Log.w("NoteMaker","Could not release stale selection",error);}});return;}selectionSession=acquired;
             for(Object raw:Json.list(result.getOrDefault("selected",Collections.emptyList()))){Map<String,Object> entity=Json.map(raw);boolean exists=false;for(Map<String,Object> old:selectedEntities)if(Objects.equals(old.get("kind"),entity.get("kind"))&&Objects.equals(old.get("id"),entity.get("id")))exists=true;if(!exists)selectedEntities.add(entity);}
             List<Object> skipped=Json.list(result.getOrDefault("skipped",Collections.emptyList()));selectionSkipped+=skipped.size();if(!skipped.isEmpty())Toast.makeText(this,skipped.size()+" item(s) are locked by another editor",Toast.LENGTH_LONG).show();scheduleHeartbeat();update();
-        });}catch(Exception error){runOnUiThread(()->Toast.makeText(this,"Could not select entities: "+error.getMessage(),Toast.LENGTH_LONG).show());}});
+        });}catch(Exception error){runOnUiThread(()->{selectionError=error.toString();Toast.makeText(this,"Could not select entities: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     com.notemaker.core.LayerEditor layerEditor(){return new com.notemaker.core.LayerEditor(model,selected,page);}
     void selectRegion(double[][] region,boolean topmost){synchronized(lock){if(canvas==null||!canvas.visible(selected))return;List<Object> hits=layerEditor().select(region,topmost,com.notemaker.cli.ItemCoverage::create);ArrayList<Map<String,Object>> refs=new ArrayList<>();for(Object hit:hits)refs.add(Json.map(hit));startSelection(refs);}}

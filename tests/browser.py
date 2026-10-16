@@ -6,6 +6,7 @@ from pathlib import Path
 import socket
 import struct
 import subprocess
+import tempfile
 import time
 import urllib.request
 
@@ -68,7 +69,10 @@ def check_browser(out, port, expected_cursor, debug_port=19222, svg_exports=Fals
     rows=json.load(urllib.request.urlopen(f'http://127.0.0.1:{port}/api/events?document=integration'))['events']
     assert len(rows)==expected_cursor, (len(rows),expected_cursor)
     expected_cursor=rows[-1]['seq'] if rows else 0
-    directory = out / 'chromium-profile'
+    # A prior run can leave Chromium's profile lock behind (especially when the
+    # host process is interrupted). Containers also share the workspace bind
+    # mount, so each concurrent run needs its own profile directory.
+    directory = Path(tempfile.mkdtemp(prefix=f'chromium-profile-{debug_port}-', dir=out))
     browser = subprocess.Popen(['chromium', '--headless', '--no-sandbox', '--disable-gpu', f'--remote-debugging-port={debug_port}', '--remote-allow-origins=*', f'--user-data-dir={directory}', f'http://127.0.0.1:{port}/?document=integration'], stdout=(out / 'chromium.log').open('w'), stderr=subprocess.STDOUT)
     debug = None
     try:
@@ -86,7 +90,7 @@ def check_browser(out, port, expected_cursor, debug_port=19222, svg_exports=Fals
         assert debug, f'Chromium debugging connection failed: {last_error}'
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            result = debug.evaluate('(()=>{const status=document.querySelector("#status").textContent;const match=status.match(/(\\d+) events$/);return {cursor:match?Number(match[1]):-1,status}})()')
+            result = debug.evaluate('(()=>{const node=document.querySelector("#status");if(!node)return {cursor:-1,status:""};const status=node.textContent;const match=status.match(/(\\d+) events$/);return {cursor:match?Number(match[1]):-1,status}})()')
             if result.get('cursor') == expected_cursor:
                 break
             time.sleep(.5)

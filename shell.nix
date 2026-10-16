@@ -57,16 +57,34 @@ let
       exec boox-emulator -no-window -no-audio -no-snapshot "$@"
     '';
   };
+  rootlessDocker = pkgs.writeShellApplication {
+    name = "notemaker-dockerd";
+    runtimeInputs = [ pkgs.docker pkgs.rootlesskit pkgs.slirp4netns pkgs.fuse-overlayfs pkgs.coreutils ];
+    text = ''
+      export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-$HOME/.cache/notemaker/docker-runtime}"
+      export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
+      data_root="''${NOTEMAKER_DOCKER_DATA:-$HOME/.local/share/notemaker/docker}"
+      mkdir -p "$XDG_RUNTIME_DIR" "$data_root"
+      chmod 700 "$XDG_RUNTIME_DIR"
+      exec rootlesskit --net=slirp4netns --disable-host-loopback --copy-up=/etc --copy-up=/run \
+        dockerd --host "$DOCKER_HOST" --data-root "$data_root" --storage-driver=vfs --iptables=false
+    '';
+  };
 in
 pkgs.mkShell {
-  packages = [ android.androidsdk pkgs.jdk17 (pkgs.python3.withPackages (ps: [ ps.pyyaml ps.hypothesis ps.matplotlib ])) pkgs.chromium pkgs.zip pkgs.unzip pkgs.jadx pkgs.apktool emulator headless pkgs.git pkgs.jujutsu pkgs.openssh pkgs.tmux pkgs.iproute2 pkgs.bubblewrap pkgs.nodejs ];
+  packages = [ android.androidsdk pkgs.jdk17 (pkgs.python3.withPackages (ps: [ ps.pyyaml ps.hypothesis ps.matplotlib ])) pkgs.chromium pkgs.fontconfig pkgs.dejavu_fonts pkgs.zip pkgs.unzip pkgs.jadx pkgs.apktool emulator headless pkgs.git pkgs.jujutsu pkgs.openssh pkgs.tmux pkgs.iproute2 pkgs.bubblewrap pkgs.nodejs
+    pkgs.docker pkgs.rootlesskit pkgs.slirp4netns pkgs.fuse-overlayfs rootlessDocker ];
   ANDROID_HOME = sdk;
   ANDROID_SDK_ROOT = sdk;
   JAVA_HOME = pkgs.jdk17.home;
   NOTEMAKER_JSVG = (import ./apps/cli/dependencies.nix { inherit (pkgs) fetchurl; }).jsvg;
   NOTEMAKER_ANDROIDSVG = (import ./apps/android/dependencies.nix { inherit (pkgs) fetchurl; }).androidsvg;
   NOTEMAKER_GL_LIBRARY_PATH = "${pkgs.libglvnd}/lib";
+  FONTCONFIG_FILE = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
   shellHook = ''
+    export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-$HOME/.cache/notemaker/docker-runtime}"
+    export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
     echo "Android 16 ready: boox-emulator (GUI), boox-emulator-headless (automated testing), adb"
+    echo "Rootless Docker: start notemaker-dockerd in another shell; socket is $DOCKER_HOST"
   '';
 }

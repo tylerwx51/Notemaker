@@ -314,6 +314,12 @@ described below. For Wi-Fi, the desktop's current LAN URL is
 after allowing the port through the desktop firewall. Addresses remain
 configurable because DHCP can change them; `10.0.2.2` is for the emulator only.
 
+The deployed primary and desktop proxy run in tmux sessions `notemaker-primary`
+and `notemaker-desktop`. Inspect them with `nix-shell --run 'tmux list-sessions'`.
+Do not start another copy on their occupied ports. The primary retains its Pi
+configuration and existing database; the desktop replica remains at
+`~/.local/state/notemaker-desktop`.
+
 The Android app starts its local command proxy at `127.0.0.1:8766`. Its spawned
 CLI uses that proxy automatically. Desktop agents can run their own cached
 replica synchronized with the primary host:
@@ -431,16 +437,48 @@ the external network and physical-tablet tiers. Enable it for this checkout with
 commit if a check fails. Chat proxy-routing checks verify forwarding through a
 two-proxy chain and guard Android against using the upstream URL directly.
 
-The runner builds the required artifacts and runs suites sequentially to avoid
-emulator port conflicts and interference with latency measurements. Use
-`--no-build` only with current build artifacts. Existing individual scripts
-remain available. Each run writes streamed suite logs and a `report.json` with
-pass/fail/skip outcomes in `.test-artifacts/runs/<timestamp>/`. A missing serial,
+The runner builds the required artifacts once, then schedules suites in parallel
+using up to two workers by default (`--jobs 1` through `--jobs 4`). The default
+is two because a four-worker probe caused heavy swap use on this host. It uses
+the mean of each suite's last five completed durations to start longer work
+first, with initial estimates for suites without history. In direct mode,
+resource claims keep suites with overlapping emulator ports or services apart;
+the performance suite runs without other emulator suites so host load does not
+skew frame timings. Adjust the pool with
+`--jobs 1` if host memory or CPU becomes constrained; raise to `--jobs 3` or
+`--jobs 4` on a larger host. Use `--no-build` only with current build artifacts.
+Existing individual scripts remain available. Each run
+writes streamed suite logs and a `report.json` with pass/fail/skip outcomes in
+`.test-artifacts/runs/<timestamp>/`; rolling timing history is stored alongside
+these run directories. A missing serial,
 network configuration, or unavailable selected tablet is a **skip**, not a pass;
 `--require-resources` makes skips fail the run, suitable for a dedicated hardware
 test machine. A configured network endpoint that is unreachable is a failure.
 Live paid-provider testing (`tests/pi_chat.py`) and the manually selected-device
 UI review remain separate opt-in commands.
+
+To give each suite its own process, network namespace, ADB server and temporary
+directory, use the rootless Docker mode. Start the daemon in one terminal, build
+and load the small runtime image once, then run the same tier command with
+`--containers`:
+
+```sh
+# Terminal 1
+nix-shell --run notemaker-dockerd
+
+# Terminal 2
+nix-shell --run 'nix-build tests/container-image.nix --no-out-link | xargs docker load -i'
+nix-shell --run 'python3 tests/run.py --tier local --tier emulator --containers --jobs 2'
+```
+
+The container mounts the source tree and `.test-artifacts` so the runner keeps
+the same per-suite logs, reports, screenshots and diagnostic files. It mounts
+the Nix store read-only for the shell.nix toolchain, and passes `/dev/kvm` to
+emulator suites. Network and port claims are isolated between suite containers;
+the performance suite remains exclusive of emulator suites because they still
+share host CPU and memory. The default pool remains two; use up to four on a
+host with enough memory. Containers share the host kernel and Android emulator
+hardware acceleration, so this is process/network isolation rather than a VM.
 
 Physical-device checks operate on the explicitly selected tablet. Keep it idle
 during an upgrade check. A smoke check launches the app but makes no document

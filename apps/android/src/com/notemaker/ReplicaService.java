@@ -18,5 +18,13 @@ public class ReplicaService extends Service {
         return START_NOT_STICKY;
     }
     @Override public IBinder onBind(Intent intent){return null;}
-    @Override public void onDestroy(){writes.execute(()->{synchronized(ReplicaService.class){LocalProxy old=proxy;proxy=null;if(old!=null)try{old.close();}catch(Exception e){android.util.Log.e("NoteMaker","Proxy shutdown",e);}}});super.onDestroy();}
+    @Override public void onDestroy(){
+        // Finish shutdown before Android can restart the app process. Returning
+        // while the old process still holds proxy.lock lets its replacement
+        // fail to open the same replica.
+        try{writes.submit(()->{synchronized(ReplicaService.class){LocalProxy old=proxy;if(old!=null)try{old.close();}catch(Exception e){android.util.Log.e("NoteMaker","Proxy shutdown",e);}finally{proxy=null;}}}).get();}
+        catch(InterruptedException e){Thread.currentThread().interrupt();android.util.Log.e("NoteMaker","Interrupted while shutting down proxy",e);}
+        catch(ExecutionException e){android.util.Log.e("NoteMaker","Proxy shutdown task failed",e.getCause());}
+        super.onDestroy();
+    }
 }
