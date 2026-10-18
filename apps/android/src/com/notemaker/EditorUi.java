@@ -203,8 +203,13 @@ final class EditorUi {
         for (Map.Entry<String, Tool> entry : tools.entrySet()) {
             entry.getValue().active(entry.getKey().equals(mode));
             entry.getValue().icon.accentColor = app.color;
+            if (entry.getKey().equals("pen")) {
+                entry.getValue().icon.kind = app.brush;
+                entry.getValue().setContentDescription("Pen tool, " + app.brush + " brush");
+            }
             entry.getValue().icon.invalidate();
         }
+        if (sample != null) sample.invalidate();
         boolean ready=!app.model.deleted&&!app.objectHistoryPending();
         undoButton.setEnabled(ready&&!app.undo.isEmpty());undoButton.setAlpha(undoButton.isEnabled()?1f:.3f);
         redoButton.setEnabled(ready&&!app.redo.isEmpty());redoButton.setAlpha(redoButton.isEnabled()?1f:.3f);
@@ -497,7 +502,22 @@ final class EditorUi {
     private final class StrokeSample extends View{
         final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
         StrokeSample(){super(app);sample=this;setContentDescription("Stroke preview");}
-        protected void onDraw(Canvas c){paint.setStyle(Paint.Style.STROKE);paint.setColor(app.color);paint.setStrokeWidth(dp(Math.max(1,Math.min(8,app.width))));paint.setStrokeCap(Paint.Cap.ROUND);Path path=new Path();float w=getWidth(),h=getHeight();path.moveTo(dp(12),h*.65f);path.cubicTo(w*.25f,-h*.1f,w*.28f,h*1.1f,w*.45f,h*.45f);path.cubicTo(w*.6f,0,w*.7f,h*.8f,w-dp(12),h*.5f);c.drawPath(path,paint);}
+        protected void onDraw(Canvas c){
+            float w=getWidth(),h=getHeight(),left=dp(14),right=w-dp(14),mid=h*.52f,amplitude=Math.min(dp(13),h*.27f);
+            ArrayList<Object> points=new ArrayList<>();
+            for(int i=0;i<=160;i++){
+                double t=i/160.0,x=left+(right-left)*t;
+                double y=mid+Math.sin(t*Math.PI*3)*amplitude*(.82+.18*Math.cos(t*Math.PI*2));
+                double pressure=.35+.55*(.5+.5*Math.sin(t*Math.PI*2-.7));
+                points.add(Arrays.asList(x,y,pressure));
+            }
+            Map<String,Object> stroke=new LinkedHashMap<>();
+            stroke.put("kind","stroke");stroke.put("brush",app.brush);stroke.put("color",app.color);
+            stroke.put("width",dp(Math.max(1,Math.min(8,app.width))));stroke.put("points",points);
+            c.save();c.clipRect(left-dp(2),dp(3),right+dp(2),h-dp(3));
+            com.notemaker.core.Render.drawStroke(stroke,new com.notemaker.cli.Png(c));
+            c.restore();
+        }
     }
 
     private LinearLayout penPanel(){
@@ -875,7 +895,7 @@ final class EditorUi {
 
     /** Small vector icons stay crisp and monochrome on E Ink. */
     private final class Icon extends View {
-        final String kind;
+        String kind;
         int color = INK;
         int accentColor = INK;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
