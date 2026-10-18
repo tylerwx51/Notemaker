@@ -28,19 +28,90 @@ public final class Render {
         }
     }
     public static void drawItem(Model m,Map<String,Object> o,Surface c){if("stroke".equals(o.get("kind")))drawStroke(o,c);else drawObject(m,o,c);}
+    private static final class StrokePoint {
+        final double x,y,pressure,distance;
+        double tx,ty,halfWidth;
+        StrokePoint(double x,double y,double pressure,double distance){this.x=x;this.y=y;this.pressure=pressure;this.distance=distance;}
+    }
     public static void drawStroke(Map<String,Object> s,Surface c){
         c.beginErase(DrawItem.erasures(s));try{
-                List<Object> points=list(s.get("points"));double[] prev=null;String brush=(String)s.getOrDefault("brush","pen");int original=((Number)s.get("color")).intValue();
-                int alpha="marker".equals(brush)?Math.min((original>>>24),128):Arrays.asList("pencil","charcoal").contains(brush)?Math.min((original>>>24),190):(original>>>24);int color=(original&0x00ffffff)|(alpha<<24);
-                double factor="marker".equals(brush)||"neoBrush".equals(brush)?1.8:Arrays.asList("brush","charcoal").contains(brush)?1.35:Arrays.asList("pencil","fountain","oily").contains(brush)?.82:Arrays.asList("latinCalligraphy","asiaCalligraphy").contains(brush)?1.5:1.0;
-                for(Object v:points){List<Object> p=list(v);double x=((Number)p.get(0)).doubleValue(),y=((Number)p.get(1)).doubleValue(),w=number(s,"width")*(.25+.75*((Number)p.get(2)).doubleValue())*factor;
-                    if(prev!=null){double angle=Math.atan2(y-prev[1],x-prev[0]),segmentWidth=(w+prev[2])/2;
-                        if("latinCalligraphy".equals(brush)||"asiaCalligraphy".equals(brush)){double nibAngle="latinCalligraphy".equals(brush)?Math.PI/4:Math.PI/3;segmentWidth*=.12+.88*Math.abs(Math.sin(angle-nibAngle));}
-                        c.line(prev[0],prev[1],x,y,color,segmentWidth);
-                    }
-                    boolean square="square".equals(brush);c.rect(x-w/2,y-w/2,w,w,color,0,color,!square);prev=new double[]{x,y,w};}
+            String brush=(String)s.getOrDefault("brush","pen");int color=((Number)s.get("color")).intValue();
+            double material=Math.max(0,Math.min(100,s.containsKey("material")?number(s,"material"):50))/100.0;
+            List<StrokePoint> path=strokePath(s,brush,material);
+            if(path.isEmpty())return;
+            double[] widths=new double[path.size()];for(int i=0;i<path.size();i++)widths[i]=path.get(i).halfWidth;
+            switch(brush){
+                case "marker":
+                    fillRibbon(c,path,widths,0,materialColor(color,brush,material,1),true);break;
+                case "pencil":
+                    fillRibbon(c,path,widths,0,materialColor(color,brush,material,.8),true);
+                    drawGrain(c,path,widths,color,brush,material,2+(int)Math.round(material*4),.52);break;
+                case "brush":
+                    drawBristles(c,path,widths,color,material);break;
+                case "oily":
+                    fillRibbon(c,path,widths,0,materialColor(color,brush,material,1),true);
+                    fillRibbon(c,path,widths,.24,tint(materialColor(color,brush,material,.7),.5),false,.12);break;
+                case "neoBrush":
+                    fillRibbon(c,path,widths,0,materialColor(color,brush,material,.10+.22*material),true,1.0+.55*material);break;
+                case "charcoal":
+                    fillRibbon(c,path,widths,0,materialColor(color,brush,material,1),true);
+                    drawGrain(c,path,widths,color,brush,material,3+(int)Math.round(material*5),.7);break;
+                default:
+                    fillRibbon(c,path,widths,0,materialColor(color,brush,material,1),true);break;
+            }
         }finally{c.endErase();}
     }
+    private static List<StrokePoint> strokePath(Map<String,Object> stroke,String brush,double material){
+        List<Object> source=list(stroke.get("points"));List<StrokePoint> raw=new ArrayList<>();double total=0,px=0,py=0;
+        for(Object item:source){List<Object> p=list(item);double x=((Number)p.get(0)).doubleValue(),y=((Number)p.get(1)).doubleValue(),pressure=((Number)p.get(2)).doubleValue();
+            if(!raw.isEmpty()){double d=Math.hypot(x-px,y-py);if(d<1e-5)continue;total+=d;}raw.add(new StrokePoint(x,y,pressure,total));px=x;py=y;}
+        double width=number(stroke,"width"),factor="marker".equals(brush)?1.8:"neoBrush".equals(brush)?1.4:Arrays.asList("brush","charcoal").contains(brush)?1.35:Arrays.asList("pencil","oily").contains(brush)?.82:Arrays.asList("latinCalligraphy","asiaCalligraphy").contains(brush)?1.5:1;
+        if(raw.isEmpty())return raw;
+        if(raw.size()==1){StrokePoint p=raw.get(0);p.tx=1;p.halfWidth=Math.max(.3,width*(.25+.75*p.pressure)*factor/2);return raw;}
+        double step=Math.max(.75,Math.min(2.0,width*factor*.2));step=Math.max(step,total/8191.0);int count=Math.max(1,(int)Math.ceil(total/step));
+        List<StrokePoint> path=new ArrayList<>(count+1);int segment=0;
+        for(int i=0;i<=count;i++){double distance=i==count?total:Math.min(total,i*step);while(segment<raw.size()-2&&raw.get(segment+1).distance<distance)segment++;
+            StrokePoint a=raw.get(segment),b=raw.get(Math.min(segment+1,raw.size()-1));double span=b.distance-a.distance,t=span==0?0:(distance-a.distance)/span;
+            path.add(new StrokePoint(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,a.pressure+(b.pressure-a.pressure)*t,distance));}
+        for(int i=0;i<path.size();i++){StrokePoint p=path.get(i),before=path.get(Math.max(0,i-1)),after=path.get(Math.min(path.size()-1,i+1));double dx=after.x-before.x,dy=after.y-before.y,length=Math.hypot(dx,dy);
+            if(length<1e-8){p.tx=i==0?1:path.get(i-1).tx;p.ty=i==0?0:path.get(i-1).ty;}else{p.tx=dx/length;p.ty=dy/length;}
+            double pressure="fountain".equals(brush)?.25+(.25+.75*material)*.75*p.pressure:.25+.75*p.pressure;
+            double w=width*pressure*factor;
+            if("latinCalligraphy".equals(brush)||"asiaCalligraphy".equals(brush)){double nib=Math.toRadians(("latinCalligraphy".equals(brush)?25:40)+material*40),angle=Math.atan2(p.ty,p.tx);w*=.12+.88*Math.abs(Math.sin(angle-nib));}
+            p.halfWidth=Math.max(.3,w/2);}
+        return path;
+    }
+    private static void fillRibbon(Surface c,List<StrokePoint> path,double[] baseWidths,double shift,int color,boolean roundCaps){fillRibbon(c,path,baseWidths,shift,color,roundCaps,1);}
+    private static void fillRibbon(Surface c,List<StrokePoint> path,double[] baseWidths,double shift,int color,boolean roundCaps,double widthScale){
+        if(path.size()==1){StrokePoint p=path.get(0);int n=24;double[][] circle=new double[n][2];for(int i=0;i<n;i++){double a=2*Math.PI*i/n,r=baseWidths[0]*widthScale;circle[i][0]=p.x+r*Math.cos(a);circle[i][1]=p.y+r*Math.sin(a);}c.polygon(circle,color,0,color,true);return;}
+        List<double[]> outline=new ArrayList<>(path.size()*2+20);double[] centerX=new double[path.size()],centerY=new double[path.size()],radii=new double[path.size()];
+        for(int i=0;i<path.size();i++){StrokePoint p=path.get(i);double nx=-p.ty,ny=p.tx;radii[i]=Math.max(.25,baseWidths[i]*widthScale);centerX[i]=p.x+nx*baseWidths[i]*shift;centerY[i]=p.y+ny*baseWidths[i]*shift;outline.add(new double[]{centerX[i]+nx*radii[i],centerY[i]+ny*radii[i]});}
+        if(roundCaps)addCap(outline,centerX[path.size()-1],centerY[path.size()-1],path.get(path.size()-1),radii[path.size()-1],false);
+        else{StrokePoint p=path.get(path.size()-1);double ex=p.tx*radii[radii.length-1],ey=p.ty*radii[radii.length-1];outline.set(outline.size()-1,new double[]{outline.get(outline.size()-1)[0]+ex,outline.get(outline.size()-1)[1]+ey});}
+        for(int i=path.size()-1;i>=0;i--){StrokePoint p=path.get(i);double nx=-p.ty,ny=p.tx;outline.add(new double[]{centerX[i]-nx*radii[i],centerY[i]-ny*radii[i]});}
+        if(roundCaps)addCap(outline,centerX[0],centerY[0],path.get(0),radii[0],true);
+        else{StrokePoint p=path.get(0);double ex=p.tx*radii[0],ey=p.ty*radii[0];int i=outline.size()-1;outline.set(i,new double[]{outline.get(i)[0]-ex,outline.get(i)[1]-ey});}
+        c.polygon(outline.toArray(new double[outline.size()][]),color,0,color,true);
+    }
+    private static void addCap(List<double[]> out,double cx,double cy,StrokePoint p,double radius,boolean start){
+        double normal=Math.atan2(p.tx,-p.ty),angle=start?normal+Math.PI:normal;int steps=10;
+        for(int i=1;i<=steps;i++){double a=angle-Math.PI*i/steps;out.add(new double[]{cx+radius*Math.cos(a),cy+radius*Math.sin(a)});}
+    }
+    private static void drawBristles(Surface c,List<StrokePoint> path,double[] widths,int color,double material){
+        int count=2+(int)Math.round(material*8);double spread=.82,laneWidth=Math.min(.12,.34*(2*spread)/(Math.max(1,count-1)));
+        for(int lane=0;lane<count;lane++){double shift=count==1?0:-spread+2*spread*lane/(count-1.0);int ink=materialColor(color,"brush",material,.9);fillRibbon(c,path,widths,shift,ink,true,laneWidth);}
+    }
+    private static int materialColor(int color,String brush,double material,double opacity){
+        double amount=opacity;switch(brush){case "marker":amount*=.20+.50*material;break;case "pencil":amount*=.22+.42*material;break;case "charcoal":amount*=.35+.60*material;break;case "brush":amount*=.30+.38*material;break;case "neoBrush":break;case "oily":amount*=.76+.24*material;break;default:break;}
+        int alpha=(int)Math.max(0,Math.min(255,Math.round(((color>>>24)&255)*amount)));return (color&0x00ffffff)|(alpha<<24);
+    }
+    private static int tint(int color,double amount){int r=(color>>16)&255,g=(color>>8)&255,b=color&255;r+=(int)((255-r)*amount);g+=(int)((255-g)*amount);b+=(int)((255-b)*amount);return (color&0xff000000)|(r<<16)|(g<<8)|b;}
+    private static void drawGrain(Surface c,List<StrokePoint> path,double[] widths,int color,String brush,double material,int count,double opacity){
+        double total=path.get(path.size()-1).distance,typical=0;for(double w:widths)typical+=w;typical/=Math.max(1,widths.length);
+        double spacing=Math.max(.75,typical*4.0/Math.max(1,count));int index=0;
+        for(double d=spacing*.5;d<total;d+=spacing){StrokePoint p=atDistance(path,d);double phase=(index*2.399963229728653)%(2*Math.PI),side=Math.sin(phase)*.72,along=Math.cos(phase)*typical*.25;double cx=p.x-p.ty*side*typical*.25+p.tx*along,cy=p.y+p.tx*side*typical*.25+p.ty*along;double len=typical*(.2+.25*Math.abs(Math.sin(phase)));int ink=materialColor(color,brush,material,opacity);c.line(cx-p.tx*len/2,cy-p.ty*len/2,cx+p.tx*len/2,cy+p.ty*len/2,ink,Math.max(.25,typical*.045));index++;}
+    }
+    private static StrokePoint atDistance(List<StrokePoint> path,double distance){int lo=0,hi=path.size()-1;while(lo<hi){int mid=(lo+hi)/2;if(path.get(mid).distance<distance)lo=mid+1;else hi=mid;}if(lo==0)return path.get(0);StrokePoint a=path.get(lo-1),b=path.get(lo);double t=(distance-a.distance)/Math.max(1e-9,b.distance-a.distance);StrokePoint p=new StrokePoint(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,a.pressure+(b.pressure-a.pressure)*t,distance);p.tx=a.tx+(b.tx-a.tx)*t;p.ty=a.ty+(b.ty-a.ty)*t;double n=Math.hypot(p.tx,p.ty);if(n>0){p.tx/=n;p.ty/=n;}p.halfWidth=a.halfWidth+(b.halfWidth-a.halfWidth)*t;return p;}
     public static void drawObject(Model m,Map<String,Object> o,Surface c){
         if(("arrow".equals(o.get("shape"))||"arrowLine".equals(o.get("shape")))&&(o.containsKey("from")||o.containsKey("to"))){drawObjectMasked(m,new DrawItem(m,o).geometry(),c);return;}
         double rotation=((Number)o.getOrDefault("rotation",0)).doubleValue();boolean flipX=Boolean.TRUE.equals(o.get("flipX")),flipY=Boolean.TRUE.equals(o.get("flipY"));

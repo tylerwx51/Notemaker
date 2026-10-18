@@ -154,6 +154,7 @@ def validate(op, nested=False):
         if not isinstance(op.get('color'), int) or not 1 <= op.get('width', 0) <= 100:
             raise ValueError('Invalid brush')
         if 'brush' in op and op['brush'] not in ('pen','pencil','marker','brush','oily','fountain','charcoal','neoBrush','latinCalligraphy','asiaCalligraphy','square'): raise ValueError('Unknown brush')
+        if 'material' in op and (type(op['material']) is not int or not 0 <= op['material'] <= 100): raise ValueError('Invalid material percentage')
         points = op.get('points')
         if not isinstance(points, list) or not 1 <= len(points) <= 10000:
             raise ValueError('Invalid points')

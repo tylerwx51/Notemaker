@@ -19,7 +19,7 @@ public final class ItemCoverage implements Coverage, Render.Surface {
         Map<String,Object> key=new LinkedHashMap<>(item);for(String k:Arrays.asList("id","actor","seq","at","action","session","bases","visibility","object","stroke","layer","page"))key.remove(k);
         Coverage cached=CACHE.get(key);if(cached!=null)return cached;
         ItemCoverage c=new ItemCoverage();if("stroke".equals(item.get("kind")))c.ink=new InkGeometry();Render.drawItem(new Model(),item,c);
-        if(c.ink!=null){c.ink.finish();double[] b=c.ink.bounds();c.box=new Rectangle2D.Double(b[0],b[1],b[2]-b[0],b[3]-b[1]);}
+        if(c.ink!=null){c.ink.finish();double[] b=c.ink.bounds();Rectangle2D inkBounds=new Rectangle2D.Double(b[0],b[1],b[2]-b[0],b[3]-b[1]);if(c.box==null)c.box=inkBounds;else c.box.add(inkBounds);}
         for(double[][] p:c.masks){Area cut=new Area(path(p,true));c.cuts.add(cut);c.cutBounds.add(cut.getBounds2D());}
         Coverage result=c.raster?new Coverage.Tiles(c.bounds(),(x,y,size)->Png.coverageTile(new Model(),item,x,y,size)):c;CACHE.put(key,result);return result;
     }
@@ -43,7 +43,7 @@ public final class ItemCoverage implements Coverage, Render.Surface {
     public void endErase(){}
     public void line(double x,double y,double ex,double ey,int color,double width){if(ink!=null){if((color>>>24)!=0&&width>0)ink.line(x,y,ex,ey,width);return;}paint(new Line2D.Double(x,y,ex,ey),color,width,null);}
     public void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse){if(ink!=null&&width==0){if(fill!=null&&(fill>>>24)!=0&&w>0&&h>0)ink.dot(x,y,w,h,ellipse);return;}Shape shape=ellipse?new Ellipse2D.Double(x,y,w,h):new Rectangle2D.Double(x,y,w,h);if(fill!=null&&(fill>>>24)!=0)add(shape);if((color>>>24)!=0&&width>0)add(new BasicStroke((float)width).createStrokedShape(shape));}
-    public void polygon(double[][] p,int color,double width,Integer fill,boolean closed){paint(path(p,closed),color,width,fill);}
+    public void polygon(double[][] p,int color,double width,Integer fill,boolean closed){Path2D shape=path(p,closed);if(ink!=null){if(fill!=null&&(fill>>>24)!=0)add(shape);return;}paint(shape,color,width,fill);}
     public void text(double x,double y,String text,int color,double size){styledText(x,y,text,color,size,"sans-serif",false,false,false,"left");}
     public void styledText(double x,double y,String text,int color,double size,String family,boolean bold,boolean italic,boolean underline,String alignment){if((color>>>24)==0||text.isEmpty())return;Font f=new Font("serif".equals(family)?Font.SERIF:"monospace".equals(family)?Font.MONOSPACED:Font.SANS_SERIF,(bold?Font.BOLD:0)|(italic?Font.ITALIC:0),1).deriveFont((float)size);FontRenderContext context=new FontRenderContext(null,true,false);double width=f.getStringBounds(text,context).getWidth();double left=x-("center".equals(alignment)?width/2:"right".equals(alignment)?width:0);add(f.createGlyphVector(context,text).getOutline((float)left,(float)y));if(underline)line(left,y+2,left+width,y+2,color,1);}
     public void image(double x,double y,double w,double h,String data){raster=true;add(new Rectangle2D.Double(x,y,w,h));}

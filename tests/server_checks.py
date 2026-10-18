@@ -92,6 +92,13 @@ class ServerChecks(unittest.TestCase):
             self.post('invalid', [valid, invalid])
         self.assertEqual(error.exception.code, 400)
         self.assertEqual(self.read('invalid'), [])
+        invalid_material = dict(id='bad-material', kind='stroke', stroke='s', layer='base', page=0,
+                                color=-16777216, width=5, brush='pencil', material=101,
+                                points=[[1, 2, .5]])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post('invalid-material', [dict(valid, id='create'), invalid_material])
+        self.assertEqual(error.exception.code, 400)
+        self.assertEqual(self.read('invalid-material'), [])
 
     def test_editable_object_shapes_and_signed_line_bounds(self):
         shapes = ('line', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star')

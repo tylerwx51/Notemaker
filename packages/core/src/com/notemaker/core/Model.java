@@ -93,7 +93,7 @@ public final class Model {
             case "object-active":id(o,"object");bool(o,"active");break;
             case "layer-active":id(o,"layer");require(!"base".equals(o.get("layer")),"Cannot hide base layer globally");bool(o,"active");break;
             case "stroke":
-                id(o,"stroke");drawing(o);if(o.containsKey("brush"))require(Arrays.asList("pen","pencil","marker","brush","oily","fountain","charcoal","neoBrush","latinCalligraphy","asiaCalligraphy","square").contains(string(o,"brush")),"Unknown brush");List<Object> points=list(o.get("points"));require(points.size()>0&&points.size()<=10000,"Invalid points");
+                id(o,"stroke");drawing(o);if(o.containsKey("brush"))require(Arrays.asList("pen","pencil","marker","brush","oily","fountain","charcoal","neoBrush","latinCalligraphy","asiaCalligraphy","square").contains(string(o,"brush")),"Unknown brush");if(o.containsKey("material")){range(o,"material",0,100);require(number(o,"material")==Math.rint(number(o,"material")),"Material must be an integer percentage");}List<Object> points=list(o.get("points"));require(points.size()>0&&points.size()<=10000,"Invalid points");
                 for(Object p:points){List<Object> xyz=list(p);require(xyz.size()==3,"Point needs x, y, pressure");for(Object n:xyz)require(n instanceof Number&&Double.isFinite(((Number)n).doubleValue())&&Math.abs(((Number)n).doubleValue())<=1000000,"Invalid point");double pressure=((Number)xyz.get(2)).doubleValue();require(pressure>=0&&pressure<=1,"Invalid pressure");}break;
             case "object":
                 id(o,"object");drawing(o);String shape=string(o,"shape");require(ShapeCatalog.known(shape)||shape.equals("template"),"Unknown shape");

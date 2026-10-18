@@ -84,6 +84,30 @@ class DrawingToolsChecks(unittest.TestCase):
         self.assertEqual(len(self.call('inspect')['strokes']),11)
         self.call('object','update','text','-',value=dict(alignment='invalid'),ok=False)
         self.call('export',str(self.path/'styled.png'));self.assertGreater((self.path/'styled.png').stat().st_size,100)
+    def test_material_parameters_validate_and_change_rendered_strokes(self):
+        points=[[20,20,.25],[35,28,.7],[50,20,.95],[65,34,.45],[80,25,.8]]
+        low=dict(stroke='material-sample',layer='base',page=0,width=8,color=-16777216,brush='pencil',material=0,points=points)
+        high={**low,'material':100}
+        self.call('stroke','put','-',value=low)
+        low_svg=self.path/'material-low.svg';self.call('export',str(low_svg))
+        self.call('stroke','put','-',value=high)
+        high_svg=self.path/'material-high.svg';self.call('export',str(high_svg))
+        self.assertNotEqual(low_svg.read_text(),high_svg.read_text())
+        saved=next(s for s in self.call('inspect')['strokes'] if s['stroke']=='material-sample')
+        self.assertEqual(saved['material'],100)
+        before=self.call('log');self.call('stroke','put','-',value={**high,'material':101},ok=False)
+        self.assertEqual(before,self.call('log'))
+    def test_material_paths_do_not_accumulate_with_dense_input_samples(self):
+        sparse=[[20,50,.8],[180,50,.8]]
+        dense=[[20+i,50,.8] for i in range(161)]
+        for brush in ('pen','pencil','marker','brush','oily','fountain','charcoal','neoBrush','latinCalligraphy'):
+            stroke=dict(stroke='density-'+brush,layer='base',page=0,width=10,color=-16777216,
+                        brush=brush,material=65,points=sparse)
+            self.call('stroke','put','-',value=stroke)
+            sparse_png=self.path/(brush+'-sparse.png');self.call('export',str(sparse_png))
+            self.call('stroke','put','-',value={**stroke,'points':dense})
+            dense_png=self.path/(brush+'-dense.png');self.call('export',str(dense_png))
+            self.assertEqual(sparse_png.read_bytes(),dense_png.read_bytes(),brush+' changed with sample density')
     def test_clipboard_cut_paste_preserves_atomic_diagram_and_references(self):
         self.call('document','create','pages')
         self.call('diagram','add','-',value=dict(layer='diagram',name='Diagram',objects=[

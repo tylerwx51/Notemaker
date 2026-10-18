@@ -138,8 +138,10 @@ Upgrade the server, app, and CLI/proxies together before using deletion.
 The narrow left rail groups **Template**, **Layers**, **Shapes**, **Fill**,
 **Select**, **Text**, **Insert**, **Move**, **Pages**, **Agent**, and **More**.
 The robot **Agent** button opens the Agent interface directly.
-Both finger and stylus draw. **Pen** opens brush profiles, presets, color swatches and width controls;
-stylus pressure varies width.
+Both finger and stylus draw. **Pen** opens brush profiles, presets, color swatches, width and material controls;
+stylus pressure varies width. Pencil grade, marker opacity, bristle density, paint
+load, softness, charcoal dust, fountain flex and calligraphy nib angle are saved
+on each stroke so Android, CLI exports and the browser viewer replay the same mark.
 **Shapes** opens an original monochrome palette for rectangles, ellipses, arrows,
 lines, triangles, diamonds, polygons, stars and 3D figures. Choose outline color,
 width and optional fill, select a shape, then drag on the canvas. The completed

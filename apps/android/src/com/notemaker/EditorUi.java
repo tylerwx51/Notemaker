@@ -26,6 +26,8 @@ final class EditorUi {
     private Tool popupAnchor;
     private Icon undoButton, redoButton;
     private StrokeSample sample;
+    private TextView materialLabel;
+    private View materialPanel;
     private boolean showToolLabels=true;
     private String selectedTool = "pen";
     private String layerState = "";
@@ -210,6 +212,8 @@ final class EditorUi {
             entry.getValue().icon.invalidate();
         }
         if (sample != null) sample.invalidate();
+        if (materialLabel != null) materialLabel.setText(materialDescription());
+        if (materialPanel != null) materialPanel.setVisibility("pen".equals(app.brush)?View.GONE:View.VISIBLE);
         boolean ready=!app.model.deleted&&!app.objectHistoryPending();
         undoButton.setEnabled(ready&&!app.undo.isEmpty());undoButton.setAlpha(undoButton.isEnabled()?1f:.3f);
         redoButton.setEnabled(ready&&!app.redo.isEmpty());redoButton.setAlpha(redoButton.isEnabled()?1f:.3f);
@@ -512,12 +516,37 @@ final class EditorUi {
                 points.add(Arrays.asList(x,y,pressure));
             }
             Map<String,Object> stroke=new LinkedHashMap<>();
-            stroke.put("kind","stroke");stroke.put("brush",app.brush);stroke.put("color",app.color);
+            stroke.put("kind","stroke");stroke.put("brush",app.brush);stroke.put("color",app.color);stroke.put("material",app.material);
             stroke.put("width",dp(Math.max(1,Math.min(8,app.width))));stroke.put("points",points);
             c.save();c.clipRect(left-dp(2),dp(3),right+dp(2),h-dp(3));
             com.notemaker.core.Render.drawStroke(stroke,new com.notemaker.cli.Png(c));
             c.restore();
         }
+    }
+
+    private String materialDescription(){
+        String range;
+        switch(app.brush){
+            case "pencil":range="Graphite grade · HB to 6B";break;
+            case "marker":range="Opacity · light to saturated";break;
+            case "brush":range="Bristles · sparse to dense";break;
+            case "oily":range="Paint load · lean to loaded";break;
+            case "neoBrush":range="Softness · focused to feathered";break;
+            case "charcoal":range="Charcoal · compressed to dusty";break;
+            case "fountain":range="Nib flex · fine to pressure-responsive";break;
+            case "latinCalligraphy":range="Nib angle · 25° to 65°";break;
+            case "asiaCalligraphy":range="Nib angle · 40° to 80°";break;
+            case "square":range="Chisel width · narrow to broad";break;
+            default:range="Material response";break;
+        }
+        return range+" · "+app.material+"%";
+    }
+    private View materialControl(){
+        LinearLayout group=column();materialLabel=text(materialDescription(),13,INK,false);group.addView(materialLabel);
+        SeekBar seek=new SeekBar(app);seek.setContentDescription("Brush material");seek.setMax(100);seek.setProgress(app.material);
+        seek.setProgressTintList(ColorStateList.valueOf(INK));seek.setProgressBackgroundTintList(ColorStateList.valueOf(0xffbbbbbb));seek.setThumbTintList(ColorStateList.valueOf(INK));
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar bar,int value,boolean user){if(user){app.material=value;materialLabel.setText(materialDescription());app.getSharedPreferences("settings",0).edit().putInt("penMaterial",value).apply();if(sample!=null)sample.invalidate();}}public void onStartTrackingTouch(SeekBar bar){}public void onStopTrackingTouch(SeekBar bar){}});
+        group.addView(seek,new LinearLayout.LayoutParams(-1,dp(42)));return group;
     }
 
     private LinearLayout penPanel(){
@@ -529,6 +558,7 @@ final class EditorUi {
         }
         box.addView(brushes);box.addView(new StrokeSample(),new LinearLayout.LayoutParams(-1,dp(64)));
         section(box,"Line width");box.addView(widthControl());
+        materialPanel=materialControl();box.addView(materialPanel);
         section(box,"Colors");box.addView(colorChoices(false));
         menuAction(box,"More brush types…",true,()->showPopup(brushPanel(),tools.get("pen"),false));
         menuAction(box,"Presets…",true,()->showPopup(presetPanel(),tools.get("pen"),false));
@@ -543,7 +573,7 @@ final class EditorUi {
         int[] widths = {2, 5, 9, 5, 5};
         for (int i = 0; i < defaults.length; i++) {
             final int color = colors[i], width = widths[i];
-            menuAction(box, defaults[i], true, () -> applyPenPreset(color, width, "pen"));
+            menuAction(box, defaults[i], true, () -> applyPenPreset(color, width, "pen", 50));
         }
         String saved = prefs.getString("penPresets", "");
         if (!saved.isEmpty()) {
@@ -552,8 +582,8 @@ final class EditorUi {
                 for (int i = 0; i < list.length(); i++) {
                     org.json.JSONObject preset = list.optJSONObject(i);
                     if (preset == null) continue;
-                    final int color = preset.optInt("color", Color.BLACK), width = preset.optInt("width", 5);final String brush=preset.optString("brush","pen");
-                    menuAction(box, preset.optString("name", "Custom") + " · " + width, true, () -> applyPenPreset(color, width, brush));
+                    final int color = preset.optInt("color", Color.BLACK), width = preset.optInt("width", 5), material=preset.optInt("material",50);final String brush=preset.optString("brush","pen");
+                    menuAction(box, preset.optString("name", "Custom") + " · " + width, true, () -> applyPenPreset(color, width, brush, material));
                 }
             } catch (Exception ignored) { }
         }
@@ -743,12 +773,14 @@ final class EditorUi {
         return box;
     }
 
-    private void applyPenPreset(int color, int width, String brush) {
+    private void applyPenPreset(int color, int width, String brush, int material) {
         if(app.selecting||app.selectionSession!=null||!app.selectedEntities.isEmpty())app.deselect();
         selectedTool="pen";app.erase=false;app.pan=false;app.fillTapMode=false;app.resetDrawingGesture();
         app.color = color;
         app.width = Math.max(1, Math.min(30, width));
         app.brush = brush;
+        app.material=Math.max(0,Math.min(100,material));
+        app.getSharedPreferences("settings",0).edit().putInt("penMaterial",app.material).apply();
         app.update();
         dismissPopup();
     }
@@ -768,7 +800,7 @@ final class EditorUi {
                     org.json.JSONArray list;
                     try { list = new org.json.JSONArray(prefs.getString("penPresets", "")); }
                     catch (Exception e) { list = new org.json.JSONArray(); }
-                    list.put(MainActivity.obj("name", label, "color", app.color, "width", (int) app.width, "brush", app.brush));
+                    list.put(MainActivity.obj("name", label, "color", app.color, "width", (int) app.width, "brush", app.brush, "material", app.material));
                     prefs.edit().putString("penPresets", list.toString()).apply();
                     dismissPopup();
                 }).show();

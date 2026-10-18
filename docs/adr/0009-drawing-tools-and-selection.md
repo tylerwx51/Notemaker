@@ -89,8 +89,15 @@ selection coordination and preview transport without adding drawing history.
   bounded flood region across several native outlines. Filled regions are SVG
   objects. It does not flood-fill pixels inside imported pictures or arbitrary
   SVG artwork. Templates use an editable background layer below drawing layers.
-- Original pen profiles approximate pressure and direction behavior. The point
-  schema is still x/y/pressure, so physical stylus tilt is not recorded.
+- Brush profiles are rendered from the stroke centerline as a pressure-varying
+  swept ribbon, not as a sequence of overlapping point dabs. The shared renderer
+  resamples by traveled distance, derives tangent/normal frames, and fills each
+  pigment pass once; grain and bristle lanes are positioned by arc length so their
+  appearance is independent of tablet sample density. Marker opacity therefore
+  builds from actual overlap, not from dense input points. An optional per-stroke
+  `material` percentage (0–100, default 50) tunes each profile's characteristic
+  parameter; Android, CLI export and the browser viewer use the same path model. The
+  point schema remains x/y/pressure, so physical stylus tilt is not recorded.
 - Pictures embed PNG/JPEG data (2 MiB, maximum 8192 per edge and 32 megapixels)
   rather than external references. Atomic action and transport limits remain
   3 MB and 4 MB respectively.

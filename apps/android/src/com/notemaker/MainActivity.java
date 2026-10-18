@@ -35,6 +35,7 @@ public class MainActivity extends Activity {
     long cursor=0;
     int page=0, color=Color.BLACK;
     float width=5;
+    int material=50;
     String brush="pen";
     boolean erase=false, pan=false, connected=false, documentSeen=false, fillTapMode=false;
     String eraserMode="stroke";
@@ -81,6 +82,7 @@ public class MainActivity extends Activity {
         android.content.SharedPreferences prefs=getSharedPreferences("settings",0);
         scribbleToErase=prefs.getBoolean("scribbleToErase",false);
         freeformLasso=prefs.getBoolean("freeformLasso",false);
+        material=Math.max(0,Math.min(100,prefs.getInt("penMaterial",50)));
         try{String savedClipboard=prefs.getString("selectionClipboard","");if(!savedClipboard.isEmpty())selectionClipboard=Json.map(Json.parse(savedClipboard));}catch(Exception ignored){}
         try{host=normalizeServerAddress(prefs.getString("host",host));}catch(Exception invalidSavedHost){host="";}document=prefs.getString("document",document);proxyUrl=prefs.getString("proxyUrl","");proxyToken=prefs.getString("proxyToken","");
         load("fixed");
@@ -582,7 +584,7 @@ public class MainActivity extends Activity {
             if(shapeDragging&&drawingShape!=null&&!drawingShape.equals("text")){float dx=shapeEndX-shapeStartX,dy=shapeEndY-shapeStartY,left=Math.min(shapeStartX,shapeEndX),top=Math.min(shapeStartY,shapeEndY),w=Math.abs(dx),h=Math.abs(dy);if(drawingShape.equals("line")||drawingShape.equals("arrow")){left=shapeStartX;top=shapeStartY;w=dx;h=dy;if(Math.abs(w)+Math.abs(h)<1){w=1;h=1;}}else{w=Math.max(12,w);h=Math.max(12,h);if(!type.equals("infinite")){left=Math.max(0,Math.min(1000-w,left));top=Math.max(0,Math.min(1400-h,top));}}JSONObject preview=objectValue(drawingShape,left,top,w,h,color,width,objectFillColor);c.save();transform(c);Render.drawObject(model,Json.map(Json.parse(preview.toString())),new com.notemaker.cli.Png(c));c.restore();}
             if(eraseTimings!=null)eraseTimings.put("draw_done",System.nanoTime());if(afterDraw!=null)afterDraw.run();
         }}
-        JSONObject stroke(){return obj("kind","stroke","stroke",current,"layer",selected,"page",page,"color",color,"width",width,"brush",brush,"points",points);}
+        JSONObject stroke(){return obj("kind","stroke","stroke",current,"layer",selected,"page",page,"color",color,"width",width,"brush",brush,"material",material,"points",points);}
         boolean previewed(String kind,String id){long now=System.currentTimeMillis();for(Object raw:transformPreviews.values())try{Map<String,Object> preview=Json.map(raw);if(((Number)preview.getOrDefault("expires",0)).longValue()<=now)continue;for(Object item:Json.list(preview.get("entities"))){Map<String,Object> entity=Json.map(item);if(kind.equals(entity.get("kind"))&&id.equals(entity.get("id")))return true;}}catch(Exception ignored){}return false;}
         void drawTransformPreviews(Canvas c){
             long now=System.currentTimeMillis();
