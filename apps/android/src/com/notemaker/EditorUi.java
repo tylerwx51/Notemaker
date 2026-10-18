@@ -150,7 +150,9 @@ final class EditorUi {
         parent.addView(divider(),new LinearLayout.LayoutParams(-1,dp(1)));
         LinearLayout button=row();button.setGravity(Gravity.CENTER_VERTICAL);button.setMinimumHeight(dp(52));
         button.setContentDescription(label);button.setEnabled(enabled);button.setAlpha(enabled?1f:.4f);
-        button.addView(new Icon(actionIcon(label)),new LinearLayout.LayoutParams(dp(38),dp(38)));
+        String iconKind=actionIcon(label);Icon glyph=new Icon(iconKind);
+        if(iconKind.equals("pen")||iconKind.equals("fountain")||iconKind.equals("pencil")||iconKind.equals("marker")||iconKind.equals("brush")||iconKind.equals("oily")||iconKind.equals("neoBrush")||iconKind.equals("charcoal")||iconKind.equals("latinCalligraphy")||iconKind.equals("asiaCalligraphy")||iconKind.equals("square"))glyph.accentColor=app.color;
+        button.addView(glyph,new LinearLayout.LayoutParams(dp(38),dp(38)));
         TextView name=text(label,15,INK,false);name.setPadding(dp(10),dp(12),dp(4),dp(12));
         button.addView(name,new LinearLayout.LayoutParams(0,-2,1));
         button.setOnClickListener(v->{dismissPopup();callback.run();});
@@ -161,6 +163,14 @@ final class EditorUi {
         if(s.equals("agent"))return "agent";
         if(s.contains("undo"))return "undo";if(s.contains("redo"))return "redo";
         if(s.contains("layer"))return "layers";if(s.contains("picture")||s.contains("artwork"))return "insert";
+        if(s.contains("fountain"))return "fountain";
+        if(s.contains("pencil"))return "pencil";
+        if(s.contains("marker"))return "marker";
+        if(s.contains("charcoal"))return "charcoal";
+        if(s.contains("oily"))return "oily";
+        if(s.contains("neobrush")||s.contains("neo brush"))return "neoBrush";
+        if(s.contains("calligraphy"))return s.contains("asia")?"asiaCalligraphy":"latinCalligraphy";
+        if(s.contains("square"))return "square";
         if(s.startsWith("pen")||s.contains(" pen")||s.contains("brush")||s.contains("preset"))return "pen";
         if(s.contains("text"))return "text";if(s.contains("erase"))return "eraser";
         if(s.contains("template")||s.equals("ruled")||s.equals("graph")||s.equals("dot grid"))return "template";
@@ -190,7 +200,11 @@ final class EditorUi {
                 : app.replica.remote()?"○  Proxy unavailable · last snapshot":"○  Offline · saved on device");
         if(!app.conflicts.isEmpty())setText(connection,connection.getText()+"  ·  "+app.conflicts.size()+" conflict(s)");
         String mode = app.erase ? "eraser" : app.pan ? "move" : app.drawingShape!=null ? (app.drawingShape.equals("text")?"text":"shapes") : selectedTool;
-        for (Map.Entry<String, Tool> entry : tools.entrySet()) entry.getValue().active(entry.getKey().equals(mode));
+        for (Map.Entry<String, Tool> entry : tools.entrySet()) {
+            entry.getValue().active(entry.getKey().equals(mode));
+            entry.getValue().icon.accentColor = app.color;
+            entry.getValue().icon.invalidate();
+        }
         boolean ready=!app.model.deleted&&!app.objectHistoryPending();
         undoButton.setEnabled(ready&&!app.undo.isEmpty());undoButton.setAlpha(undoButton.isEnabled()?1f:.3f);
         redoButton.setEnabled(ready&&!app.redo.isEmpty());redoButton.setAlpha(redoButton.isEnabled()?1f:.3f);
@@ -447,7 +461,8 @@ final class EditorUi {
         };
         item.setOrientation(LinearLayout.VERTICAL);item.setGravity(Gravity.CENTER);item.setPadding(dp(2),dp(4),dp(2),dp(12));
         item.setContentDescription(description);item.setTooltipText(description);
-        item.addView(new Icon(kind),new LinearLayout.LayoutParams(dp(40),dp(36)));
+        Icon choiceIcon=new Icon(kind);choiceIcon.accentColor=app.color;
+        item.addView(choiceIcon,new LinearLayout.LayoutParams(dp(40),dp(36)));
         if(label){TextView name=text(description,11,INK,false);name.setGravity(Gravity.CENTER);name.setSingleLine(true);name.setEllipsize(TextUtils.TruncateAt.END);item.addView(name,new LinearLayout.LayoutParams(-1,-2));}
         item.setOnClickListener(v->{callback.run();ViewParent parent=item.getParent();if(parent instanceof ViewGroup){ViewGroup group=(ViewGroup)parent;for(int i=0;i<group.getChildCount();i++)group.getChildAt(i).invalidate();}});
         return item;
@@ -862,6 +877,7 @@ final class EditorUi {
     private final class Icon extends View {
         final String kind;
         int color = INK;
+        int accentColor = INK;
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         Icon(String kind) { super(app); this.kind = kind; }
         protected void onDraw(Canvas canvas) {
@@ -869,7 +885,7 @@ final class EditorUi {
             float size = Math.min(getWidth(), getHeight()) * .62f;
             canvas.translate((getWidth() - size) / 2, (getHeight() - size) / 2);
             canvas.scale(size / 24, size / 24);
-            paint.setColor(color); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.7f);
+            paint.setColor(INK); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.7f);
             paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND);
             switch (kind) {
                 case "agent":
@@ -920,6 +936,8 @@ final class EditorUi {
                 case "pyramid":path(canvas,12,3,3,20,21,20,12,3);path(canvas,12,3,12,20);path(canvas,3,20,15,12);path(canvas,21,20,9,12);break;
                 case "cylinder":canvas.drawOval(5,3,19,9,paint);path(canvas,5,6,5,18);path(canvas,19,6,19,18);canvas.drawArc(new RectF(5,15,19,21),0,180,false,paint);break;
                 case "cone":path(canvas,12,3,4,19);path(canvas,12,3,20,19);canvas.drawOval(4,15,20,21,paint);break;
+                case "oily": case "neoBrush": case "charcoal": case "latinCalligraphy": case "asiaCalligraphy": case "square":
+                    path(canvas,4,20,6,13,16,3,21,8,11,18,4,20);path(canvas,14,5,19,10);break;
                 case "sphere":canvas.drawOval(4,4,20,20,paint);path(canvas,4,13,9,10,15,10,20,13);break;
                 case "arrowLine":path(canvas,4,19,19,5,19,12);path(canvas,19,5,12,5);break;
                 case "trapezoid":path(canvas,7,4,17,4,21,20,3,20,7,4);break;
@@ -935,6 +953,16 @@ final class EditorUi {
                 case "plus": path(canvas, 12, 4, 12, 20); path(canvas, 4, 12, 20, 12); break;
                 case "more": paint.setStyle(Paint.Style.FILL); for (int x = 5; x <= 19; x += 7) canvas.drawCircle(x, 12, 1.7f, paint); break;
                 default: poly(canvas,6,11); break;
+            }
+            if (kind.equals("pen") || kind.equals("oily") || kind.equals("neoBrush") || kind.equals("charcoal") || kind.equals("latinCalligraphy") || kind.equals("asiaCalligraphy") || kind.equals("square") || kind.equals("pencil") || kind.equals("marker") || kind.equals("brush") || kind.equals("fountain")) {
+                paint.setColor(accentColor); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(2.5f);
+                switch (kind) {
+                    case "pen": case "oily": case "neoBrush": case "charcoal": case "latinCalligraphy": case "asiaCalligraphy": case "square": path(canvas,16,3,21,8,19,10); break;
+                    case "pencil": path(canvas,12,2,15,5,12,8,9,5,12,2); break;
+                    case "marker": path(canvas,7,6,17,3,17,8,7,10); break;
+                    case "brush": canvas.drawCircle(12,7,2,paint); break;
+                    case "fountain": canvas.drawCircle(12,14,2,paint); break;
+                }
             }
             canvas.restore();
         }
