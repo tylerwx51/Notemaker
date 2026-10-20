@@ -78,3 +78,5 @@ checkpoint to Android graphics, while the tile cache held about 20 MiB of
 live pixel data at run end. The tile cache budget therefore bounds its own
 bitmaps, not total graphics memory or process PSS. See
 `docs/design/performance/memory-breakdown.md`.
+ADR 0019 later changes full-tile repaint to reuse a resident bitmap, reducing
+graphics allocation while retaining this tile traversal and pixel contract.

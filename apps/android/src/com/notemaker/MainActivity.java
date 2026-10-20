@@ -557,7 +557,7 @@ public class MainActivity extends Activity {
         boolean useInkCache=true;
         boolean cullTileItems=true;
         RectF monolithicTileProbe;
-        Map<String,Object> tileCacheMetrics(){Map<String,Object> m=new LinkedHashMap<>(tileInk.metrics());m.put("densityTier",rasterTier);return m;}
+        Map<String,Object> tileCacheMetrics(){Map<String,Object> m=new LinkedHashMap<>(tileInk.metrics());m.put("densityTier",rasterTier);m.put("reusedTileRepaints",TileInkCache.reusedTileRepaints);return m;}
         float shapeStartX,shapeStartY,shapeEndX,shapeEndY;boolean shapeDragging;
         boolean transforming;float transformStartX,transformStartY,transformDeltaX,transformDeltaY;long lastPreviewAt;
         boolean lassoing;float lassoStartX,lassoStartY,lassoEndX,lassoEndY;final ArrayList<float[]> lassoPath=new ArrayList<>();

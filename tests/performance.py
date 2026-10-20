@@ -25,7 +25,7 @@ def check(metrics):
                 'path_command_points_estimate', 'max_path_command_bytes_estimate',
                 'max_path_command_points_estimate'):
         assert isinstance(tile_cache.get(key), (int, float)) and tile_cache[key] >= 0, (key, tile_cache)
-    assert tile_cache['tile_renders'] > 0 and tile_cache['item_renders'] > 0 and tile_cache['reused_tiles'] > 0, tile_cache
+    assert tile_cache['tile_renders'] > 0 and tile_cache['reused_tile_repaints'] > 0 and tile_cache['item_renders'] > 0 and tile_cache['reused_tiles'] > 0, tile_cache
     assert tile_cache['geometry_renders'] > 0 and tile_cache['path_command_reuses'] > 0, tile_cache
     assert tile_cache['current_bytes'] <= tile_cache['max_bytes'], tile_cache
     assert tile_cache['peak_bytes'] <= tile_cache['max_bytes'], tile_cache

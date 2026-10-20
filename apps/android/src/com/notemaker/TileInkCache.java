@@ -13,7 +13,7 @@ final class TileInkCache {
     static final long MAX_PICTURE_BYTES=24L*1024*1024;
     static final int MAX_PICTURE_POINTS=100000;
     private static final int MAX_PICTURES=512;
-    static long tileRenders,itemRenders,geometryRenders,pictureReuses,transientPictureReuses,pictureMisses,pictureEvictions,culledItems,allocatedTiles,reusedTiles,evictedTiles;
+    static long tileRenders,reusedTileRepaints,itemRenders,geometryRenders,pictureReuses,transientPictureReuses,pictureMisses,pictureEvictions,culledItems,allocatedTiles,reusedTiles,evictedTiles;
     private long currentBytes,peakBytes;
     private long pictureBytes,picturePoints;
     private final LinkedHashSet<String> renderedItemIds=new LinkedHashSet<>();
@@ -61,16 +61,15 @@ final class TileInkCache {
             if(contributors.isEmpty()){if(tile!=null)remove(key,tile);continue;}
             if(tile!=null&&same(tile.items,contributors)){reusedTiles++;drawTile(destination,tile.shader,tx,ty,tileSize);continue;}
             // Full tile repaint preserves Skia's exact anti-aliasing at changed
-            // item edges; pan/zoom still reuse every unchanged tile.
-            if(tile!=null)remove(key,tile);
+            // item edges. Reuse a resident bitmap to avoid graphics allocation.
             if(cullItems)for(Item item:items)if(!RectF.intersects(core,item.bounds))culledItems++;
             int size=tileSize*tier+2*GUTTER;Bitmap bitmap;Canvas canvas;
-            if(cullItems){trimFor((long)size*size*4);bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888);canvas=new Canvas(bitmap);}
+            if(cullItems){if(tile!=null){bitmap=tile.bitmap;bitmap.eraseColor(Color.TRANSPARENT);reusedTileRepaints++;}else{trimFor((long)size*size*4);bitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888);}canvas=new Canvas(bitmap);}
             else{if(referenceBitmap==null){referenceBitmap=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888);referenceCanvas=new Canvas(referenceBitmap);}else referenceBitmap.eraseColor(Color.TRANSPARENT);bitmap=referenceBitmap;canvas=referenceCanvas;canvas.setMatrix(new Matrix());}
             canvas.scale(tier,tier);canvas.translate(-left+gutter,-top+gutter);
             if(cullItems)canvas.clipRect(left-gutter,top-gutter,left+tileSize+gutter,top+tileSize+gutter);
             for(Item item:contributors){if(cullItems){itemRenders++;recordRendered(item.id);drawItem(canvas,item,renderer);}else renderer.accept(canvas,item.value);}
-            if(cullItems){tile=new Tile(bitmap,contributors,tx,ty,tier,tileSize);drawTile(destination,tile.shader,tx,ty,tileSize);tiles.put(key,tile);currentBytes+=tile.bytes;allocatedTiles++;tileRenders++;peakBytes=Math.max(peakBytes,currentBytes);}else{BitmapShader shader=shader(bitmap,left,top,tier);drawTile(destination,shader,tx,ty,tileSize);}
+            if(cullItems){if(tile==null){tile=new Tile(bitmap,contributors,tx,ty,tier,tileSize);tiles.put(key,tile);currentBytes+=tile.bytes;allocatedTiles++;peakBytes=Math.max(peakBytes,currentBytes);}else tile.items=contributors;drawTile(destination,tile.shader,tx,ty,tileSize);tileRenders++;}else{BitmapShader shader=shader(bitmap,left,top,tier);drawTile(destination,shader,tx,ty,tileSize);}
         }}finally{if(referenceBitmap!=null)referenceBitmap.recycle();}
     }
     void drawMonolithic(Canvas destination,List<Item> items,RectF probe,int tier,BiConsumer<Canvas,Map<String,Object>> renderer){
