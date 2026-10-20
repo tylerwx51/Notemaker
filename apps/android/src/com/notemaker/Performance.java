@@ -99,11 +99,19 @@ final class Performance {
             if(stroke%100==99){resources.add(resources(stroke+1));android.util.Log.i("NoteMakerPerformance","strokes="+(stroke+1)+" saveQueue="+pending[0]);}
         }
         long drainStart=System.nanoTime();ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);test.waitForIdleSync();Thread.sleep(500);
+        // The physical E Ink window may schedule the last traversal after the
+        // fixed grace period. Wait for a natural draw before declaring loss.
+        int[] undrawn={0};long drawDeadline=SystemClock.uptimeMillis()+3000;
+        do {
+            test.runOnMainSync(()->undrawn[0]=pendingDraw.size());
+            if(undrawn[0]==0)break;
+            Thread.sleep(50);
+        }while(SystemClock.uptimeMillis()<drawDeadline);
         Map<String,Object> state=app.store.read();Model effective=Store.model(state);Model replay=new Model(state);
         Model.require(write(effective.json()).equals(write(replay.json())),"Incremental model differs from full replay");
         Model.require(effective.strokes.size()==1000,"Lost strokes: "+effective.strokes.size());
         @SuppressWarnings("unchecked") Map<String,Object>[] finalTileMetrics=new Map[]{null};
-        test.runOnMainSync(()->{Model.require(pendingDraw.isEmpty(),"Input never reached a draw");finalTileMetrics[0]=app.canvas.tileCacheMetrics();app.canvas.afterDraw=null;app.canvas.drawLatency=null;app.getWindow().removeOnFrameMetricsAvailableListener(listener);});frames.quitSafely();
+        test.runOnMainSync(()->{Model.require(pendingDraw.isEmpty(),"Input never reached a draw: "+pendingDraw.size()+" queued, last stroke "+(pendingDraw.isEmpty()?"none":pendingDraw.get(pendingDraw.size()-1)[2]+1));finalTileMetrics[0]=app.canvas.tileCacheMetrics();app.canvas.afterDraw=null;app.canvas.drawLatency=null;app.getWindow().removeOnFrameMetricsAvailableListener(listener);});frames.quitSafely();
         Map<String,Object> tileCache=object("tile_renders",metricDelta(finalTileMetrics[0],initialTileMetrics,"tileRenders"),"item_renders",metricDelta(finalTileMetrics[0],initialTileMetrics,"itemRenders"),"geometry_renders",metricDelta(finalTileMetrics[0],initialTileMetrics,"geometryRenders"),"path_command_reuses",metricDelta(finalTileMetrics[0],initialTileMetrics,"pathCommandReuses"),"transient_path_command_reuses",metricDelta(finalTileMetrics[0],initialTileMetrics,"transientPathCommandReuses"),"path_command_misses",metricDelta(finalTileMetrics[0],initialTileMetrics,"pathCommandMisses"),"path_command_evictions",metricDelta(finalTileMetrics[0],initialTileMetrics,"pathCommandEvictions"),"reused_tiles",metricDelta(finalTileMetrics[0],initialTileMetrics,"reusedTiles"),"current_bytes",finalTileMetrics[0].get("currentBytes"),"peak_bytes",finalTileMetrics[0].get("peakBytes"),"max_bytes",finalTileMetrics[0].get("maxBytes"),"path_command_bytes_estimate",finalTileMetrics[0].get("pathCommandBytesEstimate"),"path_command_points_estimate",finalTileMetrics[0].get("pathCommandPointsEstimate"),"max_path_command_bytes_estimate",finalTileMetrics[0].get("maxPathCommandBytesEstimate"),"max_path_command_points_estimate",finalTileMetrics[0].get("maxPathCommandPointsEstimate"));
         tileCache.put("reused_tile_repaints",metricDelta(finalTileMetrics[0],initialTileMetrics,"reusedTileRepaints"));
         try(java.io.FileOutputStream out=app.openFileOutput("performance-resources.json",0)){out.write(write(object("samples",resources,"sampling","Process counters sampled between every 100 strokes; cost is outside input latency but included in elapsed time. I/O counters are cumulative, not storage latency.")).getBytes("UTF-8"));}

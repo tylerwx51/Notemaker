@@ -12,6 +12,19 @@ import server_checks
 from topology_support import Link, Proxy, eventually, http
 
 class ProxyChecks(server_checks.ServerChecks):
+    def test_json_string_fast_path_and_escapes_round_trip(self):
+        with tempfile.TemporaryDirectory() as temp:
+            proxy=Proxy(Path(temp),'json-strings');self.addCleanup(proxy.stop)
+            values=['ordinary text','quote " and slash \\','line\nfeed','tab\tand snowman ☃']
+            proxy.cli('settings','-',value={'undo':values,'selected':values[1]})
+            saved=proxy.cli('log')
+            self.assertEqual(saved['undo'],values)
+            self.assertEqual(saved['selected'],values[1])
+            invalid=subprocess.run([str(CLI),'--proxy-file',str(proxy.descriptor_path),
+                                    '--document','json-strings','settings','-'],
+                                   input='{"selected":"raw\nnewline"}',text=True,capture_output=True,timeout=30)
+            self.assertNotEqual(invalid.returncode,0)
+
     def test_checkpoint_preserves_history_and_skips_pretruncate_journal(self):
         with tempfile.TemporaryDirectory() as temp:
             directory=Path(temp);proxy=Proxy(directory,'checkpoint-history')

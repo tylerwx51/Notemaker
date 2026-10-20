@@ -79,33 +79,47 @@ public final class Json {
         final String s; int i;
         Parser(String s){this.s=s;}
         IllegalArgumentException error(){return new IllegalArgumentException("Invalid JSON at offset "+i);}
-        void ws(){while(i<s.length()&&" \t\r\n".indexOf(s.charAt(i))>=0)i++;}
+        void ws(){while(i<s.length()){char c=s.charAt(i);if(c!=' '&&c!='\t'&&c!='\r'&&c!='\n')break;i++;}}
         boolean take(char c){ws();if(i<s.length()&&s.charAt(i)==c){i++;return true;}return false;}
         Object value(int depth){
             if(depth>64)throw error(); ws();if(i==s.length())throw error();char c=s.charAt(i);
             if(c=='"')return str();
             if(take('{')){Map<String,Object> m=object();if(take('}'))return m;do{ws();String k=str();if(!take(':')||m.containsKey(k))throw error();m.put(k,value(depth+1));}while(take(','));if(!take('}'))throw error();return m;}
             if(take('[')){List<Object>a=new ArrayList<>();if(take(']'))return a;do{a.add(value(depth+1));}while(take(','));if(!take(']'))throw error();return a;}
-            for(String token:new String[]{"true","false","null"})if(s.startsWith(token,i)){i+=token.length();return token.equals("null")?null:Boolean.valueOf(token);}
-            int start=i;while(i<s.length()&&"0123456789.eE+-".indexOf(s.charAt(i))>=0)i++;
-            String n=s.substring(start,i);if(!validNumber(n))throw error();
-            try{if(!n.contains(".")&&!n.contains("e")&&!n.contains("E"))return Long.valueOf(n);double d=Double.parseDouble(n);if(!Double.isFinite(d))throw error();return d;}catch(NumberFormatException e){throw error();}
+            if(c=='t'&&s.startsWith("true",i)){i+=4;return Boolean.TRUE;}
+            if(c=='f'&&s.startsWith("false",i)){i+=5;return Boolean.FALSE;}
+            if(c=='n'&&s.startsWith("null",i)){i+=4;return null;}
+            return number();
         }
-        boolean validNumber(String n){
-            int p=0,len=n.length();if(p<len&&n.charAt(p)=='-')p++;
-            if(p==len)return false;
-            if(n.charAt(p)=='0')p++;else{int first=p;while(p<len&&n.charAt(p)>='0'&&n.charAt(p)<='9')p++;if(p==first)return false;}
-            if(p<len&&n.charAt(p)=='.'){int first=++p;while(p<len&&n.charAt(p)>='0'&&n.charAt(p)<='9')p++;if(p==first)return false;}
-            if(p<len&&(n.charAt(p)=='e'||n.charAt(p)=='E')){p++;if(p<len&&(n.charAt(p)=='+'||n.charAt(p)=='-'))p++;int first=p;while(p<len&&n.charAt(p)>='0'&&n.charAt(p)<='9')p++;if(p==first)return false;}
-            return p==len;
+        private boolean digit(char c){return c>='0'&&c<='9';}
+        Object number(){
+            int start=i,len=s.length();if(i<len&&s.charAt(i)=='-')i++;
+            if(i==len)throw error();
+            if(s.charAt(i)=='0')i++;
+            else {int first=i;while(i<len&&digit(s.charAt(i)))i++;if(i==first)throw error();}
+            boolean decimal=false;
+            if(i<len&&s.charAt(i)=='.'){
+                decimal=true;int first=++i;while(i<len&&digit(s.charAt(i)))i++;if(i==first)throw error();
+            }
+            if(i<len&&(s.charAt(i)=='e'||s.charAt(i)=='E')){
+                decimal=true;i++;if(i<len&&(s.charAt(i)=='+'||s.charAt(i)=='-'))i++;
+                int first=i;while(i<len&&digit(s.charAt(i)))i++;if(i==first)throw error();
+            }
+            try {
+                String n=s.substring(start,i);
+                if(!decimal)return Long.valueOf(n);
+                double d=Double.parseDouble(n);if(!Double.isFinite(d))throw error();return d;
+            }catch(NumberFormatException e){throw error();}
         }
         String str(){
-            if(i>=s.length()||s.charAt(i++)!='"')throw error();StringBuilder b=new StringBuilder();
-            while(i<s.length()){char c=s.charAt(i++);if(c=='"')return b.toString();if(c<32)throw error();
-                if(c=='\\'){if(i==s.length())throw error();c=s.charAt(i++);switch(c){
+            if(i>=s.length()||s.charAt(i++)!='"')throw error();int start=i;StringBuilder b=null;
+            while(i<s.length()){char c=s.charAt(i++);
+                if(c=='"')return b==null?s.substring(start,i-1):b.append(s,start,i-1).toString();
+                if(c<32)throw error();
+                if(c=='\\'){if(b==null)b=new StringBuilder();b.append(s,start,i-1);if(i==s.length())throw error();c=s.charAt(i++);switch(c){
                     case '"':case '\\':case '/':break;case 'b':c='\b';break;case 'f':c='\f';break;case 'n':c='\n';break;case 'r':c='\r';break;case 't':c='\t';break;
                     case 'u':if(i+4>s.length())throw error();try{c=(char)Integer.parseInt(s.substring(i,i+4),16);}catch(NumberFormatException e){throw error();}i+=4;break;default:throw error();}}
-                b.append(c);
+                if(b!=null){b.append(c);start=i;}
             }throw error();
         }
     }

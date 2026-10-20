@@ -1,0 +1,185 @@
+{
+  "date": "2026-10-20",
+  "device": "NoteAir6C, Android 16 (API 36)",
+  "warmup_per_run": 2,
+  "runs": [
+    {
+      "name": "tablet-checkpoint-load-phases-1",
+      "samples": 10,
+      "isolated_apk_sha256": "57375a91c4a18fc23c03f01c5d97c05f5c56eacac8fa53c6719a237cbd95e5f3",
+      "android_total_ms": {
+        "median": 1387.5,
+        "p95": 1454,
+        "min": 1356,
+        "max": 1454
+      },
+      "process_cpu_ms": {
+        "median": 2400.0,
+        "p95": 2480.0,
+        "min": 2330.0,
+        "max": 2480.0
+      },
+      "pss_kib": {
+        "median": 175322.0,
+        "p95": 175794,
+        "min": 168483,
+        "max": 175794
+      },
+      "host_start_wall_ms": {
+        "median": 1478.8177355,
+        "p95": 1549.648454,
+        "min": 1441.895705,
+        "max": 1549.648454
+      },
+      "rchar_median": 3057696.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 723.7767185
+    },
+    {
+      "name": "tablet-json-parser-1",
+      "samples": 10,
+      "isolated_apk_sha256": "6538e7213f4c5eafefb5416cf51ad48b9269e85b0e162b4207d0880909bf0385",
+      "android_total_ms": {
+        "median": 1171.0,
+        "p95": 1206,
+        "min": 1134,
+        "max": 1206
+      },
+      "process_cpu_ms": {
+        "median": 2150.0,
+        "p95": 2230.0,
+        "min": 2060.0,
+        "max": 2230.0
+      },
+      "pss_kib": {
+        "median": 170125.5,
+        "p95": 170352,
+        "min": 163182,
+        "max": 170352
+      },
+      "host_start_wall_ms": {
+        "median": 1264.807616,
+        "p95": 1286.652903,
+        "min": 1228.515242,
+        "max": 1286.652903
+      },
+      "rchar_median": 3057758.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 486.059531
+    },
+    {
+      "name": "tablet-json-parser-2",
+      "samples": 10,
+      "isolated_apk_sha256": "1b7276b691a618e0a151f16bda99bbe9ec0abd11524914a46bae21239c30a62c",
+      "android_total_ms": {
+        "median": 1164.5,
+        "p95": 1188,
+        "min": 1138,
+        "max": 1188
+      },
+      "process_cpu_ms": {
+        "median": 2160.0,
+        "p95": 2200.0,
+        "min": 2120.0,
+        "max": 2200.0
+      },
+      "pss_kib": {
+        "median": 166601.0,
+        "p95": 170319,
+        "min": 163187,
+        "max": 170319
+      },
+      "host_start_wall_ms": {
+        "median": 1254.9692559999999,
+        "p95": 1297.207713,
+        "min": 1231.309774,
+        "max": 1297.207713
+      },
+      "rchar_median": 3057770.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 485.83026
+    },
+    {
+      "name": "tablet-checkpoint-scheduling-baseline-1",
+      "samples": 10,
+      "isolated_apk_sha256": "1449dbd76f761eccbabceca2bdb55c88cb962d80dca472d7b0058b6866533a54",
+      "android_total_ms": {
+        "median": 1660.0,
+        "p95": 1698,
+        "min": 1623,
+        "max": 1698
+      },
+      "process_cpu_ms": {
+        "median": 2665.0,
+        "p95": 2760.0,
+        "min": 2600.0,
+        "max": 2760.0
+      },
+      "pss_kib": {
+        "median": 205086.0,
+        "p95": 205284,
+        "min": 198093,
+        "max": 205284
+      },
+      "host_start_wall_ms": {
+        "median": 1755.3869009999999,
+        "p95": 1786.63825,
+        "min": 1723.991733,
+        "max": 1786.63825
+      },
+      "rchar_median": 5477168.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0
+    },
+    {
+      "name": "tablet-json-parser-wal-1",
+      "samples": 10,
+      "isolated_apk_sha256": "801b1708dac44b6994e4990531bbb4df4174043882f43ca9ec40c91b4dbfff8f",
+      "android_total_ms": {
+        "median": 1359.5,
+        "p95": 1417,
+        "min": 1340,
+        "max": 1417
+      },
+      "process_cpu_ms": {
+        "median": 2370.0,
+        "p95": 2470.0,
+        "min": 2330.0,
+        "max": 2470.0
+      },
+      "pss_kib": {
+        "median": 186115.0,
+        "p95": 186229,
+        "min": 179004,
+        "max": 186229
+      },
+      "host_start_wall_ms": {
+        "median": 1444.2359000000001,
+        "p95": 1516.052212,
+        "min": 1429.117377,
+        "max": 1516.052212
+      },
+      "rchar_median": 5477295.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 1.3211460000000002
+    }
+  ],
+  "foreground_stroke_run": {
+    "name": "tablet-json-parser-strokes-2",
+    "isolated_apk_sha256": "90d889fb8ae7beabd459282a2b37f15d90b6643fe180f9ba1d21e62a4efb8b8a",
+    "strokes": 1000,
+    "incremental_matches_replay": true,
+    "stroke_input_to_draw_p95_ms": 69.741459,
+    "final_window_input_to_draw_p95_ms": 49.441927,
+    "final_window_frame_p95_ms": 91.713144,
+    "elapsed_seconds": 304.370361811,
+    "process_cpu_delta_ms": 311217,
+    "post_run_pss_kib": 273398,
+    "charged_write_delta_bytes": 39768064,
+    "logical_read_delta_bytes": 26728198
+  }
+}
