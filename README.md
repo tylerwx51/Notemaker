@@ -644,11 +644,13 @@ nix-shell --run 'python3 tests/plot_drawing_latency.py'
 The interaction suite times 60 synthetic pans, 40 viewport zoom redraws,
 40 tool switches, 40 switches to an empty second layer, and 12 warm reopens of
 the same disposable note. It excludes five warmup actions per mode except two
-for reopens. It records handler, input-to-app-draw, and window-frame timing,
-plus process CPU, memory, and I/O snapshots around each mode and after a
-requested GC. Zoom redraw changes the viewport scale directly, so it excludes
-pinch recognition. Note reopens call the Activity's load path without opening
-the document chooser. For note-free per-mode summaries, run
+for reopens. It records handler, input-to-canvas-draw, first window UI-draw,
+and window-frame timing, plus process CPU, memory, and I/O snapshots around
+each mode and after a requested GC. Zoom redraw changes the viewport scale
+directly, so it excludes pinch recognition. Note reopens call the Activity's
+load path without opening the document chooser. Layer switches use the first
+window UI draw as their visible feedback measure because the canvas may not
+change. For note-free per-mode summaries, run
 `nix-shell --run 'python3 tests/summarize_editor_actions.py OUTPUT.json RUN1 RUN2'`.
 For paired comparisons of the earlier three-mode suite, run
 `nix-shell --run 'python3 tests/summarize_interaction_performance.py

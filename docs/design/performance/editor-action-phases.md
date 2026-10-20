@@ -23,3 +23,10 @@ time inside `load()`. This is one physical run, and p95 values from separate
 phases are not additive. Sanitized counters and APK hash are in
 [`editor-action-phases.json`](editor-action-phases.json). No physical finger
 sampling or E Ink scanout was measured.
+
+The harness now also records the first window UI draw. This avoids waiting for
+an incidental later Canvas draw when an action changes only editor chrome. On
+the preferred renderer, a separate physical run measured layer-switch UI-draw
+p50/p95 of 24.9/49.4 ms, close to the earlier Canvas-draw result. Its note-free
+metrics and APK hash are in
+[`editor-ui-draw-baseline.json`](editor-ui-draw-baseline.json).
