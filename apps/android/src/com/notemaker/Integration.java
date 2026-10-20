@@ -51,7 +51,7 @@ public class Integration extends Instrumentation {
             if(action.equals("performance")){
                 String metrics=com.notemaker.core.Json.write(Performance.run(this,app));
                 try(java.io.FileOutputStream out=app.openFileOutput("performance.json",0)){out.write(metrics.getBytes("UTF-8"));}
-                result.putString("stream","PASS performance\n"+metrics+"\n");finish(Activity.RESULT_OK,result);return;
+                result.putString("stream","PASS performance; metrics saved to performance.json\n");finish(Activity.RESULT_OK,result);return;
             }
             ReplicaService.writes.submit(()->{}).get(30,java.util.concurrent.TimeUnit.SECONDS);
             java.lang.Process child=null;

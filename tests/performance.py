@@ -92,6 +92,10 @@ with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
         assert 'PASS performance' in output, output
         metrics = json.loads(adb('shell', 'run-as', 'com.notemaker', 'cat', 'files/performance.json'))
         (OUT/'metrics.json').write_text(json.dumps(metrics, indent=2))
+        resources = json.loads(adb('shell', 'run-as', 'com.notemaker', 'cat', 'files/performance-resources.json'))
+        (OUT/'resources.json').write_text(json.dumps(resources, indent=2))
+        assert [sample['strokes'] for sample in resources['samples']] == list(range(0, 1001, 100))
+        assert all(sample['pss_kib'] > 0 for sample in resources['samples'])
         print(json.dumps(metrics, indent=2), flush=True)
         check(metrics)
         adb('shell', 'am', 'force-stop', 'com.notemaker')

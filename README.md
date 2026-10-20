@@ -617,8 +617,21 @@ then uninstalls that package. The original app's note and settings are preserved
 Output directories must be fresh; all captures and raw metrics stay private
 under `.test-artifacts`. Use `--mode item` for whole-item erasing.
 
+The same isolated package can run 1,000 synthetic stylus strokes without a note
+archive. It records input-to-draw and frame timings in `metrics.json`, plus
+process PSS, private dirty memory, Java/native heap, CPU time, and cumulative
+`/proc/self/io` counters every 100 strokes in `resources.json`. The process
+counters are sampled between strokes. The stroke grid wraps within the current
+canvas viewport, so its overlap pattern depends on screen size. These counters
+do not measure physical E Ink scanout or storage latency. The harness checks the
+durable strokes after restarting the isolated package. It also saves the device
+model, build fingerprint, revision, source APK hash, and source diff summary in
+`metadata.json`.
+
 ```sh
 nix-shell --run 'apps/cli/build.sh && apps/android/build.sh'
+nix-shell --run 'python3 tests/tablet_erase_latency.py --synthetic-strokes --serial SERIAL --output .test-artifacts/latency/strokes-run'
+nix-shell --run 'python3 tests/summarize_performance.py .test-artifacts/latency/strokes-run docs/design/performance/strokes-candidate.json'
 nix-shell --run 'python3 tests/tablet_erase_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/ui-run'
 # Coverage retention memory or exact old/new geometry parity on a disposable replica:
 nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --android-jar apps/cli/build/notemaker-android.jar --probe CacheFootprintProbe --output .test-artifacts/latency/memory-run'

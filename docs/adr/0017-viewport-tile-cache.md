@@ -66,4 +66,10 @@ stayed under 30 ms, with p95 17.38 ms and maximum 22.54 ms. The run recorded
 5.67 MiB of command data under the 24 MiB admission budget. Replay and restart
 checks passed against an uncullled same-tier reference with exact pixel
 equality. Software canvas measurements do not establish BOOX E Ink refresh
-latency or stylus behavior; those still require hardware validation.
+latency or stylus behavior; those still require hardware validation. A later
+isolated 1,000-stroke run on the physical NoteAir6C passed durability and
+restart checks but measured 82.2 ms p95 from synthetic event enqueue to app
+draw, with 438 MiB peak sampled process PSS. The workload wraps to the actual
+canvas viewport, so its geometry differs from the earlier emulator run. See
+`docs/design/performance/tablet-strokes-baseline.md` for resource and I/O
+measurements. Physical pen sampling and E Ink scanout remain unmeasured.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Measure real eraser input to updated Canvas draw in an isolated Android package."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,18 +18,29 @@ PACKAGE='com.notemaker.latency'
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serial',required=True)
-    parser.add_argument('--archive',type=Path,required=True)
-    parser.add_argument('--document',required=True)
+    parser.add_argument('--archive',type=Path)
+    parser.add_argument('--document')
+    parser.add_argument('--synthetic-strokes',action='store_true',help='Measure 1,000 synthetic strokes and process resources without a note archive')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
     parser.add_argument('--mode',choices=['partial','item'],default='partial')
     args=parser.parse_args()
+    if not args.synthetic_strokes and (not args.archive or not args.document): parser.error('--archive and --document are required for erasing')
     if not os.environ.get('IN_NIX_SHELL'): parser.error('Run through nix-shell')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False,mode=0o700)
     adb=['adb','-s',args.serial]
     def call(*cmd,**kw): return subprocess.check_output(adb+list(cmd),timeout=kw.get('timeout',60))
+    metadata={'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
+              'source_changes':subprocess.check_output(['git','diff','--stat'],cwd=ROOT,text=True),
+              'synthetic_strokes':args.synthetic_strokes,'compile_speed':args.compile_speed}
+    for prop in ('ro.product.model','ro.build.version.sdk','ro.build.fingerprint'):
+        metadata[prop]=call('shell','getprop',prop).decode().strip()
+    (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
     if ('package:'+PACKAGE) in call('shell','pm','list','packages',PACKAGE).decode().splitlines(): raise RuntimeError('Isolated package already exists')
     sdk=Path(os.environ['ANDROID_HOME']);build=sdk/'build-tools/36.0.0';platform=sdk/'platforms/android-36/android.jar'
+    with (ROOT/'apps/android/build/notemaker.apk').open('rb') as source_apk:
+        metadata['source_apk_sha256']=hashlib.file_digest(source_apk,'sha256').hexdigest()
+    (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
     classes=out/'classes';shutil.copytree(ROOT/'apps/android/build/classes',classes)
     source=(ROOT/'apps/android/src/com/notemaker/ReplicaService.java').read_text()
     assert 'new LocalProxy(context.getFilesDir(),8766)' in source
@@ -51,7 +63,8 @@ def main():
     subprocess.run([str(build/'zipalign'),'-f','4',str(out/'base.apk'),str(apk)],check=True)
     subprocess.run([str(build/'apksigner'),'sign','--ks',str(ROOT/'apps/android/build/debug.keystore'),'--ks-pass','pass:android',str(apk)],check=True)
     capture=out/'capture'
-    with tarfile.open(args.archive) as archive: archive.extractall(capture,filter='data')
+    if args.archive and not args.synthetic_strokes:
+        with tarfile.open(args.archive) as archive: archive.extractall(capture,filter='data')
     replica=out/'replica';(replica/'files').mkdir(parents=True);(replica/'shared_prefs').mkdir()
     found=False
     for file in (capture/'files').glob('document-*.json'):
@@ -60,9 +73,9 @@ def main():
             journal=Path(str(file)+'.journal')
             if journal.exists(): shutil.copy(journal,replica/'files'/journal.name)
             found=True
-    assert found,'Document absent'
+    assert found or args.synthetic_strokes,'Document absent'
     prefs=ET.Element('map')
-    for key,value in [('document',args.document),('host','')]: ET.SubElement(prefs,'string',name=key).text=value
+    for key,value in [('document',args.document or 'synthetic-performance'),('host','')]: ET.SubElement(prefs,'string',name=key).text=value
     ET.ElementTree(prefs).write(replica/'shared_prefs/settings.xml',encoding='utf-8')
     remote='/data/local/tmp/notemaker-ui-latency-'+uuid.uuid4().hex
     installed=False
@@ -70,12 +83,29 @@ def main():
         call('install','--no-incremental',str(apk));installed=True
         if args.compile_speed: (out/'compile.txt').write_bytes(call('shell','cmd','package','compile','-m','speed','-f',PACKAGE,timeout=180))
         call('push',str(replica),remote)
-        call('shell','run-as',PACKAGE,'cp','-r',remote+'/files',remote+'/shared_prefs','.')
+        sources=[remote+'/shared_prefs'] if args.synthetic_strokes else [remote+'/files',remote+'/shared_prefs']
+        call('shell','run-as',PACKAGE,'cp','-r',*sources,'.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')
-        output=call('shell','am','instrument','-w','-e','action','erase-performance','-e','mode',args.mode,PACKAGE+'/com.notemaker.Integration',timeout=240).decode()
+        action='performance' if args.synthetic_strokes else 'erase-performance'
+        output=call('shell','am','instrument','-w','-e','action',action,'-e','mode',args.mode,PACKAGE+'/com.notemaker.Integration',timeout=600).decode()
         (out/'instrumentation.txt').write_text(output)
-        assert 'PASS erase-performance' in output,output
-        (out/'metrics.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/erase-performance.json'))
+        assert 'PASS '+action in output,output
+        (out/'metrics.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/'+action+'.json'))
+        if args.synthetic_strokes:
+            (out/'resources.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/performance-resources.json'))
+            report=json.loads((out/'metrics.json').read_text())
+            resources=json.loads((out/'resources.json').read_text())['samples']
+            assert report['strokes']==1000 and report['incremental_matches_replay']
+            assert [sample['strokes'] for sample in resources]==list(range(0,1001,100))
+            assert all(sample['pss_kib']>0 for sample in resources)
+            call('shell','am','force-stop',PACKAGE)
+            reopened=call('shell','am','instrument','-w','-e','action','state',PACKAGE+'/com.notemaker.Integration',timeout=120).decode()
+            (out/'reopened.txt').write_text(reopened)
+            assert 'PASS state' in reopened,reopened
+            state=json.loads(call('shell','run-as',PACKAGE,'cat','files/integration.json'))
+            assert state['strokes']==1000
+            print(json.dumps({key:report[key] for key in ('stroke_latency','drain_ms','max_save_queue')}))
+            return
         report=json.loads((out/'metrics.json').read_text());samples=report['samples']
         summary={'samples':len(samples),'geometry_restored':report['geometry_restored']}
         for key in ['input_to_feedback_ms','input_to_updated_draw_ms']:
@@ -83,6 +113,10 @@ def main():
                 values=sorted(s[key] for s in samples);summary[key+'_p95']=values[int(.95*len(values))]
         print(json.dumps(summary))
     finally:
+        if installed and args.synthetic_strokes and not (out/'metrics.json').exists():
+            for name,local in [('performance.json','metrics.json'),('performance-resources.json','resources.json')]:
+                try: (out/local).write_bytes(call('shell','run-as',PACKAGE,'cat','files/'+name))
+                except subprocess.CalledProcessError: pass
         (out/'logcat.txt').write_bytes(call('logcat','-d','-s','AndroidRuntime','NoteMaker','NoteMakerPerformance'))
         if installed: call('uninstall',PACKAGE)
         call('shell','rm','-rf',remote)
