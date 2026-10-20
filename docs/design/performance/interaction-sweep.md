@@ -28,3 +28,12 @@ scanout. The emulator tool-switch regression passed, including selection lease
 release and preview cancellation. Sanitized counters and APK hashes are in
 [`interaction-sweep.json`](interaction-sweep.json); note contents and raw timing
 records remain under `.test-artifacts/hillclimb/`.
+
+One additional physical 1,000-stroke run on this branch passed incremental
+replay and restart durability checks. Overall input-to-app-draw p95 was 68.6 ms,
+compared with 72.5 ms on the preceding live-map branch; final-window app draw
+p95 was 50.3 versus 50.7 ms and frame p95 was 90.9 versus 92.9 ms. Peak sampled
+PSS was 285 versus 274 MiB, while charged writes were 37.3 versus 39.4 MiB.
+These single-run stroke differences are within likely run variation and do not
+establish another improvement or a memory regression. The sanitized run is in
+[`tablet-interaction-strokes.json`](tablet-interaction-strokes.json).
