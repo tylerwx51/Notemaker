@@ -597,6 +597,7 @@ public class MainActivity extends Activity {
         }
         // Cache settled ink in document-space tiles; pan reuses tiles and zoom selects a raster tier.
         final TileInkCache tileInk=new TileInkCache();
+        final Map<String,TileInkCache.Item> strokeTileItems=new HashMap<>();
         final Map<String,Map<String,Object>> objectTileSources=new HashMap<>();
         final Map<String,TileInkCache.Item> objectTileItems=new HashMap<>();
         String inkTransform="";int rasterTier=1;
@@ -614,7 +615,8 @@ public class MainActivity extends Activity {
         RectF documentViewport(){RectF viewport=new RectF(Math.min(x(0),x(getWidth())),Math.min(y(0),y(getHeight())),Math.max(x(0),x(getWidth())),Math.max(y(0),y(getHeight())));if(!type.equals("infinite")&&!viewport.intersect(0,0,1000,1400))viewport.setEmpty();return viewport;}
         void settledInk(Canvas c,String layer){
             ArrayList<TileInkCache.Item> visible=new ArrayList<>();
-            for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer))visible.add(new TileInkCache.Item(e.getKey(),stroke));}
+            for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)){TileInkCache.Item cached=strokeTileItems.get(e.getKey());if(cached==null||cached.value!=stroke){cached=new TileInkCache.Item(e.getKey(),stroke);strokeTileItems.put(e.getKey(),cached);}visible.add(cached);}}
+            strokeTileItems.keySet().retainAll(model.strokes.keySet());
             // Live ink uses the same transparent layer, item order and compositing
             // as committed ink. Switching to saved state must not change pixels.
             if(layer.equals(selected)&&points!=null&&current!=null)visible.add(new TileInkCache.Item(current,strokeValue(),false));
@@ -632,7 +634,7 @@ public class MainActivity extends Activity {
             if(getWidth()==0||getHeight()==0)return;
             tileInk.beginFrame();
             String key=document+"/"+page+"/"+type;
-            if(!key.equals(inkTransform)){tileInk.clear();inkTransform=key;objectTileSources.clear();objectTileItems.clear();}
+            if(!key.equals(inkTransform)){tileInk.clear();inkTransform=key;strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();}
             rasterTier=TileInkCache.densityTier(scale()*zoom);
             c.save();transform(c);if(!type.equals("infinite")){paint.setColor(0xffaaaaaa);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);c.drawRect(0,0,1000,1400,paint);paint.setStyle(Paint.Style.FILL);}c.restore();
             boolean previewing=false;for(Object raw:transformPreviews.values())try{if(((Number)Json.map(raw).getOrDefault("expires",0)).longValue()>System.currentTimeMillis()){previewing=true;break;}}catch(Exception ignored){}
@@ -656,7 +658,7 @@ public class MainActivity extends Activity {
             if(shapeDragging&&drawingShape!=null&&!drawingShape.equals("text")){float dx=shapeEndX-shapeStartX,dy=shapeEndY-shapeStartY,left=Math.min(shapeStartX,shapeEndX),top=Math.min(shapeStartY,shapeEndY),w=Math.abs(dx),h=Math.abs(dy);if(drawingShape.equals("line")||drawingShape.equals("arrow")){left=shapeStartX;top=shapeStartY;w=dx;h=dy;if(Math.abs(w)+Math.abs(h)<1){w=1;h=1;}}else{w=Math.max(12,w);h=Math.max(12,h);if(!type.equals("infinite")){left=Math.max(0,Math.min(1000-w,left));top=Math.max(0,Math.min(1400-h,top));}}JSONObject preview=objectValue(drawingShape,left,top,w,h,color,width,objectFillColor);c.save();transform(c);Render.drawObject(model,Json.map(Json.parse(preview.toString())),new com.notemaker.cli.Png(c));c.restore();}
             if(eraseTimings!=null)eraseTimings.put("draw_done",System.nanoTime());if(afterDraw!=null)afterDraw.run();
         }}
-        @Override protected void onDetachedFromWindow(){tileInk.clear();objectTileSources.clear();objectTileItems.clear();super.onDetachedFromWindow();}
+        @Override protected void onDetachedFromWindow(){tileInk.clear();strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();super.onDetachedFromWindow();}
         JSONObject stroke(){return obj("kind","stroke","stroke",current,"layer",selected,"page",page,"color",color,"width",width,"brush",brush,"material",material,"points",points);}
         Map<String,Object> strokeValue(){
             ArrayList<Object> coordinates=new ArrayList<>(points.length());

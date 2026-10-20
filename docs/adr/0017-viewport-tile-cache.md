@@ -89,3 +89,9 @@ The direct-bitmap submission experiment on `perf/direct-tile-bitmaps` retains
 the same tile gutter and exact emulator pixel results. Two physical runs showed
 a small app-draw improvement without a material frame-time change; see
 `docs/design/performance/direct-tile-bitmaps.md`.
+The `perf/settled-stroke-items` branch also reuses settled-stroke bounds and
+tile item wrappers while their immutable model maps retain identity. Changed
+maps rebuild their wrappers, and removed strokes, document changes, and view
+detachment release them. Two physical runs reduced final-window input-to-draw
+p95 from 49.6–52.0 ms to 32.2–32.3 ms without changing the roughly 91 ms
+window-frame p95; see `docs/design/performance/settled-stroke-items.md`.
