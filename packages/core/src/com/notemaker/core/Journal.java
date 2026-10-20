@@ -100,8 +100,39 @@ final class Journal {
         List<Object> added=new ArrayList<>(),removed=new ArrayList<>();
         for(String id:before.keySet())if(!after.containsKey(id))removed.add(id);
         for(Map.Entry<String,Object> e:after.entrySet()){if(!before.containsKey(e.getKey()))added.add(e.getValue());else Model.require(before.get(e.getKey()).equals(e.getValue()),"Pending operations are immutable");}
-        Map<String,Object> meta=object();for(Map.Entry<String,Object> e:next.entrySet())if(!Arrays.asList("events","pending","relay","revision").contains(e.getKey())&&!Objects.equals(state.get(e.getKey()),e.getValue()))meta.put(e.getKey(),e.getValue());
-        return object("revision",((Number)state.get("revision")).longValue()+1,"events",new ArrayList<>(newEvents.subList(oldEvents.size(),newEvents.size())),"added",added,"removed",removed,"meta",meta);
+        Map<String,Object> history=historyDifference(map(state.get("actors")),map(next.get("actors")));
+        Map<String,Object> listChanges=object();
+        for(String key:Arrays.asList("undo","redo"))if(next.containsKey(key)&&state.containsKey(key)&&!Objects.equals(state.get(key),next.get(key)))listChanges.put(key,historySplice(list(state.get(key)),list(next.get(key))));
+        Map<String,Object> meta=object();for(Map.Entry<String,Object> e:next.entrySet())if(!Arrays.asList("events","pending","relay","revision").contains(e.getKey())&&!Objects.equals(state.get(e.getKey()),e.getValue())){
+            if(!e.getKey().equals("actors")||history==null)meta.put(e.getKey(),e.getValue());
+        }
+        for(String key:listChanges.keySet())meta.remove(key);
+        Map<String,Object> delta=object("revision",((Number)state.get("revision")).longValue()+1,"events",new ArrayList<>(newEvents.subList(oldEvents.size(),newEvents.size())),"added",added,"removed",removed,"meta",meta);
+        if(history!=null&&!history.isEmpty())delta.put("history",history);
+        if(!listChanges.isEmpty())delta.put("lists",listChanges);
+        return delta;
+    }
+    /** Append only the changed suffix of each actor's history; fall back for unknown metadata. */
+    private static Map<String,Object> historyDifference(Map<String,Object> before,Map<String,Object> after){
+        Map<String,Object> result=object();
+        for(String actor:before.keySet())if(!after.containsKey(actor))return null;
+        for(Map.Entry<String,Object> entry:after.entrySet()){
+            String actor=entry.getKey();Map<String,Object> prior=before.containsKey(actor)?map(before.get(actor)):object();
+            Map<String,Object> current=map(entry.getValue());
+            Map<String,Object> oldExtra=new LinkedHashMap<>(prior),newExtra=new LinkedHashMap<>(current);
+            oldExtra.remove("undo");oldExtra.remove("redo");newExtra.remove("undo");newExtra.remove("redo");
+            if(!oldExtra.equals(newExtra))return null;
+            List<Object> oldUndo=list(prior.getOrDefault("undo",Collections.emptyList())),newUndo=list(current.getOrDefault("undo",Collections.emptyList()));
+            List<Object> oldRedo=list(prior.getOrDefault("redo",Collections.emptyList())),newRedo=list(current.getOrDefault("redo",Collections.emptyList()));
+            Map<String,Object> undo=historySplice(oldUndo,newUndo),redo=historySplice(oldRedo,newRedo);
+            if(!before.containsKey(actor)&&undo.isEmpty()&&redo.isEmpty())return null;
+            if(!undo.isEmpty()||!redo.isEmpty())result.put(actor,object("undo",undo,"redo",redo));
+        }
+        return result;
+    }
+    private static Map<String,Object> historySplice(List<Object> before,List<Object> after){
+        int shared=0;while(shared<before.size()&&shared<after.size()&&Objects.equals(before.get(shared),after.get(shared)))shared++;
+        return shared==before.size()&&shared==after.size()?object():object("pop",before.size()-shared,"add",new ArrayList<>(after.subList(shared,after.size())));
     }
     private void apply(Map<String,Object> delta){
         long revision=((Number)delta.get("revision")).longValue();
@@ -114,6 +145,25 @@ final class Journal {
         if(!events.isEmpty()||!removed.isEmpty()){
             effective=new Model(committed);for(Object op:list(state.get("pending")))effective.apply(map(op));
         }else for(Object op:added)effective.apply(map(op));
-        state.putAll(map(delta.get("meta")));state.put("revision",revision);
+        state.putAll(map(delta.get("meta")));
+        for(Map.Entry<String,Object> entry:map(delta.getOrDefault("lists",object())).entrySet()){
+            Model.require(entry.getKey().equals("undo")||entry.getKey().equals("redo"),"Invalid settings list splice");
+            applySplice(list(state.get(entry.getKey())),map(entry.getValue()));
+        }
+        for(Map.Entry<String,Object> entry:map(delta.getOrDefault("history",object())).entrySet()){
+            Map<String,Object> actors=map(state.get("actors"));
+            Map<String,Object> actor=map(actors.computeIfAbsent(entry.getKey(),k->object("undo",new ArrayList<>(),"redo",new ArrayList<>())));
+            Map<String,Object> changes=map(entry.getValue());
+            for(String stack:Arrays.asList("undo","redo")){
+                Map<String,Object> change=map(changes.get(stack));if(change.isEmpty())continue;
+                applySplice(list(actor.get(stack)),change);
+            }
+        }
+        state.put("revision",revision);
+    }
+    private static void applySplice(List<Object> values,Map<String,Object> change){
+        int pop=((Number)change.get("pop")).intValue();
+        Model.require(pop>=0&&pop<=values.size(),"Invalid history splice");
+        values.subList(values.size()-pop,values.size()).clear();values.addAll(list(change.get("add")));
     }
 }

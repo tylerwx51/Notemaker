@@ -1,0 +1,317 @@
+{
+  "source_revision": "731d2fb58916209df9df1ebf240ac01563dd78dc",
+  "source_apk_sha256": "8e9dc3bf7e1d023893d097ede2dc1ba79f797e4c5cc7faa5dda40041ec9f34c5",
+  "device_model": "NoteAir6C",
+  "android_api": "36",
+  "workload": {
+    "strokes": 1000,
+    "short_stroke_points": 50,
+    "figure_eight_points": 500,
+    "viewport_wrapped": true
+  },
+  "latency_ms": {
+    "stroke_latency": {
+      "over_30_ms": 5476,
+      "samples": 7920,
+      "p50_ms": 50.717812,
+      "p95_ms": 80.586094,
+      "p99_ms": 93.899583,
+      "max_ms": 119.310469
+    },
+    "down_latency": {
+      "over_30_ms": 196,
+      "samples": 990,
+      "p50_ms": 25.054948,
+      "p95_ms": 38.165573,
+      "p99_ms": 51.864114,
+      "max_ms": 58.911979
+    },
+    "move_latency": {
+      "over_30_ms": 4560,
+      "samples": 5940,
+      "p50_ms": 54.075573,
+      "p95_ms": 81.193386,
+      "p99_ms": 93.899583,
+      "max_ms": 119.310469
+    },
+    "up_latency": {
+      "over_30_ms": 720,
+      "samples": 990,
+      "p50_ms": 50.253177,
+      "p95_ms": 88.888594,
+      "p99_ms": 98.474688,
+      "max_ms": 107.359063
+    },
+    "figure_eight_latency": {
+      "over_30_ms": 60,
+      "samples": 80,
+      "p50_ms": 46.756354,
+      "p95_ms": 86.487448,
+      "p99_ms": 116.90276,
+      "max_ms": 116.90276
+    }
+  },
+  "windows": [
+    {
+      "strokes": "1-100 (10 warmup)",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 720,
+        "p50_ms": 0.970573,
+        "p95_ms": 7.084427,
+        "p99_ms": 9.505885,
+        "max_ms": 14.017709
+      },
+      "dispatch": {
+        "over_30_ms": 167,
+        "samples": 720,
+        "p50_ms": 10.417083,
+        "p95_ms": 45.104531,
+        "p99_ms": 49.029792,
+        "max_ms": 51.468542
+      },
+      "input_to_draw": {
+        "over_30_ms": 94,
+        "samples": 649,
+        "p50_ms": 21.780938,
+        "p95_ms": 41.828333,
+        "p99_ms": 48.04151,
+        "max_ms": 53.180729
+      },
+      "frame": {
+        "over_30_ms": 626,
+        "samples": 657,
+        "p50_ms": 61.439278,
+        "p95_ms": 90.665835,
+        "p99_ms": 91.910381,
+        "max_ms": 92.499747
+      }
+    },
+    {
+      "strokes": "401-500",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 800,
+        "p50_ms": 0.773021,
+        "p95_ms": 7.185208,
+        "p99_ms": 9.423385,
+        "max_ms": 11.277395
+      },
+      "dispatch": {
+        "over_30_ms": 269,
+        "samples": 800,
+        "p50_ms": 21.99526,
+        "p95_ms": 47.316718,
+        "p99_ms": 51.103958,
+        "max_ms": 54.024895
+      },
+      "input_to_draw": {
+        "over_30_ms": 132,
+        "samples": 711,
+        "p50_ms": 24.375052,
+        "p95_ms": 48.392031,
+        "p99_ms": 54.352292,
+        "max_ms": 64.246042
+      },
+      "frame": {
+        "over_30_ms": 705,
+        "samples": 713,
+        "p50_ms": 89.868091,
+        "p95_ms": 93.727071,
+        "p99_ms": 94.42346,
+        "max_ms": 95.191177
+      }
+    },
+    {
+      "strokes": "901-1000",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 800,
+        "p50_ms": 0.511718,
+        "p95_ms": 2.65349,
+        "p99_ms": 3.384114,
+        "max_ms": 14.682396
+      },
+      "dispatch": {
+        "over_30_ms": 193,
+        "samples": 800,
+        "p50_ms": 19.659167,
+        "p95_ms": 40.107344,
+        "p99_ms": 47.306667,
+        "max_ms": 61.71974
+      },
+      "input_to_draw": {
+        "over_30_ms": 445,
+        "samples": 651,
+        "p50_ms": 35.879167,
+        "p95_ms": 52.876146,
+        "p99_ms": 59.427916,
+        "max_ms": 69.349896
+      },
+      "frame": {
+        "over_30_ms": 655,
+        "samples": 656,
+        "p50_ms": 91.474745,
+        "p95_ms": 92.881045,
+        "p99_ms": 93.639721,
+        "max_ms": 99.429159
+      }
+    }
+  ],
+  "dispatch_stalls": 2291,
+  "elapsed_seconds": 323.947832376,
+  "drain_ms": 1018.978229,
+  "max_save_queue": 3,
+  "incremental_matches_replay": true,
+  "tile_cache": {
+    "tile_renders": 8199,
+    "item_renders": 253755,
+    "geometry_renders": 8030,
+    "path_command_reuses": 244963,
+    "transient_path_command_reuses": 762,
+    "path_command_misses": 2000,
+    "path_command_evictions": 488,
+    "reused_tiles": 74529,
+    "current_bytes": 21300480,
+    "peak_bytes": 21300480,
+    "max_bytes": 100663296,
+    "path_command_bytes_estimate": 5669632,
+    "path_command_points_estimate": 13955,
+    "max_path_command_bytes_estimate": 25165824,
+    "max_path_command_points_estimate": 100000
+  },
+  "resources": [
+    {
+      "strokes": 0,
+      "pss_kib": 105736,
+      "private_dirty_kib": 87876,
+      "java_used_bytes": 6705184,
+      "native_allocated_bytes": 15203616,
+      "process_cpu_ms": 1970,
+      "sampling_ms": 87.875521,
+      "read_bytes": 28672,
+      "write_bytes": 192512
+    },
+    {
+      "strokes": 100,
+      "pss_kib": 289448,
+      "private_dirty_kib": 270088,
+      "java_used_bytes": 25518272,
+      "native_allocated_bytes": 79435280,
+      "process_cpu_ms": 29958,
+      "sampling_ms": 67.951406,
+      "read_bytes": 217088,
+      "write_bytes": 4083712
+    },
+    {
+      "strokes": 200,
+      "pss_kib": 307697,
+      "private_dirty_kib": 288248,
+      "java_used_bytes": 30339264,
+      "native_allocated_bytes": 83794880,
+      "process_cpu_ms": 60446,
+      "sampling_ms": 87.548855,
+      "read_bytes": 217088,
+      "write_bytes": 7962624
+    },
+    {
+      "strokes": 300,
+      "pss_kib": 369785,
+      "private_dirty_kib": 350312,
+      "java_used_bytes": 72593600,
+      "native_allocated_bytes": 116497232,
+      "process_cpu_ms": 90881,
+      "sampling_ms": 52.482344,
+      "read_bytes": 217088,
+      "write_bytes": 11841536
+    },
+    {
+      "strokes": 400,
+      "pss_kib": 432313,
+      "private_dirty_kib": 412796,
+      "java_used_bytes": 98955456,
+      "native_allocated_bytes": 132845856,
+      "process_cpu_ms": 123719,
+      "sampling_ms": 73.99474,
+      "read_bytes": 221184,
+      "write_bytes": 15802368
+    },
+    {
+      "strokes": 500,
+      "pss_kib": 353485,
+      "private_dirty_kib": 333964,
+      "java_used_bytes": 69406912,
+      "native_allocated_bytes": 73375104,
+      "process_cpu_ms": 157407,
+      "sampling_ms": 47.454011,
+      "read_bytes": 221184,
+      "write_bytes": 19775488
+    },
+    {
+      "strokes": 600,
+      "pss_kib": 439241,
+      "private_dirty_kib": 419692,
+      "java_used_bytes": 35393728,
+      "native_allocated_bytes": 127497408,
+      "process_cpu_ms": 194202,
+      "sampling_ms": 51.754583,
+      "read_bytes": 221184,
+      "write_bytes": 23883776
+    },
+    {
+      "strokes": 700,
+      "pss_kib": 356203,
+      "private_dirty_kib": 336620,
+      "java_used_bytes": 101961920,
+      "native_allocated_bytes": 89559792,
+      "process_cpu_ms": 232331,
+      "sampling_ms": 97.636667,
+      "read_bytes": 221184,
+      "write_bytes": 27959296
+    },
+    {
+      "strokes": 800,
+      "pss_kib": 335989,
+      "private_dirty_kib": 316380,
+      "java_used_bytes": 101429440,
+      "native_allocated_bytes": 73255392,
+      "process_cpu_ms": 270741,
+      "sampling_ms": 53.339479,
+      "read_bytes": 221184,
+      "write_bytes": 32083968
+    },
+    {
+      "strokes": 900,
+      "pss_kib": 283173,
+      "private_dirty_kib": 263552,
+      "java_used_bytes": 68649152,
+      "native_allocated_bytes": 47194240,
+      "process_cpu_ms": 311017,
+      "sampling_ms": 34.486875,
+      "read_bytes": 221184,
+      "write_bytes": 36376576
+    },
+    {
+      "strokes": 1000,
+      "pss_kib": 341825,
+      "private_dirty_kib": 322144,
+      "java_used_bytes": 117874880,
+      "native_allocated_bytes": 77524608,
+      "process_cpu_ms": 350964,
+      "sampling_ms": 68.745521,
+      "read_bytes": 221184,
+      "write_bytes": 40841216
+    }
+  ],
+  "io_counters_delta_before_final_drain": {
+    "rchar": 28385993,
+    "wchar": 4665310,
+    "syscr": 54638,
+    "syscw": 73678,
+    "read_bytes": 192512,
+    "write_bytes": 40648704,
+    "cancelled_write_bytes": 0
+  },
+  "io_note": "Linux per-process counters. write_bytes is charged I/O, not measured storage latency.",
+  "restart_verified": true
+}

@@ -12,6 +12,62 @@ import server_checks
 from topology_support import Link, Proxy, eventually, http
 
 class ProxyChecks(server_checks.ServerChecks):
+    def test_editor_undo_list_journal_stays_linear_and_replays(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp);proxy=Proxy(directory,'editor-history-growth')
+            self.addCleanup(proxy.stop)
+            def cli(*args,value=None):
+                command=[str(CLI),'--proxy-file',str(proxy.descriptor_path),'--document','editor-history-growth',*args]
+                result=subprocess.run(command,input=json.dumps(value) if value is not None else None,
+                                      text=True,capture_output=True,timeout=30)
+                self.assertEqual(result.returncode,0,result.stderr)
+                return json.loads(result.stdout)
+            for i in range(40):
+                cli('settings','-',value={'undo':[f'stroke-{j}' for j in range(i+1)],'redo':[]})
+            import struct
+            data=next(directory.glob('*.journal')).read_bytes();lengths=[];offset=0
+            while offset<len(data):
+                length=struct.unpack_from('>i',data,offset)[0];lengths.append(length);offset+=length+8
+            self.assertEqual(len(lengths),40)
+            self.assertLess(lengths[-1],lengths[0]*3,'new setting rewrote the full undo list')
+            proxy.stop()
+            restarted=subprocess.run([str(CLI),'--state',str(directory),'--document','editor-history-growth','log'],
+                                     text=True,capture_output=True,timeout=30)
+            self.assertEqual(restarted.returncode,0,restarted.stderr)
+            self.assertEqual(json.loads(restarted.stdout)['undo'][-1],'stroke-39')
+
+    def test_actor_history_journal_stays_linear_and_replays_after_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp)
+            proxy=Proxy(directory,'history-growth')
+            self.addCleanup(proxy.stop)
+            def cli(*args,value=None):
+                command=[str(CLI),'--proxy-file',str(proxy.descriptor_path),'--document','history-growth','--actor','writer',*args]
+                result=subprocess.run(command,input=json.dumps(value) if value is not None else None,
+                                      text=True,capture_output=True,timeout=30)
+                self.assertEqual(result.returncode,0,result.stderr)
+                return json.loads(result.stdout)
+            for i in range(40):
+                cli('object','put','-',value={'object':f'item-{i}','shape':'rect','x':i*10})
+            import struct
+            data=next(directory.glob('*.journal')).read_bytes()
+            lengths=[];offset=0
+            while offset<len(data):
+                length=struct.unpack_from('>i',data,offset)[0]
+                lengths.append(length)
+                offset+=length+8
+            self.assertEqual(len(lengths),40)
+            self.assertLess(lengths[-1],lengths[0]*3,'new action rewrote full actor history')
+            self.assertLess(sum(lengths),lengths[0]*40*2)
+            proxy.stop()
+            proxy=Proxy(directory,'history-growth')
+            self.addCleanup(proxy.stop)
+            self.assertEqual(len(cli('inspect')['objects']),40)
+            cli('undo')
+            self.assertFalse(cli('inspect')['objectActive']['item-39'])
+            cli('redo')
+            self.assertTrue(cli('inspect')['objectActive']['item-39'])
+
     def test_active_edit_preempts_delayed_idle_document_fetch(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
