@@ -18,7 +18,7 @@ final class InteractionPerformance {
         Map<String,List<Double>> queue=new LinkedHashMap<>(),action=new LinkedHashMap<>(),drawWait=new LinkedHashMap<>(),uiDraw=new LinkedHashMap<>();
         Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
         List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
-        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle")){
+        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle","page_switch")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
             queue.put(name,new ArrayList<>());action.put(name,new ArrayList<>());drawWait.put(name,new ArrayList<>());uiDraw.put(name,new ArrayList<>());
@@ -43,8 +43,10 @@ final class InteractionPerformance {
         test.waitForIdleSync();
         Map<String,Object> start=Performance.resources(0);
         Map<String,Object> modeResources=new LinkedHashMap<>();
+        Map<String,Object> pageTiles=object();
         String originalLayer=app.selected,extraLayer="performance-"+UUID.randomUUID();
         String historyId="performance-history-"+UUID.randomUUID();
+        String pageDocument="performance-pages-"+UUID.randomUUID();
         try {
             for(String name:draw.keySet()){
                 if(name.equals("layer_switch")){
@@ -62,7 +64,25 @@ final class InteractionPerformance {
                         app.undo.add("object-action");app.save();app.update();}catch(Exception error){throw new RuntimeException(error);}});
                     test.waitForIdleSync();
                 }
+                if(name.equals("page_switch")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    test.runOnMainSync(()->app.openDocument(pageDocument,"pages"));
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    for(int pageNumber=0;pageNumber<2;pageNumber++){
+                        app.replica.command(Arrays.asList("object","put","-"),object("kind","object",
+                                "object","performance-page-"+pageNumber,"shape","rect","layer","base",
+                                "page",pageNumber,"x",120+pageNumber*90,"y",140,"w",180,"h",110,
+                                "color",android.graphics.Color.BLACK,"width",5,"fontSize",24,"text",""));
+                    }
+                    Map<String,Object> state=app.replica.read();
+                    test.runOnMainSync(()->{try{app.refreshShared(state);app.update();
+                        com.notemaker.core.Model.require(app.type.equals("pages")&&app.page==0,
+                                "Page benchmark did not open its two-page document");
+                    }catch(Exception error){throw new RuntimeException(error);}});
+                    test.waitForIdleSync();
+                }
                 Map<String,Object> modeStart=Performance.resources(0);
+                Map<String,Object> tileStart=name.equals("page_switch")?tileMetrics(test,app):null;
                 current.set(name);
                 int count=name.equals("pan")||name.equals("history_toggle")?60:name.equals("document_reopen")?12:40;
                 int warmup=name.equals("document_reopen")?2:name.equals("history_toggle")?6:5;
@@ -92,6 +112,8 @@ final class InteractionPerformance {
                             app.setDrawingTool(index%2==0?"rectangle":null);
                         }else if(name.equals("layer_switch")){
                             app.selectLayer(index%2==0?extraLayer:originalLayer);
+                        }else if(name.equals("page_switch")){
+                            app.deselect();app.resetDrawingGesture();app.page=index%2==0?1:0;app.save();app.update();
                         }else if(history){
                             app.history(forward);
                         }else{
@@ -123,7 +145,20 @@ final class InteractionPerformance {
                     test.runOnMainSync(()->com.notemaker.core.Model.require(app.undo.size()==1&&app.redo.isEmpty(),
                             "History toggle did not restore editor history"));
                 }
+                if(name.equals("page_switch")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    Map<String,Object> durable=app.replica.read();
+                    com.notemaker.core.Model.require(((Number)durable.get("page")).intValue()==0,
+                            "Page switch did not persist final page");
+                }
                 test.waitForIdleSync();modeResources.put(name,object("before",modeStart,"after",Performance.resources(0)));
+                if(tileStart!=null){Map<String,Object> tileEnd=tileMetrics(test,app);
+                    pageTiles=object("tile_renders",delta(tileStart,tileEnd,"tileRenders"),
+                            "item_renders",delta(tileStart,tileEnd,"itemRenders"),
+                            "allocated_tiles",delta(tileStart,tileEnd,"allocatedTiles"),
+                            "reused_tiles",delta(tileStart,tileEnd,"reusedTiles"),
+                            "evicted_tiles",delta(tileStart,tileEnd,"evictedTiles"),
+                            "current_bytes",tileEnd.get("currentBytes"),"peak_bytes",tileEnd.get("peakBytes"));}
             }
             test.runOnMainSync(()->{app.canvas.afterDraw=null;app.pan=false;app.setDrawingTool(null);});
             test.waitForIdleSync();Thread.sleep(250);
@@ -146,9 +181,17 @@ final class InteractionPerformance {
         Map<String,Object> historyDirections=object(
                 "undo",object("input_to_ui_draw",Performance.stats(undoUiDraw),"input_to_draw",Performance.stats(undoCanvasDraw)),
                 "redo",object("input_to_ui_draw",Performance.stats(redoUiDraw),"input_to_draw",Performance.stats(redoCanvasDraw)));
-        return object("modes",modes,"mode_resources",modeResources,"start_resources",start,"end_resources",end,"post_gc_resources",postGc,
+        return object("modes",modes,"mode_resources",modeResources,"page_tile_cache",pageTiles,
+                "start_resources",start,"end_resources",end,"post_gc_resources",postGc,
                 "history_directions",historyDirections,
-                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen; synthetic pan and viewport zoom redraw; history alternates object undo and redo",
+                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, and direct page switching; history alternates object undo and redo",
                 "document",app.document,"state_revision",app.replica.read().get("revision"));
+    }
+    private static Map<String,Object> tileMetrics(Instrumentation test,MainActivity app){
+        @SuppressWarnings("unchecked") Map<String,Object>[] result=new Map[]{null};
+        test.runOnMainSync(()->result[0]=app.canvas.tileCacheMetrics());return result[0];
+    }
+    private static long delta(Map<String,Object> before,Map<String,Object> after,String key){
+        return ((Number)after.get(key)).longValue()-((Number)before.get(key)).longValue();
     }
 }
