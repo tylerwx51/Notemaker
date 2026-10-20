@@ -52,7 +52,9 @@ public final class Store {
         Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         Model.validate(operation);
         Model.require(write(operation).getBytes(StandardCharsets.UTF_8).length<=3000000,"Action exceeds 3 MB");
-        return edit(state->{Model.require(!Store.model(state).deleted,"Document is deleted");Collaboration.requireUnlocked(state,actor,Arrays.asList(operation),System.currentTimeMillis());Map<String,Object> op=map(copy(operation));op.put("id",UUID.randomUUID().toString());op.put("actor",actor);Model.withBases(op,Store.model(state));Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)op.put("session",session);list(state.get("pending")).add(op);});
+        return edit(state->{
+            // Lease checks leave the document model unchanged; reuse this snapshot for version bases.
+            Model current=Store.model(state);Model.require(!current.deleted,"Document is deleted");Collaboration.requireUnlocked(state,actor,Arrays.asList(operation),System.currentTimeMillis());Map<String,Object> op=map(copy(operation));op.put("id",UUID.randomUUID().toString());op.put("actor",actor);Model.withBases(op,current);Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)op.put("session",session);list(state.get("pending")).add(op);});
     }
     /** Permanent, idempotent lifecycle action; histories remain in the journal. */
     public Map<String,Object> deleteDocument(String actor) throws Exception {

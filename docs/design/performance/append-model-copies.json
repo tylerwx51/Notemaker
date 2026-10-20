@@ -1,0 +1,64 @@
+{
+  "baseline": {
+    "source_apk_sha256": "a24cc43172e7477f2416eae7d4ef7f4ec863cb3c8b556143aa19a2aa874c5fb9",
+    "device": "NoteAir6C",
+    "api": 36,
+    "strokes": 1000,
+    "elapsed_seconds": 304.370361811,
+    "input_to_draw_p95_ms": 69.741459,
+    "late_input_to_draw_p95_ms": 49.441927,
+    "late_frame_p95_ms": 91.713144,
+    "process_cpu_delta_ms": 311217,
+    "charged_write_delta_bytes": 39768064,
+    "peak_sampled_pss_kib": 273398,
+    "restart_strokes": 1000
+  },
+  "two_copies_1": {
+    "source_apk_sha256": "d75d0a340ef67db4aabab00caeddb7971156073b71820a7ff0dac5aeed5badb7",
+    "device": "NoteAir6C",
+    "api": 36,
+    "strokes": 1000,
+    "elapsed_seconds": 284.344897236,
+    "input_to_draw_p95_ms": 67.987292,
+    "late_input_to_draw_p95_ms": 52.035989,
+    "late_frame_p95_ms": 91.023259,
+    "process_cpu_delta_ms": 290580,
+    "charged_write_delta_bytes": 38625280,
+    "peak_sampled_pss_kib": 271163,
+    "restart_strokes": 1000
+  },
+  "two_copies_2": {
+    "source_apk_sha256": "d75d0a340ef67db4aabab00caeddb7971156073b71820a7ff0dac5aeed5badb7",
+    "device": "NoteAir6C",
+    "api": 36,
+    "strokes": 1000,
+    "elapsed_seconds": 286.138835047,
+    "input_to_draw_p95_ms": 67.529844,
+    "late_input_to_draw_p95_ms": 49.634844,
+    "late_frame_p95_ms": 91.017306,
+    "process_cpu_delta_ms": 291778,
+    "charged_write_delta_bytes": 38387712,
+    "peak_sampled_pss_kib": 285939,
+    "restart_strokes": 1000
+  },
+  "one_copy_pass": {
+    "source_apk_sha256": "5c53dd5d6f14c03ae92f956e73945e684725550b524a2d0e1fa716ff20635d96",
+    "device": "NoteAir6C",
+    "api": 36,
+    "strokes": 1000,
+    "elapsed_seconds": 286.996834369,
+    "input_to_draw_p95_ms": 68.422969,
+    "late_input_to_draw_p95_ms": 52.124219,
+    "late_frame_p95_ms": 91.052428,
+    "process_cpu_delta_ms": 293864,
+    "charged_write_delta_bytes": 38703104,
+    "peak_sampled_pss_kib": 250306,
+    "restart_strokes": 1000
+  },
+  "one_copy_failed": {
+    "source_apk_sha256": "5c53dd5d6f14c03ae92f956e73945e684725550b524a2d0e1fa716ff20635d96",
+    "input_gestures": 1000,
+    "durable_strokes_after_writer_drain": 999,
+    "error": "FAIL: java.lang.IllegalArgumentException: Lost strokes: 999"
+  }
+}
