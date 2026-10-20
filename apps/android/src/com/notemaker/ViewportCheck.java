@@ -182,7 +182,9 @@ final class ViewportCheck {
         resetDocument(test,app,"infinite",1f,0,0);phase("begin zoom tier");
         addStroke(app,"zoom-stroke","pen",0xff202020,20,Arrays.asList(Arrays.asList(20d,120d,.8),Arrays.asList(900d,120d,.8)));
         Map<String,Object> zoomContent=app.replica.read();test.runOnMainSync(()->{try{app.refreshShared(zoomContent);}catch(Exception e){throw new RuntimeException(e);}});test.waitForIdleSync();
-        snapshot(test,app).recycle();Map<String,Object> tierOne=metrics(test,app);long originalScaleRenders=n(tierOne,"tileRenders");
+        // Capture pixels and render counters in one UI turn. A scheduled window
+        // draw between separate calls can clear beginFrame's item IDs.
+        Frame populated=captureCold(test,app);populated.image.recycle();Map<String,Object> tierOne=populated.metrics;long originalScaleRenders=n(tierOne,"tileRenders");
         require(hasItem(tierOne,"zoom-stroke"),"Zoom fixture did not populate a tile with visible geometry");
         float nextZoom=5f;test.runOnMainSync(()->app.canvas.zoom=nextZoom);snapshot(test,app).recycle();Map<String,Object> tierTwo=metrics(test,app);
         require(n(tierTwo,"densityTier")>n(tierOne,"densityTier"),"Zoom fixture did not cross a populated raster-density tier");
