@@ -14,13 +14,20 @@ final class InteractionPerformance {
         Handler input=Handler.createAsync(Looper.getMainLooper());
         HandlerThread frames=new HandlerThread("interaction-frames");frames.start();
         Map<String,List<Double>> draw=new LinkedHashMap<>(),handler=new LinkedHashMap<>(),frame=new LinkedHashMap<>();
+        Map<String,List<Double>> queue=new LinkedHashMap<>(),action=new LinkedHashMap<>(),drawWait=new LinkedHashMap<>();
+        Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
         for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
+            queue.put(name,new ArrayList<>());action.put(name,new ArrayList<>());drawWait.put(name,new ArrayList<>());
+            frameDraw.put(name,Collections.synchronizedList(new ArrayList<>()));
+            frameCommand.put(name,Collections.synchronizedList(new ArrayList<>()));
         }
         AtomicReference<String> current=new AtomicReference<>(null);
         Window.OnFrameMetricsAvailableListener listener=(window,metrics,dropped)->{
-            String name=current.get();if(name!=null)frame.get(name).add(metrics.getMetric(FrameMetrics.TOTAL_DURATION)/1e6);
+            String name=current.get();if(name!=null){frame.get(name).add(metrics.getMetric(FrameMetrics.TOTAL_DURATION)/1e6);
+                frameDraw.get(name).add(metrics.getMetric(FrameMetrics.DRAW_DURATION)/1e6);
+                frameCommand.get(name).add(metrics.getMetric(FrameMetrics.COMMAND_ISSUE_DURATION)/1e6);}
         };
         test.runOnMainSync(()->{app.pan=true;app.erase=false;app.canvas.zoom=1;app.canvas.offsetX=app.canvas.offsetY=0;
             app.getWindow().addOnFrameMetricsAvailableListener(listener,new Handler(frames.getLooper()));app.canvas.invalidate();});
@@ -42,9 +49,10 @@ final class InteractionPerformance {
                 int warmup=name.equals("document_reopen")?2:5;
                 for(int i=0;i<count;i++){
                     int index=i;CountDownLatch painted=new CountDownLatch(1),handled=new CountDownLatch(1);
-                    AtomicLong drawn=new AtomicLong(),completed=new AtomicLong();
+                    AtomicLong drawn=new AtomicLong(),started=new AtomicLong(),completed=new AtomicLong();
                     long queued=System.nanoTime();
                     input.post(()->{
+                        started.set(System.nanoTime());
                         app.canvas.afterDraw=()->{drawn.set(System.nanoTime());painted.countDown();};
                         if(name.equals("pan")){
                             app.pan=true;float x=app.canvas.getWidth()/2f,y=app.canvas.getHeight()/2f;
@@ -65,7 +73,9 @@ final class InteractionPerformance {
                         completed.set(System.nanoTime());handled.countDown();
                     });
                     if(!handled.await(5,TimeUnit.SECONDS)||!painted.await(5,TimeUnit.SECONDS))throw new IllegalStateException("Interaction draw timed out: "+name+" #"+index);
-                    if(index>=warmup){handler.get(name).add((completed.get()-queued)/1e6);draw.get(name).add((drawn.get()-queued)/1e6);}
+                    if(index>=warmup){handler.get(name).add((completed.get()-queued)/1e6);draw.get(name).add((drawn.get()-queued)/1e6);
+                        queue.get(name).add((started.get()-queued)/1e6);action.get(name).add((completed.get()-started.get())/1e6);
+                        drawWait.get(name).add((drawn.get()-completed.get())/1e6);}
                     Thread.sleep(25);
                 }
                 test.waitForIdleSync();modeResources.put(name,object("before",modeStart,"after",Performance.resources(0)));
@@ -81,7 +91,10 @@ final class InteractionPerformance {
         System.gc();Thread.sleep(500);
         Map<String,Object> postGc=Performance.resources(0);
         for(String name:draw.keySet())modes.put(name,object("handler",Performance.stats(handler.get(name)),
-                "input_to_draw",Performance.stats(draw.get(name)),"window_frame",Performance.stats(frame.get(name))));
+                "input_to_draw",Performance.stats(draw.get(name)),"window_frame",Performance.stats(frame.get(name)),
+                "queue",Performance.stats(queue.get(name)),"action",Performance.stats(action.get(name)),
+                "handler_to_draw",Performance.stats(drawWait.get(name)),"frame_draw",Performance.stats(frameDraw.get(name)),
+                "frame_command_issue",Performance.stats(frameCommand.get(name))));
         return object("modes",modes,"mode_resources",modeResources,"start_resources",start,"end_resources",end,"post_gc_resources",postGc,
                 "latency_definition","enqueue to end of Canvas draw; 5 warmup actions per mode except 2 for document reopen; synthetic pan and viewport zoom redraw",
                 "document",app.document,"state_revision",app.replica.read().get("revision"));
