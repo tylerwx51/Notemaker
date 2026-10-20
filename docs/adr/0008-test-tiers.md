@@ -72,3 +72,9 @@ It restores the original notebook and connection settings and verifies existing
 actor histories afterward. Unlike the smoke tier, it creates test content;
 the test notebook is retained. ADB forwarding is refreshed after instrumentation
 restarts, since the embedded proxy publishes a new port for each process.
+
+ADR 0016 adds local CLI crossing-render regressions and Android live/settled
+pixel contracts. The performance tier additionally requires every measured
+stroke input to finish canvas drawing in under 30 ms, with dense self-crossing
+strokes included in the workload. This remains a software timing gate rather
+than a claim about physical E Ink latency.

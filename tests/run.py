@@ -13,18 +13,18 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = {
-    'local': ['framework_checks', 'server_checks', 'cli_checks', 'drawing_checks', 'drawing_tools_checks', 'coverage_checks', 'drawing_browser', 'selection_checks', 'conflict_checks', 'proxy_checks',
+    'local': ['framework_checks', 'server_checks', 'cli_checks', 'drawing_checks', 'drawing_tools_checks', 'stroke_rendering_checks', 'coverage_checks', 'drawing_browser', 'selection_checks', 'conflict_checks', 'proxy_checks',
               'chat_checks', 'topology_properties'],
-    'emulator': ['integration', 'cli_android', 'drawing_android', 'files_android', 'chat_ui', 'performance'],
+    'emulator': ['integration', 'cli_android', 'drawing_android', 'viewport_android', 'files_android', 'chat_ui', 'performance'],
     'hardware': ['tablet_checks'],
     'network': ['network_checks'],
 }
 DEFAULT_SECONDS = {
     'framework_checks': 3, 'server_checks': 1, 'cli_checks': 31,
-    'drawing_checks': 5, 'drawing_tools_checks': 9, 'coverage_checks': 11,
+    'drawing_checks': 5, 'drawing_tools_checks': 9, 'stroke_rendering_checks': 30, 'coverage_checks': 11,
     'drawing_browser': 5, 'selection_checks': 30, 'conflict_checks': 55,
     'proxy_checks': 9, 'chat_checks': 8, 'topology_properties': 102,
-    'integration': 353, 'cli_android': 341, 'drawing_android': 253,
+    'integration': 353, 'cli_android': 341, 'drawing_android': 253, 'viewport_android': 150,
     'files_android': 186, 'chat_ui': 150, 'performance': 207,
     'tablet_checks': 60, 'network_checks': 60,
 }
@@ -32,11 +32,12 @@ CLAIMS = {
     'integration': {'emu:5580', 'emu:5582', 'server:18765', 'browser:19222'},
     'cli_android': {'emu:5584', 'server:18766', 'browser:19224'},
     'drawing_android': {'emu:5590'},
+    'viewport_android': {'emu:5592'},
     'files_android': {'emu:5590'},
     'chat_ui': {'emu:5586'},
     'performance': {'emu:5586', 'performance'},
 }
-EMULATOR_SUITES = {'integration', 'cli_android', 'drawing_android', 'files_android', 'chat_ui', 'performance'}
+EMULATOR_SUITES = {'integration', 'cli_android', 'drawing_android', 'viewport_android', 'files_android', 'chat_ui', 'performance'}
 
 
 def recent_averages(root=ROOT, limit=5):

@@ -543,6 +543,22 @@ inspection because document deletion is not supported. It does not disconnect,
 crash, reconfigure, or deploy remote services; destructive fault injection stays
 in the isolated local topology suite.
 
+### Stroke rendering regressions
+
+```sh
+nix-shell --run 'apps/cli/build.sh && python3 tests/stroke_rendering_checks.py'
+nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --ink-only'
+```
+
+The local suite compares self-crossing ink with independent crossing strokes,
+including translucent ink. The Android check compares every canvas pixel during
+live emission, at pen-up, after local persistence, and after rebuilding the cache.
+It covers all eleven brushes, overlapping content, zoom, and fractional panning.
+`--ink-only` also checks erasure masks and regional cache repainting; use
+`--strokes-only` to run just the stroke contracts.
+It runs in the disposable drawing emulator; failures retain before/after PNGs
+under `.test-artifacts/drawing-android/`. Both checks also run in their corresponding test tiers.
+
 ### Performance regression check
 
 ```sh
@@ -561,12 +577,17 @@ The default is 25 generated histories with up to five proxies; use
 `NOTEMAKER_TOPOLOGY_EXAMPLES=100 python3 tests/topology_properties.py` inside
 `nix-shell` for a longer run.
 
-The performance check boots an isolated API 36 emulator on port 5586 and draws
-1,000 strokes with 50 pressure-bearing points each. It measures event handler,
-UI dispatch, input-to-draw and actual window-frame durations at strokes 1–100,
-401–500 and 901–1000. It enforces absolute p95 limits (16/50/100/100 ms), a
-500 ms maximum, and growth limits relative to the first window (2× plus
-8/20/25/25 ms). It also bounds the save queue, compares incremental state with
+The performance check boots an isolated API 36 emulator on port 5586, disables
+its Wi-Fi/mobile radios and disables unrelated Google Search and Play services to
+suppress first-boot background workloads, and draws
+1,000 strokes: 990 with 50 pressure-bearing points and ten figure-eights with
+500 points. It measures event handler, UI dispatch, input-to-draw and actual
+window-frame durations at strokes 1–100, 401–500 and 901–1000. Every DOWN,
+MOVE and UP event after ten warmup strokes must reach the end of canvas drawing in **under 30 ms**, measured from enqueueing on the UI thread.
+Coalesced events each retain their own start time. This measures software input
+to draw completion, not GPU presentation or physical E Ink response. Secondary
+metrics enforce p95 limits (16/50/100/100 ms), a 500 ms maximum, and growth
+limits relative to the first window (2× plus 8/20/25/25 ms). It also bounds the save queue, compares incremental state with
 full replay, and verifies all strokes survive a process restart. Reports are in
 `.test-artifacts/performance/`. The emulator is stopped on completion. These
 budgets are regression gates, not physical E Ink pen-latency measurements.

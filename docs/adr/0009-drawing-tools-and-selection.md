@@ -91,8 +91,8 @@ selection coordination and preview transport without adding drawing history.
   SVG artwork. Templates use an editable background layer below drawing layers.
 - Brush profiles are rendered from the stroke centerline as a pressure-varying
   swept ribbon, not as a sequence of overlapping point dabs. The shared renderer
-  resamples by traveled distance, derives tangent/normal frames, and fills each
-  pigment pass once; grain and bristle lanes are positioned by arc length so their
+  resamples by traveled distance, derives tangent/normal frames, and composites
+  pigment coverage with additional deposits at self-crossings (ADR 0016); grain and bristle lanes are positioned by arc length so their
   appearance is independent of tablet sample density. Marker opacity therefore
   builds from actual overlap, not from dense input points. An optional per-stroke
   `material` percentage (0–100, default 50) tunes each profile's characteristic

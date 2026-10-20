@@ -5,18 +5,41 @@ import java.io.*;
 import java.util.Collections;
 
 public final class Png implements Render.Surface {
+    public static final class StrokeCommands {
+        private interface Command {void draw(Canvas canvas,Paint paint);}
+        private final java.util.List<Command> commands;
+        private StrokeCommands(java.util.List<Command> commands){this.commands=java.util.Collections.unmodifiableList(new java.util.ArrayList<>(commands));}
+    }
     private static final java.util.Map<String,com.caverock.androidsvg.SVG> SVGS=new java.util.LinkedHashMap<String,com.caverock.androidsvg.SVG>(16,.75f,true){protected boolean removeEldestEntry(java.util.Map.Entry<String,com.caverock.androidsvg.SVG> e){return size()>16;}};
     private static final java.util.Map<java.util.List<Object>,Picture> PICTURES=new java.util.LinkedHashMap<java.util.List<Object>,Picture>(16,.75f,true){protected boolean removeEldestEntry(java.util.Map.Entry<java.util.List<Object>,Picture> e){return size()>64;}};
+    private static final long IMAGE_CACHE_LIMIT=24L*1024*1024;
+    private static final long IMAGE_CACHE_KEY_LIMIT=4L*1024*1024;
+    private static long imageCacheBytes,imageCacheKeyChars;
+    private static final java.util.LinkedHashMap<String,Bitmap> IMAGES=new java.util.LinkedHashMap<>(8,.75f,true);
     public static boolean useSvgPictures=true;
     private final Canvas canvas;
+    private final java.util.List<StrokeCommands.Command> strokeCommands;
     private final java.util.Deque<Integer> clips=new java.util.ArrayDeque<>();
     public static int[] coverageTile(Model m,java.util.Map<String,Object> item,int x,int y,int size){Bitmap image=Bitmap.createBitmap(size,size,Bitmap.Config.ARGB_8888);try{Canvas c=new Canvas(image);c.translate(-x,-y);Render.drawItem(m,item,new Png(c));int[] pixels=new int[size*size];image.getPixels(pixels,0,size,0,0,size,size);return pixels;}finally{image.recycle();}}
-    public void beginErase(java.util.List<double[][]> polygons){clips.push(canvas.save());for(double[][] p:polygons)canvas.clipOutPath(ItemCoverage.path(p,true));}
-    public void endErase(){canvas.restoreToCount(clips.pop());}
-    public void polygon(double[][] points,int color,double width,Integer fill,boolean closed){Path p=ItemCoverage.path(points,closed);if(fill!=null){paint.setColor(fill);paint.setStyle(Paint.Style.FILL);canvas.drawPath(p,paint);}if(width>0){paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)width);paint.setStrokeJoin(Paint.Join.ROUND);canvas.drawPath(p,paint);}}
+    public void beginErase(java.util.List<double[][]> polygons){if(strokeCommands!=null){java.util.List<Path> paths=new java.util.ArrayList<>();for(double[][] p:polygons)paths.add(ItemCoverage.path(p,true));strokeCommands.add((canvas,paint)->{canvas.save();for(Path path:paths)canvas.clipOutPath(path);});return;}clips.push(canvas.save());for(double[][] p:polygons)canvas.clipOutPath(ItemCoverage.path(p,true));}
+    public void endErase(){if(strokeCommands!=null){strokeCommands.add((canvas,paint)->canvas.restore());return;}canvas.restoreToCount(clips.pop());}
+    public void polygon(double[][] points,int color,double width,Integer fill,boolean closed){Path p=ItemCoverage.path(points,closed);if(fill!=null){if(strokeCommands!=null){int c=fill;strokeCommands.add((canvas,paint)->{paint.setColor(c);paint.setStyle(Paint.Style.FILL);canvas.drawPath(p,paint);});}else{paint.setColor(fill);paint.setStyle(Paint.Style.FILL);canvas.drawPath(p,paint);}}if(width>0){float strokeWidth=(float)width;if(strokeCommands!=null){strokeCommands.add((canvas,paint)->{paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(strokeWidth);paint.setStrokeJoin(Paint.Join.ROUND);canvas.drawPath(p,paint);});}else{paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(strokeWidth);paint.setStrokeJoin(Paint.Join.ROUND);canvas.drawPath(p,paint);}}}
+    public void ink(java.util.List<double[][]> passes,int color){
+        if(passes.size()==1){polygon(passes.get(0),color,0,color,true);return;}
+        if((color>>>24)==255){Path union=new Path();union.setFillType(Path.FillType.WINDING);for(double[][] points:passes)union.addPath(ItemCoverage.path(points,true));if(strokeCommands!=null){strokeCommands.add((canvas,paint)->{paint.setColor(color);paint.setStyle(Paint.Style.FILL);canvas.drawPath(union,paint);});}else{paint.setColor(color);paint.setStyle(Paint.Style.FILL);canvas.drawPath(union,paint);}return;}
+        java.util.List<Path> layers=new java.util.ArrayList<>();
+        for(double[][] points:passes){Path carry=ItemCoverage.path(points,true);
+            for(Path layer:layers){Path overlap=new Path();overlap.op(layer,carry,Path.Op.INTERSECT);layer.op(carry,Path.Op.UNION);carry=overlap;if(carry.isEmpty())break;}
+            if(!carry.isEmpty())layers.add(carry);
+        }
+        for(Path layer:layers){if(strokeCommands!=null){strokeCommands.add((canvas,paint)->{paint.setColor(color);paint.setStyle(Paint.Style.FILL);canvas.drawPath(layer,paint);});}else{paint.setColor(color);paint.setStyle(Paint.Style.FILL);canvas.drawPath(layer,paint);}}
+    }
     private final java.util.Deque<Integer> transforms=new java.util.ArrayDeque<>();
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
-    public Png(Canvas canvas){this.canvas=canvas;paint.setStrokeCap(Paint.Cap.ROUND);}
+    public Png(Canvas canvas){this.canvas=canvas;this.strokeCommands=null;paint.setStrokeCap(Paint.Cap.ROUND);}
+    private Png(){this.canvas=null;this.strokeCommands=new java.util.ArrayList<>();paint.setStrokeCap(Paint.Cap.ROUND);}
+    public static StrokeCommands compileStroke(java.util.Map<String,Object> stroke){Png recorder=new Png();Render.drawStroke(stroke,recorder);return new StrokeCommands(recorder.strokeCommands);}
+    public static void replayStroke(Canvas canvas,StrokeCommands commands,Paint paint){for(StrokeCommands.Command command:commands.commands)command.draw(canvas,paint);}
     public static void ensureFonts(){try{
         // app_process lacks ActivityThread's font map. App UIDs cannot read the
         // system fallback XML, so initialize a small map from a readable font.
@@ -34,22 +57,25 @@ public final class Png implements Render.Surface {
     public static void export(Model m,int page,double x,double y,int w,int h,File out)throws Exception {
         ensureFonts();Bitmap image=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888);Canvas c=new Canvas(image);c.drawColor(Color.WHITE);c.translate((float)-x,(float)-y);Render.draw(m,page,Collections.emptySet(),new Png(c));try(FileOutputStream stream=new FileOutputStream(out)){if(!image.compress(Bitmap.CompressFormat.PNG,100,stream))throw new IOException("PNG encoding failed");}finally{image.recycle();}
     }
-    public void line(double x,double y,double ex,double ey,int color,double width){paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)width);canvas.drawLine((float)x,(float)y,(float)ex,(float)ey,paint);}
+    public void line(double x,double y,double ex,double ey,int color,double width){float x0=(float)x,y0=(float)y,x1=(float)ex,y1=(float)ey,strokeWidth=(float)width;if(strokeCommands!=null){strokeCommands.add((canvas,paint)->{paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(strokeWidth);canvas.drawLine(x0,y0,x1,y1,paint);});return;}paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(strokeWidth);canvas.drawLine(x0,y0,x1,y1,paint);}
     public void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse){paint.setStrokeJoin(Paint.Join.MITER);RectF r=new RectF((float)x,(float)y,(float)(x+w),(float)(y+h));if(fill!=null){paint.setColor(fill);paint.setStyle(Paint.Style.FILL);if(ellipse)canvas.drawOval(r,paint);else canvas.drawRect(r,paint);}if(width>0){paint.setColor(color);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth((float)width);if(ellipse)canvas.drawOval(r,paint);else canvas.drawRect(r,paint);}}
     public void text(double x,double y,String text,int color,double size){paint.setColor(color);paint.setStyle(Paint.Style.FILL);paint.setTextSize((float)size);canvas.drawText(text,(float)x,(float)y,paint);}
     public void styledText(double x,double y,String text,int color,double size,String family,boolean bold,boolean italic,boolean underline,String alignment){paint.setColor(color);paint.setStyle(Paint.Style.FILL);paint.setTextSize((float)size);int style=(bold?Typeface.BOLD:0)|(italic?Typeface.ITALIC:0);paint.setTypeface(Typeface.create("serif".equals(family)?"serif":"monospace".equals(family)?"monospace":"sans-serif",style));float drawX=(float)x-("center".equals(alignment)?paint.measureText(text)/2:"right".equals(alignment)?paint.measureText(text):0);canvas.drawText(text,drawX,(float)y,paint);if(underline){paint.setStrokeWidth(1);paint.setStyle(Paint.Style.STROKE);canvas.drawLine(drawX,(float)(y+2),(float)(drawX+paint.measureText(text)),(float)(y+2),paint);}}
     public void image(double x,double y,double w,double h,String data){
         paint.setColor(Color.WHITE);
-        Bitmap bitmap=null;
-        try{
-            int comma=data.indexOf(',');byte[] bytes=android.util.Base64.decode(data.substring(comma+1),android.util.Base64.DEFAULT);
-            BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);
-            if(bounds.outWidth<=0||bounds.outHeight<=0)throw new IllegalArgumentException("Could not decode image dimensions");
-            BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;
-            while(((bounds.outWidth+options.inSampleSize-1)/options.inSampleSize)*((bounds.outHeight+options.inSampleSize-1)/options.inSampleSize)>4*1024*1024)options.inSampleSize*=2;
-            bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);if(bitmap==null)throw new IllegalArgumentException("Could not decode image pixels");
-            canvas.drawBitmap(bitmap,null,new RectF((float)x,(float)y,(float)(x+w),(float)(y+h)),paint);
-        }catch(IllegalArgumentException e){throw e;}catch(Exception e){throw new IllegalArgumentException("Could not render image",e);}finally{if(bitmap!=null)bitmap.recycle();}
+        synchronized(IMAGES){boolean cacheable=data.length()<=1_000_000;Bitmap bitmap=cacheable?IMAGES.get(data):null;
+            try{
+                if(bitmap==null){int comma=data.indexOf(',');byte[] bytes=android.util.Base64.decode(data.substring(comma+1),android.util.Base64.DEFAULT);
+                    BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);
+                    if(bounds.outWidth<=0||bounds.outHeight<=0)throw new IllegalArgumentException("Could not decode image dimensions");
+                    BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;
+                    while(((bounds.outWidth+options.inSampleSize-1)/options.inSampleSize)*((bounds.outHeight+options.inSampleSize-1)/options.inSampleSize)>4*1024*1024)options.inSampleSize*=2;
+                    bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);if(bitmap==null)throw new IllegalArgumentException("Could not decode image pixels");
+                    long bytesUsed=(long)bitmap.getRowBytes()*bitmap.getHeight();if(cacheable&&bytesUsed<=IMAGE_CACHE_LIMIT&&data.length()<=IMAGE_CACHE_KEY_LIMIT){while((imageCacheBytes+bytesUsed>IMAGE_CACHE_LIMIT||imageCacheKeyChars+data.length()>IMAGE_CACHE_KEY_LIMIT)&&!IMAGES.isEmpty()){java.util.Map.Entry<String,Bitmap> eldest=IMAGES.entrySet().iterator().next();imageCacheBytes-=(long)eldest.getValue().getRowBytes()*eldest.getValue().getHeight();imageCacheKeyChars-=eldest.getKey().length();eldest.getValue().recycle();IMAGES.remove(eldest.getKey());}if(imageCacheKeyChars+data.length()<=IMAGE_CACHE_KEY_LIMIT){IMAGES.put(data,bitmap);imageCacheBytes+=bytesUsed;imageCacheKeyChars+=data.length();}else {canvas.drawBitmap(bitmap,null,new RectF((float)x,(float)y,(float)(x+w),(float)(y+h)),paint);bitmap.recycle();return;}}else {canvas.drawBitmap(bitmap,null,new RectF((float)x,(float)y,(float)(x+w),(float)(y+h)),paint);bitmap.recycle();return;}
+                }
+                canvas.drawBitmap(bitmap,null,new RectF((float)x,(float)y,(float)(x+w),(float)(y+h)),paint);
+            }catch(IllegalArgumentException e){throw e;}catch(Exception e){throw new IllegalArgumentException("Could not render image",e);}
+        }
     }
     public void svg(double x,double y,double w,double h,String source){
         synchronized(SVGS){

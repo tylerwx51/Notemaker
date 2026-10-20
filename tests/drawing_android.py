@@ -14,8 +14,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 APK = ROOT / 'apps/android/build/notemaker.apk'
-SERIAL = 'emulator-5590'
-OUT = ROOT / '.test-artifacts/drawing-android'
+PORT = int(os.environ.get('NOTEMAKER_DRAWING_ANDROID_PORT', '5590'))
+SERIAL = os.environ.get('NOTEMAKER_DRAWING_ANDROID_SERIAL', f'emulator-{PORT}')
+OUT = ROOT / os.environ.get('NOTEMAKER_DRAWING_ANDROID_OUT', '.test-artifacts/drawing-android')
 OUT.mkdir(parents=True, exist_ok=True)
 
 
@@ -43,14 +44,26 @@ def encoded(value):
     return base64.b64encode(json.dumps(value).encode()).decode()
 
 
-def instrument(action, **kwargs):
+def instrument(action, relaunch=True, timeout=90, **kwargs):
     args = ['shell', 'am', 'instrument', '-w', '-e', 'action', action]
     for key, value in kwargs.items():
         args += ['-e', key, str(value)]
-    result = run('adb', '-s', SERIAL, 'shell', shlex.join(args[1:] + ['com.notemaker/.Integration']))
+    result = run('adb', '-s', SERIAL, 'shell', shlex.join(args[1:] + ['com.notemaker/.Integration']), timeout=timeout)
     (OUT / f'{action}.txt').write_text(result)
+    if action == 'viewport':
+        for name in ('viewport-edge-cached.png', 'viewport-edge-reference.png', 'viewport-edge-debug.txt',
+                     'viewport-seam-tiled.png', 'viewport-seam-monolithic.png',
+                     'viewport-seam-direct.png', 'viewport-seam-debug.txt',
+                     'viewport-compare-cached.png', 'viewport-compare-reference.png',
+                     'viewport-compare-cold.png', 'viewport-compare-debug.txt'):
+            try:
+                data = subprocess.check_output(['adb', '-s', SERIAL, 'exec-out', 'run-as',
+                                                'com.notemaker', 'cat', f'files/{name}'], timeout=20)
+                (OUT / name).write_bytes(data)
+            except subprocess.CalledProcessError:
+                pass
     assert f'PASS {action}' in result, result
-    if action != 'select-panel':
+    if relaunch and action != 'select-panel':
         run('adb', '-s', SERIAL, 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
     return result
 
@@ -59,6 +72,7 @@ def tap(label):
     hierarchy = ui_dump()
     tree = ET.fromstring(hierarchy)
     node = next((n for n in tree.iter('node') if n.attrib.get('content-desc') == label
+                 or (label == 'Pen tools' and n.attrib.get('content-desc', '').startswith('Pen tool, '))
                  or label.casefold() in n.attrib.get('text', '').casefold()), None)
     if node is None:
         (OUT / f'missing-{re.sub(r"[^a-z0-9]+", "-", label.casefold()).strip("-")}.xml').write_text(hierarchy)
@@ -92,13 +106,15 @@ def ui_dump():
 def show_editor():
     # Instrumentation teardown can race the immediate Activity relaunch.
     for _ in range(5):
-        adb('shell','am','start','-W','-n','com.notemaker/.MainActivity')
+        adb('shell','am','start','-W','-f','0x20000000','-n','com.notemaker/.MainActivity')
         hierarchy=ui_dump()
-        if 'content-desc="Pen tools"' in hierarchy:
+        if 'content-desc="Drawing canvas"' in hierarchy:
             return
         if 'package="com.notemaker"' in hierarchy:
             adb('shell','input','keyevent','4')
         time.sleep(.3)
+    (OUT / 'editor-return.xml').write_text(hierarchy)
+    screenshot('editor-return')
     raise AssertionError('Editor did not return after instrumentation')
 
 
@@ -149,10 +165,24 @@ def main():
         log = (OUT / 'emulator.log').open('w')
         try:
             emulator = subprocess.Popen(
-                ['boox-emulator-headless', '-port', '5590', '-memory', '1536', '-cores', '2', '-wipe-data'],
+                ['boox-emulator-headless', '-port', str(PORT), '-memory', '1536', '-cores', '2', '-wipe-data'],
                 env=env, stdout=log, stderr=subprocess.STDOUT)
             wait_ready()
             adb('install', '-r', str(APK))
+            if '--viewport-only' in sys.argv:
+                instrument('viewport', timeout=600)
+                print('PASS viewport culling, edge coverage, pan/zoom reuse and bounded tile cache')
+                return
+            if '--strokes-only' in sys.argv or '--ink-only' in sys.argv or len(sys.argv) == 1:
+                instrument('stroke-pixels', relaunch='--ink-only' not in sys.argv)
+                print('PASS live, pen-up, persisted and rebuilt stroke pixels')
+                if '--ink-only' in sys.argv:
+                    instrument('configure', relaunch=False, document='android-coverage', host='offline')
+                    instrument('coverage', relaunch=False)
+                    print('PASS Android coverage, masks and regional cache pixels')
+                    return
+                if '--strokes-only' in sys.argv:
+                    return
             instrument('configure', document='android-gesture-routing', host='offline')
             instrument('gesture-routing')
             print('PASS Android finger rejection and two-finger page pan')
@@ -281,6 +311,10 @@ def main():
             if emulator is not None:
                 try:
                     (OUT/'logcat.txt').write_text(adb('logcat','-d','-t','600'))
+                    for name in ('stroke-before.png', 'stroke-after.png'):
+                        result = subprocess.run(['adb', '-s', SERIAL, 'exec-out', 'run-as', 'com.notemaker', 'cat', 'files/'+name], capture_output=True)
+                        if result.returncode == 0 and result.stdout.startswith(b'\x89PNG'):
+                            (OUT/name).write_bytes(result.stdout)
                 except Exception:
                     pass
                 emulator.terminate()
@@ -289,6 +323,13 @@ def main():
                 except subprocess.TimeoutExpired:
                     emulator.kill()
                     emulator.wait()
+                # ADB can retain a disconnected emulator briefly after QEMU exits.
+                # Wait before releasing this suite's port to the next test.
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if SERIAL not in run('adb', 'devices'):
+                        break
+                    time.sleep(.2)
             log.close()
 
 

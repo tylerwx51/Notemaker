@@ -183,17 +183,21 @@ public class MainActivity extends Activity {
             if(!replica.remote()&&eventCount==0&&pendingCount==0)enqueue(obj("kind","document","type",newType));
         }catch(Exception e){throw new RuntimeException("Cannot read saved document",e);}
     }}
-    void apply(JSONObject o){String kind=o.optString("kind");
+    void apply(JSONObject o){apply(o,Json.map(Json.parse(o.toString())));}
+    void apply(JSONObject o,Map<String,Object> action){String kind=o.optString("kind");
         if(kind.equals("batch")){JSONArray a=o.optJSONArray("actions");for(int i=0;i<a.length();i++)apply(a.optJSONObject(i));return;}
-        model.apply(Json.map(Json.parse(o.toString())));
+        model.apply(action);
         if(kind.equals("document")&&!documentSeen){type=o.optString("type","fixed");documentSeen=true;}
         if(kind.equals("layer"))layers.put(o.optString("layer"),o);
         if(kind.equals("stroke"))strokes.put(o.optString("stroke"),o);
         if(kind.equals("active"))active.put(o.optString("stroke"),o.optBoolean("active"));
     }
     void enqueue(JSONObject o){
-        String token=id();optimistic.put(token,o);apply(o);
-        persist(Arrays.asList("append","-"),Json.map(Json.parse(o.toString())),token);
+        enqueue(o,Json.map(Json.parse(o.toString())));
+    }
+    void enqueue(JSONObject o,Map<String,Object> action){
+        String token=id();optimistic.put(token,o);apply(o,action);
+        persist(Arrays.asList("append","-"),action,token);
     }
     void update(){synchronized(lock){
         if(editor==null)return;
@@ -542,67 +546,90 @@ public class MainActivity extends Activity {
             }
             paint.setStyle(Paint.Style.FILL);
         }
-        // Cache settled ink at display resolution; extending a page draws only the new strokes.
-        final LinkedHashMap<String,InkCache> ink=new LinkedHashMap<String,InkCache>(4,.75f,true);
-        String inkTransform="";
+        // Cache settled ink in document-space tiles; pan reuses tiles and zoom selects a raster tier.
+        final TileInkCache tileInk=new TileInkCache();
+        final Map<String,Map<String,Object>> objectTileSources=new HashMap<>();
+        final Map<String,TileInkCache.Item> objectTileItems=new HashMap<>();
+        String inkTransform="";int rasterTier=1;
         long inputStarted;
         java.util.function.LongConsumer drawLatency;
         Runnable afterDraw;
         boolean useInkCache=true;
+        boolean cullTileItems=true;
+        RectF monolithicTileProbe;
+        Map<String,Object> tileCacheMetrics(){Map<String,Object> m=new LinkedHashMap<>(tileInk.metrics());m.put("densityTier",rasterTier);return m;}
         float shapeStartX,shapeStartY,shapeEndX,shapeEndY;boolean shapeDragging;
         boolean transforming;float transformStartX,transformStartY,transformDeltaX,transformDeltaY;long lastPreviewAt;
         boolean lassoing;float lassoStartX,lassoStartY,lassoEndX,lassoEndY;final ArrayList<float[]> lassoPath=new ArrayList<>();
         void transform(Canvas c){c.translate(offsetX,offsetY);c.scale(scale()*zoom,scale()*zoom);if(!type.equals("infinite"))c.clipRect(0,0,1000,1400);}
+        RectF documentViewport(){RectF viewport=new RectF(Math.min(x(0),x(getWidth())),Math.min(y(0),y(getHeight())),Math.max(x(0),x(getWidth())),Math.max(y(0),y(getHeight())));if(!type.equals("infinite")&&!viewport.intersect(0,0,1000,1400))viewport.setEmpty();return viewport;}
         void settledInk(Canvas c,String layer){
-            InkCache cache=ink.get(layer);if(cache==null){if(ink.size()>=3){String oldest=ink.keySet().iterator().next();ink.remove(oldest).bitmap.recycle();}cache=new InkCache(getWidth(),getHeight());ink.put(layer,cache);}
-            LinkedHashMap<String,Map<String,Object>> visible=new LinkedHashMap<>();
-            for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer))visible.put(e.getKey(),stroke);}
-            for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer))visible.put("object:"+e.getKey(),new DrawItem(model,o).geometry());}
-            cache.draw(c,visible,this::transform,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
+            ArrayList<TileInkCache.Item> visible=new ArrayList<>();
+            for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer))visible.add(new TileInkCache.Item(e.getKey(),stroke));}
+            // Live ink uses the same transparent layer, item order and compositing
+            // as committed ink. Switching to saved state must not change pixels.
+            if(layer.equals(selected)&&points!=null&&current!=null){Map<String,Object> live=Json.map(Json.parse(stroke().toString()));visible.add(new TileInkCache.Item(current,live,false));}
+            for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(!"template".equals(o.get("shape"))&&layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)){TileInkCache.Item cached=objectTileItems.get(e.getKey());boolean linked=o.containsKey("from")||o.containsKey("to");if(cached==null||objectTileSources.get(e.getKey())!=o){cached=new TileInkCache.Item("object:"+e.getKey(),new DrawItem(model,o).geometry());objectTileSources.put(e.getKey(),o);objectTileItems.put(e.getKey(),cached);}else if(linked){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!cached.value.equals(geometry)){cached=new TileInkCache.Item("object:"+e.getKey(),geometry);objectTileItems.put(e.getKey(),cached);}}visible.add(cached);}}
+            objectTileSources.keySet().retainAll(model.objects.keySet());objectTileItems.keySet().retainAll(model.objects.keySet());
+            RectF viewport=documentViewport();if(viewport.isEmpty())return;
+            c.save();transform(c);
+            if(monolithicTileProbe!=null)tileInk.drawMonolithic(c,visible,monolithicTileProbe,rasterTier,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
+            else tileInk.draw(c,layer,visible,viewport,rasterTier,cullTileItems,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
+            c.restore();
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
             if(model.deleted){c.drawColor(Color.WHITE);paint.setColor(Color.BLACK);paint.setTextSize(32);c.drawText("Document deleted · open another file from Notes",24,60,paint);return;}
             if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
             if(getWidth()==0||getHeight()==0)return;
-            String key=document+"/"+page+"/"+type+"/"+getWidth()+"/"+getHeight()+"/"+zoom+"/"+offsetX+"/"+offsetY;
-            if(!key.equals(inkTransform)){for(InkCache item:ink.values())item.bitmap.recycle();ink.clear();inkTransform=key;}
+            tileInk.beginFrame();
+            String key=document+"/"+page+"/"+type;
+            if(!key.equals(inkTransform)){tileInk.clear();inkTransform=key;objectTileSources.clear();objectTileItems.clear();}
+            rasterTier=TileInkCache.densityTier(scale()*zoom);
             c.save();transform(c);if(!type.equals("infinite")){paint.setColor(0xffaaaaaa);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);c.drawRect(0,0,1000,1400,paint);paint.setStyle(Paint.Style.FILL);}c.restore();
             boolean previewing=false;for(Object raw:transformPreviews.values())try{if(((Number)Json.map(raw).getOrDefault("expires",0)).longValue()>System.currentTimeMillis()){previewing=true;break;}}catch(Exception ignored){}
+            RectF previewViewport=previewing?documentViewport():null;
+            boolean mono=monolithicTileProbe!=null&&!previewing;if(mono){c.save();Matrix before=c.getMatrix();transform(c);c.clipRect(monolithicTileProbe);c.setMatrix(before);c.drawColor(Color.WHITE);}
             for(String layer:layers.keySet())if(visible(layer)){
                 c.save();Matrix before=c.getMatrix();transform(c);for(ErasePreview preview:erasePreviews.values())if(preview.layer.equals(layer)&&preview.page==page)for(Path cut:preview.paths)c.clipOutPath(cut);c.setMatrix(before);
                 if(useInkCache&&!previewing)settledInk(c,layer);
-                else {c.save();transform(c);for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject s=e.getValue();if(!e.getKey().equals(current)&&layer.equals(s.optString("layer"))&&s.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)&&!(previewing&&previewed("stroke",e.getKey())))drawStroke(c,s);}c.restore();}
+                else {c.save();transform(c);for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject s=e.getValue();if(!e.getKey().equals(current)&&layer.equals(s.optString("layer"))&&s.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)&&!(previewing&&previewed("stroke",e.getKey()))){if(previewing){Map<String,Object> item=Json.map(Json.parse(s.toString()));if(!RectF.intersects(previewViewport,new TileInkCache.Item(e.getKey(),item).bounds))continue;}drawStroke(c,s);}}c.restore();}
                 c.save();transform(c);
                 if(type.equals("infinite"))for(Map<String,Object> guide:model.objects.values())if(layer.equals(guide.get("layer"))&&"template".equals(guide.get("shape"))&&((Number)guide.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(guide.get("object")))&&!pendingErase("object",String.valueOf(guide.get("object")),layer))drawInfiniteTemplate(c,guide);
-                if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)&&!(previewing&&previewed("object",e.getKey())))Render.drawObject(model,o,new com.notemaker.cli.Png(c));}
-                if(layer.equals(selected)&&points!=null&&current!=null)drawStroke(c,stroke());c.restore();
+                if((!useInkCache||previewing)&&layer.equals(selected)&&points!=null&&current!=null)drawStroke(c,stroke());
+                if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)&&!(previewing&&previewed("object",e.getKey()))){if(previewing){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!RectF.intersects(previewViewport,new TileInkCache.Item("object:"+e.getKey(),geometry).bounds))continue;}Render.drawObject(model,o,new com.notemaker.cli.Png(c));}}
+                c.restore();
                 c.restore();
             }
+            if(mono)c.restore();
             drawTransformPreviews(c);drawSelection(c);
             if(lassoing){c.save();transform(c);paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2/Math.max(.2f,zoom));paint.setPathEffect(new DashPathEffect(new float[]{7,5},0));if(freeformLasso&&lassoPath.size()>1){Path outline=new Path();outline.moveTo(lassoPath.get(0)[0],lassoPath.get(0)[1]);for(int i=1;i<lassoPath.size();i++)outline.lineTo(lassoPath.get(i)[0],lassoPath.get(i)[1]);c.drawPath(outline,paint);}else c.drawRect(lassoStartX,lassoStartY,lassoEndX,lassoEndY,paint);paint.setPathEffect(null);paint.setStyle(Paint.Style.FILL);c.restore();}
             if(inputStarted!=0){if(drawLatency!=null)drawLatency.accept(System.nanoTime()-inputStarted);inputStarted=0;}
             if(shapeDragging&&drawingShape!=null&&!drawingShape.equals("text")){float dx=shapeEndX-shapeStartX,dy=shapeEndY-shapeStartY,left=Math.min(shapeStartX,shapeEndX),top=Math.min(shapeStartY,shapeEndY),w=Math.abs(dx),h=Math.abs(dy);if(drawingShape.equals("line")||drawingShape.equals("arrow")){left=shapeStartX;top=shapeStartY;w=dx;h=dy;if(Math.abs(w)+Math.abs(h)<1){w=1;h=1;}}else{w=Math.max(12,w);h=Math.max(12,h);if(!type.equals("infinite")){left=Math.max(0,Math.min(1000-w,left));top=Math.max(0,Math.min(1400-h,top));}}JSONObject preview=objectValue(drawingShape,left,top,w,h,color,width,objectFillColor);c.save();transform(c);Render.drawObject(model,Json.map(Json.parse(preview.toString())),new com.notemaker.cli.Png(c));c.restore();}
             if(eraseTimings!=null)eraseTimings.put("draw_done",System.nanoTime());if(afterDraw!=null)afterDraw.run();
         }}
+        @Override protected void onDetachedFromWindow(){tileInk.clear();objectTileSources.clear();objectTileItems.clear();super.onDetachedFromWindow();}
         JSONObject stroke(){return obj("kind","stroke","stroke",current,"layer",selected,"page",page,"color",color,"width",width,"brush",brush,"material",material,"points",points);}
         boolean previewed(String kind,String id){long now=System.currentTimeMillis();for(Object raw:transformPreviews.values())try{Map<String,Object> preview=Json.map(raw);if(((Number)preview.getOrDefault("expires",0)).longValue()<=now)continue;for(Object item:Json.list(preview.get("entities"))){Map<String,Object> entity=Json.map(item);if(kind.equals(entity.get("kind"))&&id.equals(entity.get("id")))return true;}}catch(Exception ignored){}return false;}
+        RectF inversePreviewViewport(RectF viewport,double px,double py,double dx,double dy,double factor,double rotation,boolean flipX,boolean flipY){double a=Math.toRadians(rotation),cos=Math.cos(a),sin=Math.sin(a),sx=factor*(flipX?-1:1),sy=factor*(flipY?-1:1);float[] p={viewport.left,viewport.top,viewport.right,viewport.top,viewport.right,viewport.bottom,viewport.left,viewport.bottom};double l=Double.POSITIVE_INFINITY,t=l,r=Double.NEGATIVE_INFINITY,b=r;for(int i=0;i<p.length;i+=2){double vx=p[i]-(px+dx),vy=p[i+1]-(py+dy),rx=(cos*vx+sin*vy)/sx+px,ry=(-sin*vx+cos*vy)/sy+py;l=Math.min(l,rx);r=Math.max(r,rx);t=Math.min(t,ry);b=Math.max(b,ry);}return new RectF((float)l,(float)t,(float)r,(float)b);}
         void drawTransformPreviews(Canvas c){
             long now=System.currentTimeMillis();
+            RectF viewport=documentViewport();if(viewport.isEmpty())return;
             ArrayList<Object> previews=new ArrayList<>();for(Object raw:transformPreviews.values()){if(pendingTransform!=null&&Objects.equals(Json.map(raw).get("session"),pendingTransform.get("session")))continue;previews.add(raw);}if(pendingTransform!=null){Map<String,Object> local=new LinkedHashMap<>(pendingTransform);local.put("expires",now+250);previews.add(local);}
             for(Object raw:previews)try{
                 Map<String,Object> preview=Json.map(raw);if(((Number)preview.getOrDefault("expires",0)).longValue()<=now)continue;Map<String,Object> tr=Json.map(preview.get("transform"));double factor=((Number)tr.getOrDefault("scale",1)).doubleValue(),dx=((Number)tr.getOrDefault("dx",0)).doubleValue(),dy=((Number)tr.getOrDefault("dy",0)).doubleValue(),rotation=((Number)tr.getOrDefault("rotation",0)).doubleValue();boolean flipX=Boolean.TRUE.equals(tr.get("flipX")),flipY=Boolean.TRUE.equals(tr.get("flipY"));List<Object> entities=Json.list(preview.get("entities"));double minX=Double.POSITIVE_INFINITY,minY=minX,maxX=Double.NEGATIVE_INFINITY,maxY=maxX;
                 for(Object rawEntity:entities){Map<String,Object> entity=Json.map(rawEntity);String kind=String.valueOf(entity.get("kind")),id=String.valueOf(entity.get("id"));if(kind.equals("object")){Map<String,Object> o=model.objects.get(id);if(o!=null){double x0=((Number)o.get("x")).doubleValue(),y0=((Number)o.get("y")).doubleValue();minX=Math.min(minX,x0);maxX=Math.max(maxX,x0+((Number)o.get("w")).doubleValue());minY=Math.min(minY,y0);maxY=Math.max(maxY,y0+((Number)o.get("h")).doubleValue());}}else{JSONObject s=strokes.get(id);if(s!=null){JSONArray ps=s.optJSONArray("points");for(int i=0;i<ps.length();i++){JSONArray p=ps.optJSONArray(i);minX=Math.min(minX,p.optDouble(0));maxX=Math.max(maxX,p.optDouble(0));minY=Math.min(minY,p.optDouble(1));maxY=Math.max(maxY,p.optDouble(1));}}}}
                 if(minX==Double.POSITIVE_INFINITY)continue;double px=((Number)tr.getOrDefault("pivotX",(minX+maxX)/2)).doubleValue(),py=((Number)tr.getOrDefault("pivotY",(minY+maxY)/2)).doubleValue();
+                RectF sourceViewport=inversePreviewViewport(viewport,px,py,dx,dy,factor,rotation,flipX,flipY);
                 int layerSave=c.saveLayerAlpha(null,96);c.save();transform(c);c.translate((float)(px+dx),(float)(py+dy));c.rotate((float)rotation);c.scale((float)(factor*(flipX?-1:1)),(float)(factor*(flipY?-1:1)));c.translate((float)-px,(float)-py);
                 for(Object rawEntity:entities){Map<String,Object> entity=Json.map(rawEntity);String kind=String.valueOf(entity.get("kind")),id=String.valueOf(entity.get("id"));
-                    if(kind.equals("object")){Map<String,Object> o=model.objects.get(id);if(o!=null)Render.drawObject(model,o,new com.notemaker.cli.Png(c));}
-                    else if(kind.equals("stroke")){JSONObject s=strokes.get(id);if(s!=null)drawStroke(c,s);}
+                    if(kind.equals("object")){Map<String,Object> o=model.objects.get(id);if(o!=null){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(RectF.intersects(sourceViewport,new TileInkCache.Item("object:"+id,geometry).bounds))Render.drawObject(model,o,new com.notemaker.cli.Png(c));}}
+                    else if(kind.equals("stroke")){JSONObject s=strokes.get(id);if(s!=null){Map<String,Object> item=Json.map(Json.parse(s.toString()));if(RectF.intersects(sourceViewport,new TileInkCache.Item(id,item).bounds))drawStroke(c,s);}}
                 }
                 c.restore();c.restoreToCount(layerSave);
             }catch(Exception ignored){}
         }
         void drawSelection(Canvas c){if(selectedEntities.isEmpty())return;c.save();transform(c);paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2/Math.max(.2f,zoom));paint.setPathEffect(new DashPathEffect(new float[]{8,5},0));for(Map<String,Object> entity:selectedEntities){String kind=String.valueOf(entity.get("kind")),id=String.valueOf(entity.get("id"));if(kind.equals("object")){Map<String,Object> o=model.objects.get(id);if(o!=null){float x=((Number)o.get("x")).floatValue(),y=((Number)o.get("y")).floatValue(),w=((Number)o.get("w")).floatValue(),h=((Number)o.get("h")).floatValue();c.save();c.translate(x+w/2,y+h/2);c.rotate(((Number)o.getOrDefault("rotation",0)).floatValue());c.scale(Boolean.TRUE.equals(o.get("flipX"))?-1:1,Boolean.TRUE.equals(o.get("flipY"))?-1:1);c.drawRect(-w/2-4,-h/2-4,w/2+4,h/2+4,paint);c.restore();}}else{JSONObject s=strokes.get(id);if(s!=null){JSONArray ps=s.optJSONArray("points");float l=Float.MAX_VALUE,t=Float.MAX_VALUE,r=-Float.MAX_VALUE,b=-Float.MAX_VALUE;for(int i=0;i<ps.length();i++){JSONArray p=ps.optJSONArray(i);l=Math.min(l,(float)p.optDouble(0));r=Math.max(r,(float)p.optDouble(0));t=Math.min(t,(float)p.optDouble(1));b=Math.max(b,(float)p.optDouble(1));}c.drawRect(l-8,t-8,r+8,b+8,paint);}}}paint.setPathEffect(null);paint.setStyle(Paint.Style.FILL);c.restore();}
-        void emit(){if(points!=null&&points.length()>0){try{enqueue(new JSONObject(stroke().toString()));}catch(Exception e){throw new RuntimeException(e);}lastSent=System.currentTimeMillis();}}
+        void emit(){if(points!=null&&points.length()>0){Map<String,Object> snapshot=Json.map(Json.parse(stroke().toString()));enqueue(new JSONObject(snapshot),snapshot);lastSent=System.currentTimeMillis();}}
         void point(float sx,float sy,float pressure){float dx=x(sx),dy=y(sy);if(!type.equals("infinite")&&(dx<0||dy<0||dx>1000||dy>1400))return;if(points.length()>=8000){JSONArray reduced=new JSONArray();for(int i=0;i<points.length();i+=2)reduced.put(points.optJSONArray(i));points=reduced;}points.put(new JSONArray(Arrays.asList(dx,dy,Math.max(0,Math.min(1,pressure)))));}
         void erasePoint(float sx,float sy){float dx=x(sx),dy=y(sy);if(type.equals("infinite")||(dx>=0&&dy>=0&&dx<=1000&&dy<=1400))eraserPoints.put(new JSONArray(Arrays.asList(dx,dy)));}
         void eraseAt(float sx,float sy){JSONArray path=new JSONArray();path.put(new JSONArray(Arrays.asList(x(sx),y(sy))));applyErase("stroke",selected,page,path,eraserRadius);}

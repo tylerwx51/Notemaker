@@ -38,6 +38,8 @@ public class Integration extends Instrumentation {
             MainActivity app=(MainActivity)startActivitySync(intent);android.util.Log.i("NoteMakerPerformance","Activity started");waitForIdleSync();
             String action=arguments.getString("action","state");
             if(action.equals("erase-performance")){result.putString("stream","PASS erase-performance\n"+com.notemaker.core.Json.write(ErasePerformance.run(this,app))+"\n");finish(Activity.RESULT_OK,result);return;}
+            if(action.equals("stroke-pixels")){StrokeCheck.run(this,app);result.putString("stream","PASS stroke-pixels\n");finish(Activity.RESULT_OK,result);return;}
+            if(action.equals("viewport")){ViewportCheck.run(this,app);result.putString("stream","PASS viewport\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("coverage")){CoverageCheck.run(this,app);result.putString("stream","PASS coverage\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("file-preview")){
                 Map<String,Object> snapshot=app.replica.read();Bitmap preview=DocumentBrowser.thumbnail(snapshot);
@@ -307,11 +309,12 @@ public class Integration extends Instrumentation {
                     if(action.equals("state")){
                         int width=app.canvas.getWidth(),height=app.canvas.getHeight();
                         Bitmap cached=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888),reference=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
-                        app.canvas.draw(new Canvas(cached));app.canvas.useInkCache=false;
-                        try{app.canvas.draw(new Canvas(reference));}finally{app.canvas.useInkCache=true;}
-                        int[] a=new int[width*height],b=new int[a.length];cached.getPixels(a,0,width,0,0,width,height);reference.getPixels(b,0,width,0,0,width,height);int mismatched=0;
-                        for(int i=0;i<a.length;i++)if(Math.abs(Color.red(a[i])-Color.red(b[i]))>8||Math.abs(Color.green(a[i])-Color.green(b[i]))>8||Math.abs(Color.blue(a[i])-Color.blue(b[i]))>8)mismatched++;
-                        cached.recycle();reference.recycle();if(mismatched>a.length/1000)throw new IllegalStateException("Ink cache differs from uncached rendering: "+mismatched+" pixels");
+                        app.canvas.draw(new Canvas(cached));app.canvas.cullTileItems=false;
+                        try{app.canvas.draw(new Canvas(reference));}finally{app.canvas.cullTileItems=true;}
+                        int[] a=new int[width*height],b=new int[a.length];cached.getPixels(a,0,width,0,0,width,height);reference.getPixels(b,0,width,0,0,width,height);int mismatched=0,minX=width,minY=height,maxX=-1,maxY=-1,maxChannelDiff=0;
+                        for(int i=0;i<a.length;i++)if(a[i]!=b[i]){int dr=Math.abs(Color.red(a[i])-Color.red(b[i])),dg=Math.abs(Color.green(a[i])-Color.green(b[i])),db=Math.abs(Color.blue(a[i])-Color.blue(b[i]));mismatched++;int x=i%width,y=i/width;minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);maxChannelDiff=Math.max(maxChannelDiff,Math.max(dr,Math.max(dg,db)));}
+                        if(mismatched>0){try(java.io.FileOutputStream out=app.openFileOutput("cache-diff-cached.png",0)){cached.compress(Bitmap.CompressFormat.PNG,100,out);}try(java.io.FileOutputStream out=app.openFileOutput("cache-diff-reference.png",0)){reference.compress(Bitmap.CompressFormat.PNG,100,out);}JSONObject diagnostic=MainActivity.obj("width",width,"height",height,"mismatchedPixels",mismatched,"thresholdPixels",0,"maxChannelDiff",maxChannelDiff,"bounds",new JSONArray(java.util.Arrays.asList(minX,minY,maxX,maxY)));try(java.io.FileOutputStream out=app.openFileOutput("cache-diff.json",0)){out.write(diagnostic.toString().getBytes("UTF-8"));}}
+                        cached.recycle();reference.recycle();if(mismatched>0)throw new IllegalStateException("Ink tile cache differs from uncullled same-tier reference: "+mismatched+" pixels bounds="+minX+","+minY+".."+maxX+","+maxY+" maxChannelDiff="+maxChannelDiff);
                     }
                     JSONObject state=MainActivity.obj("document",app.document,"type",app.type,"cursor",app.cursor,"pending",app.pendingCount,"strokes",app.strokes.size(),"events",new JSONArray(com.notemaker.core.Json.list(app.store.read().get("events"))),"visible",app.canvas.visible("test-layer"),"page",app.page,"model",new JSONObject(com.notemaker.core.Json.write(app.model.json())));
                     Bitmap image=Bitmap.createBitmap(1000,1400,Bitmap.Config.ARGB_8888);Canvas c=new Canvas(image);c.drawColor(Color.WHITE);
@@ -322,7 +325,7 @@ public class Integration extends Instrumentation {
                 }catch(Exception e){throw new RuntimeException(e);}
             }});
             result.putString("stream","PASS "+action+"\n");finish(Activity.RESULT_OK,result);
-        }catch(Throwable error){result.putString("stream","FAIL: "+error+"\n");finish(Activity.RESULT_CANCELED,result);}
+        }catch(Throwable error){result.putString("stream","FAIL: "+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result);}
     }
     private void drainWrites() throws Exception {ReplicaService.writes.submit(()->{}).get(30,java.util.concurrent.TimeUnit.SECONDS);}
     private void waitForSelection(MainActivity app,int count,String label)throws Exception{waitForSelectionCondition(app,()->app.selectionSession!=null&&app.selectedEntities.size()>=count,label);}

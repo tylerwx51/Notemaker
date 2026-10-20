@@ -44,10 +44,15 @@ def tree():
 
 
 def tap(value):
-    nodes = tree()
-    node = next((n for n in nodes.iter('node') if n.attrib.get('content-desc') == value), None)
-    if node is None:
-        node = next((n for n in nodes.iter('node') if n.attrib.get('text', '').casefold() == value.casefold()), None)
+    deadline = time.monotonic() + 15
+    while True:
+        nodes = tree()
+        node = next((n for n in nodes.iter('node') if n.attrib.get('content-desc') == value), None)
+        if node is None:
+            node = next((n for n in nodes.iter('node') if n.attrib.get('text', '').casefold() == value.casefold()), None)
+        if node is not None or time.monotonic() >= deadline:
+            break
+        time.sleep(.3)
     if node is None:
         (OUT / 'missing.xml').write_bytes(ET.tostring(nodes))
         raise AssertionError('Missing ' + value)
@@ -96,7 +101,7 @@ try:
         adb('shell', 'am', 'force-stop', 'com.notemaker')
         adb('shell', 'am', 'start', '-W', '-n', 'com.notemaker/.MainActivity')
         time.sleep(2)
-        tap('Agent'); capture('recent')
+        tap('Open Agent'); capture('recent')
         assert sum('New chat · idle' == n.attrib.get('text') for n in tree().iter('node')) == 5
         tap('More chats'); assert sum('New chat · idle' == n.attrib.get('text') for n in tree().iter('node')) == 6
         tap('New chat'); tap('Harness'); tap('mock')
@@ -122,10 +127,10 @@ try:
         wait(lambda: any('Mock response: Hello-agent' in n.attrib.get('text', '') for n in tree().iter('node')))
         tap('Expand tool activity'); capture('conversation')
         assert any('no document was read or changed' in n.attrib.get('text', '') for n in tree().iter('node'))
-        tap('Close'); tap('Agent'); tap('Hello-agent · done')
+        tap('Close'); tap('Open Agent'); tap('Hello-agent · done')
         wait(lambda: any('Mock response: Hello-agent' in n.attrib.get('text', '') for n in tree().iter('node')))
         tap('Message agent'); adb('shell', 'input', 'text', 'Saved-draft'); adb('shell', 'input', 'keyevent', '4')
-        tap('Close'); tap('Agent'); tap('Hello-agent · done')
+        tap('Close'); tap('Open Agent'); tap('Hello-agent · done')
         assert any(n.attrib.get('text') == 'Saved-draft' for n in tree().iter('node'))
         capture('reopened')
         tap('Close')
@@ -142,7 +147,7 @@ try:
             for name, args, output in fixtures:
                 event = dict(kind='tool', id=name, name=name, args=json.dumps(args), status='done', text=output)
                 db.execute('INSERT INTO chat_events(chat,payload) VALUES(?,?)', (tool_chat,json.dumps(event)))
-        tap('Agent'); tap('Refresh')
+        tap('Open Agent'); tap('Refresh')
         wait(lambda: any(n.get('text') == 'Tool examples · idle' for n in tree().iter('node')))
         tap('Tool examples · idle')
         wait(lambda: any('read apps/cli/README.md' in n.get('text','') for n in tree().iter('node')))

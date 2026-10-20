@@ -29,7 +29,20 @@ EXAMPLE=json.loads((ROOT/'apps/cli/examples/diagram.json').read_text())
 def command(*args,timeout=90):
     return subprocess.check_output(args,text=True,stderr=subprocess.STDOUT,timeout=timeout)
 
-def adb(*args):return command('adb','-s',SERIAL,*args)
+def adb(*args):
+    if args[:3] == ('shell','uiautomator','dump'):
+        # UI Automator can exit successfully after failing to obtain an idle
+        # hierarchy. Require a fresh, valid dump before callers consume it.
+        for attempt in range(5):
+            command('adb','-s',SERIAL,'shell','rm','-f',args[3])
+            output=command('adb','-s',SERIAL,*args)
+            try:
+                ET.fromstring(command('adb','-s',SERIAL,'shell','cat',args[3]))
+                return output
+            except (subprocess.CalledProcessError, ET.ParseError):
+                if attempt == 4:raise
+                time.sleep(.5)
+    return command('adb','-s',SERIAL,*args)
 
 def wait(fn,seconds=90):
     deadline=time.monotonic()+seconds;last=None
@@ -49,7 +62,9 @@ def instrument(action,**kwargs):
     assert f'PASS {action}' in out,out
     state=json.loads(adb('shell','run-as','com.notemaker','cat','files/integration.json'))
     (OUT/'latest-state.json').write_text(json.dumps(state,indent=2))
-    adb('shell','am','start','-W','-f','0x10000000','-n','com.notemaker/.MainActivity')
+    # Complete instrumentation process teardown before reopening the editor.
+    adb('shell','am','force-stop','com.notemaker')
+    adb('shell','am','start','-W','-f','0x20000000','-n','com.notemaker/.MainActivity')
     wait(lambda: bool(re.search(r'topResumedActivity=.*com\.notemaker/\.MainActivity', adb('shell','dumpsys','activity','activities'))),15)
     return state
 

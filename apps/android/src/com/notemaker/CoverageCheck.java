@@ -73,7 +73,7 @@ final class CoverageCheck {
         }
         visible.put("object:box",Actions.drawing(object("object","box","shape","rect","x",50,"y",50,"w",90,"h",90,"fill",0x80ff0000),"base"));
         Map<String,Object> original=visible.get("s1");InkCache cache=new InkCache(320,320);
-        for(int step=0;step<9;step++){
+        for(int step=0;step<10;step++){
             if(step==1)visible.put("s1",new DrawItem(new Model(),original).erase(Collections.singletonList(Geometry.rect(75,30,25,130))));
             if(step==2)visible.put("s1",original);
             if(step==3)visible.remove("s0");
@@ -81,6 +81,7 @@ final class CoverageCheck {
             if(step==5){Map<String,Object> a=new LinkedHashMap<>(original);a.put("stroke","append");visible.put("append",a);}
             if(step==6){Map<String,Object> a=new LinkedHashMap<>(original);a.put("brush","marker");a.put("width",24);visible.put("s1",a);}
             if(step==7){Map<String,Object> box=visible.remove("object:box"),a=new LinkedHashMap<>(original);a.put("stroke","insert");visible.put("insert",a);visible.put("object:box",box);}
+            if(step==9){Map<String,Object> a=new LinkedHashMap<>(visible.get("s1"));a.put("material",90);visible.put("s1",a);}
             if(step==8){Map<String,Object> box=new LinkedHashMap<>(visible.get("object:box"));box.put("x",80);box.put("rotation",33);visible.put("object:box",box);}
             Bitmap actual=Bitmap.createBitmap(320,320,Bitmap.Config.ARGB_8888),expected=Bitmap.createBitmap(320,320,Bitmap.Config.ARGB_8888);
             java.util.function.Consumer<Canvas> transform=c->{c.translate(10.5f,5.25f);c.scale(1.3f,1.3f);};

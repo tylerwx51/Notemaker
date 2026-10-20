@@ -15,6 +15,18 @@ public final class Png implements Render.Surface {
     public void beginErase(java.util.List<double[][]> polygons){clips.add(g.getClip());for(double[][] p:polygons){Area keep=g.getClip()==null?new Area(new Rectangle2D.Double(-1e9,-1e9,2e9,2e9)):new Area(g.getClip());keep.subtract(new Area(ItemCoverage.path(p,true)));g.setClip(keep);}}
     public void endErase(){g.setClip(clips.remove(clips.size()-1));}
     public void polygon(double[][] points,int color,double width,Integer fill,boolean closed){Shape p=ItemCoverage.path(points,closed);if(fill!=null){g.setColor(new Color(fill,true));g.fill(p);}if(width>0){g.setColor(new Color(color,true));g.setStroke(new BasicStroke((float)width,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));g.draw(p);}}
+    public void ink(java.util.List<double[][]> passes,int color){
+        if(passes.size()==1){polygon(passes.get(0),color,0,color,true);return;}
+        if((color>>>24)==255){Path2D union=new Path2D.Double(Path2D.WIND_NON_ZERO);for(double[][] points:passes)union.append(ItemCoverage.path(points,true),false);g.setColor(new Color(color,true));g.fill(union);return;}
+        // Layer k contains pixels visited at least k+1 times. Unioning before
+        // rasterization prevents antialias cracks at artificial pass boundaries.
+        java.util.List<Area> layers=new java.util.ArrayList<>();
+        for(double[][] points:passes){Area carry=new Area(ItemCoverage.path(points,true));
+            for(Area layer:layers){Area overlap=new Area(layer);overlap.intersect(carry);layer.add(carry);carry=overlap;if(carry.isEmpty())break;}
+            if(!carry.isEmpty())layers.add(carry);
+        }
+        g.setColor(new Color(color,true));for(Area layer:layers)g.fill(layer);
+    }
     private final java.util.Deque<AffineTransform> transforms=new java.util.ArrayDeque<>();
     private Png(Graphics2D g){this.g=g;g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);}
     public static void export(Model m,int page,double x,double y,int w,int h,File out)throws IOException {

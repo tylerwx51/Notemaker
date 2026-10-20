@@ -10,6 +10,8 @@ public final class Render {
         default void beginErase(List<double[][]> polygons){if(!polygons.isEmpty())throw new UnsupportedOperationException("Erasure masks unsupported");}
         default void endErase(){}
         default void polygon(double[][] points,int color,double width,Integer fill,boolean closed){throw new UnsupportedOperationException("Polygon paint unsupported");}
+        /** Continuous ribbon passes. Raster surfaces merge shared edges before compositing ink. */
+        default void ink(List<double[][]> passes,int color){for(double[][] p:passes)polygon(p,color,0,color,true);}
         void line(double x,double y,double x2,double y2,int color,double width);
         void rect(double x,double y,double w,double h,int color,double width,Integer fill,boolean ellipse);
         void text(double x,double baseline,String text,int color,double size);
@@ -84,14 +86,27 @@ public final class Render {
     private static void fillRibbon(Surface c,List<StrokePoint> path,double[] baseWidths,double shift,int color,boolean roundCaps){fillRibbon(c,path,baseWidths,shift,color,roundCaps,1);}
     private static void fillRibbon(Surface c,List<StrokePoint> path,double[] baseWidths,double shift,int color,boolean roundCaps,double widthScale){
         if(path.size()==1){StrokePoint p=path.get(0);int n=24;double[][] circle=new double[n][2];for(int i=0;i<n;i++){double a=2*Math.PI*i/n,r=baseWidths[0]*widthScale;circle[i][0]=p.x+r*Math.cos(a);circle[i][1]=p.y+r*Math.sin(a);}c.polygon(circle,color,0,color,true);return;}
-        List<double[]> outline=new ArrayList<>(path.size()*2+20);double[] centerX=new double[path.size()],centerY=new double[path.size()],radii=new double[path.size()];
-        for(int i=0;i<path.size();i++){StrokePoint p=path.get(i);double nx=-p.ty,ny=p.tx;radii[i]=Math.max(.25,baseWidths[i]*widthScale);centerX[i]=p.x+nx*baseWidths[i]*shift;centerY[i]=p.y+ny*baseWidths[i]*shift;outline.add(new double[]{centerX[i]+nx*radii[i],centerY[i]+ny*radii[i]});}
-        if(roundCaps)addCap(outline,centerX[path.size()-1],centerY[path.size()-1],path.get(path.size()-1),radii[path.size()-1],false);
-        else{StrokePoint p=path.get(path.size()-1);double ex=p.tx*radii[radii.length-1],ey=p.ty*radii[radii.length-1];outline.set(outline.size()-1,new double[]{outline.get(outline.size()-1)[0]+ex,outline.get(outline.size()-1)[1]+ey});}
-        for(int i=path.size()-1;i>=0;i--){StrokePoint p=path.get(i);double nx=-p.ty,ny=p.tx;outline.add(new double[]{centerX[i]-nx*radii[i],centerY[i]-ny*radii[i]});}
-        if(roundCaps)addCap(outline,centerX[0],centerY[0],path.get(0),radii[0],true);
-        else{StrokePoint p=path.get(0);double ex=p.tx*radii[0],ey=p.ty*radii[0];int i=outline.size()-1;outline.set(i,new double[]{outline.get(i)[0]-ex,outline.get(i)[1]-ey});}
-        c.polygon(outline.toArray(new double[outline.size()][]),color,0,color,true);
+        // Partition the centerline into direction cones so crossings belong to
+        // separate passes and receive a second ink deposit.
+        List<double[][]> passes=new ArrayList<>();int start=0;double turn=0;
+        for(int i=1;i<path.size();i++){
+            StrokePoint before=path.get(i-1),point=path.get(i);
+            turn+=Math.abs(Math.atan2(before.tx*point.ty-before.ty*point.tx,before.tx*point.tx+before.ty*point.ty));
+            if(turn>Math.PI/2&&i-1>start){passes.add(ribbon(path,baseWidths,shift,widthScale,start,i-1,start==0&&roundCaps,false,!roundCaps));start=i-1;turn=0;}
+        }
+        passes.add(ribbon(path,baseWidths,shift,widthScale,start,path.size()-1,start==0&&roundCaps,roundCaps,!roundCaps));
+        c.ink(passes,color);
+    }
+    private static double[][] ribbon(List<StrokePoint> path,double[] widths,double shift,double scale,int start,int end,boolean startCap,boolean endCap,boolean squareEnds){
+        List<double[]> outline=new ArrayList<>((end-start+1)*2+20);
+        for(int i=start;i<=end;i++){StrokePoint p=path.get(i);double r=Math.max(.25,widths[i]*scale),offset=widths[i]*shift+r;outline.add(new double[]{p.x-p.ty*offset,p.y+p.tx*offset});}
+        StrokePoint last=path.get(end),first=path.get(start);
+        if(squareEnds&&end==path.size()-1){double[] edge=outline.get(outline.size()-1);double radius=Math.max(.25,widths[end]*scale);edge[0]+=last.tx*radius;edge[1]+=last.ty*radius;}
+        if(endCap)addCap(outline,last.x-last.ty*widths[end]*shift,last.y+last.tx*widths[end]*shift,last,Math.max(.25,widths[end]*scale),false);
+        for(int i=end;i>=start;i--){StrokePoint p=path.get(i);double r=Math.max(.25,widths[i]*scale),offset=widths[i]*shift-r;outline.add(new double[]{p.x-p.ty*offset,p.y+p.tx*offset});}
+        if(squareEnds&&start==0){double[] edge=outline.get(outline.size()-1);double radius=Math.max(.25,widths[start]*scale);edge[0]-=first.tx*radius;edge[1]-=first.ty*radius;}
+        if(startCap)addCap(outline,first.x-first.ty*widths[start]*shift,first.y+first.tx*widths[start]*shift,first,Math.max(.25,widths[start]*scale),true);
+        return outline.toArray(new double[outline.size()][]);
     }
     private static void addCap(List<double[]> out,double cx,double cy,StrokePoint p,double radius,boolean start){
         double normal=Math.atan2(p.tx,-p.ty),angle=start?normal+Math.PI:normal;int steps=10;
@@ -170,7 +185,56 @@ public final class Render {
         private String path(double[][] p,boolean closed){StringBuilder d=new StringBuilder();for(int i=0;i<p.length;i++)d.append(i==0?"M":"L").append(p[i][0]).append(' ').append(p[i][1]);if(closed)d.append('Z');return d.toString();}
         public void beginErase(List<double[][]> polygons){clipCounts.push(polygons.size());for(double[][] p:polygons){String id="erase-"+(clipId++);s.append("<defs><clipPath id=\"").append(id).append("\" clipPathUnits=\"userSpaceOnUse\"><path clip-rule=\"evenodd\" d=\"M-1000000000 -1000000000H1000000000V1000000000H-1000000000Z ").append(path(p,true)).append("\"/></clipPath></defs><g clip-path=\"url(#").append(id).append(")\">");}}
         public void endErase(){for(int i=clipCounts.pop();i>0;i--)s.append("</g>");}
-        public void polygon(double[][] points,int color,double width,Integer fill,boolean closed){s.append("<path d=\"").append(path(points,closed)).append("\" stroke=\"").append(color(color)).append("\" stroke-opacity=\"").append(alpha(color)).append("\" stroke-width=\"").append(width).append("\" stroke-linejoin=\"round\" stroke-linecap=\"round\" fill=\"").append(fill==null?"none":color(fill)).append("\" fill-opacity=\"").append(fill==null?1:alpha(fill)).append("\"/>");}
+        public void polygon(double[][] points,int color,double width,Integer fill,boolean closed){s.append("<path d=\"").append(path(points,closed)).append("\" stroke=\"").append(width>0?color(color):"none").append("\" stroke-opacity=\"").append(alpha(color)).append("\" stroke-width=\"").append(width).append("\" stroke-linejoin=\"round\" stroke-linecap=\"round\" fill=\"").append(fill==null?"none":color(fill)).append("\" fill-opacity=\"").append(fill==null?1:alpha(fill)).append("\"/>");}
+        public void ink(List<double[][]> passes,int color){
+            if(passes.size()==1){polygon(passes.get(0),color,0,color,true);return;}
+            // All passes have the same winding: paint their union once, then
+            // each later pass clipped to prior coverage adds one ink deposit.
+            StringBuilder union=new StringBuilder();List<String> paths=new ArrayList<>();
+            for(double[][] points:passes){String d=path(points,true);paths.add(d);union.append(d);}
+            s.append("<path d=\"").append(union).append("\" fill-rule=\"nonzero\" fill=\"").append(color(color)).append("\" fill-opacity=\"").append(alpha(color)).append("\"/>");
+            if((color>>>24)==255)return;
+            String prefix="ink-"+(clipId++)+"-";
+            s.append("<defs xmlns:xlink=\"http://www.w3.org/1999/xlink\">");
+            for(int i=0;i<paths.size()-1;i++)s.append("<path id=\"").append(prefix).append(i).append("\" d=\"").append(paths.get(i)).append("\"/>");
+            List<Integer> overlaps=new ArrayList<>();
+            for(int i=1;i<paths.size();i++){
+                List<Integer> prior=new ArrayList<>();for(int j=0;j<i;j++)if(interiorOverlap(passes.get(i),passes.get(j)))prior.add(j);
+                // A shared cut has no overlap area. Omitting it also avoids
+                // rasterizers applying clip-edge antialiasing as an ink seam.
+                if(prior.isEmpty())continue;overlaps.add(i);
+                s.append("<clipPath id=\"").append(prefix).append("clip-").append(i).append("\" clipPathUnits=\"userSpaceOnUse\">");
+                for(int j:prior)s.append("<use xlink:href=\"#").append(prefix).append(j).append("\"/>");
+                s.append("</clipPath>");
+            }
+            s.append("</defs>");
+            for(int i:overlaps)s.append("<path d=\"").append(paths.get(i)).append("\" clip-path=\"url(#").append(prefix).append("clip-").append(i).append(")\" fill=\"").append(color(color)).append("\" fill-opacity=\"").append(alpha(color)).append("\"/>");
+        }
+        private static double side(double[] a,double[] b,double[] p){return (b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);}
+        private static boolean strictlyInside(double[][] polygon,double[] point){
+            if(!Geometry.contains(polygon,point[0],point[1]))return false;
+            for(int i=0;i<polygon.length;i++){double[] a=polygon[i],b=polygon[(i+1)%polygon.length];
+                if(Math.abs(side(a,b,point))<1e-7&&point[0]>=Math.min(a[0],b[0])-1e-8&&point[0]<=Math.max(a[0],b[0])+1e-8&&point[1]>=Math.min(a[1],b[1])-1e-8&&point[1]<=Math.max(a[1],b[1])+1e-8)return false;}
+            return true;
+        }
+        private static boolean interiorOverlap(double[][] a,double[][] b){
+            double[] x=Geometry.bounds(a),y=Geometry.bounds(b);if(x[2]<=y[0]||y[2]<=x[0]||x[3]<=y[1]||y[3]<=x[1])return false;
+            for(double[] p:a)if(strictlyInside(b,p))return true;for(double[] p:b)if(strictlyInside(a,p))return true;
+            for(int i=0;i<a.length;i++)for(int j=0;j<b.length;j++){
+                double[] p=a[i],q=a[(i+1)%a.length],r=b[j],t=b[(j+1)%b.length];
+                if(Math.max(p[0],q[0])<Math.min(r[0],t[0])||Math.max(r[0],t[0])<Math.min(p[0],q[0])||Math.max(p[1],q[1])<Math.min(r[1],t[1])||Math.max(r[1],t[1])<Math.min(p[1],q[1]))continue;
+                double u=side(p,q,r),v=side(p,q,t),w=side(r,t,p),z=side(r,t,q);
+                if((u>1e-7&&v< -1e-7||u< -1e-7&&v>1e-7)&&(w>1e-7&&z< -1e-7||w< -1e-7&&z>1e-7))return true;
+            }
+            // Coincident/retraced boundaries need an interior witness: no
+            // vertex is strictly inside and no edges cross in that case.
+            for(int i=0;i<a.length;i++){
+                double[] p=a[i],q=a[(i+1)%a.length];double dx=q[0]-p[0],dy=q[1]-p[1],length=Math.hypot(dx,dy);if(length<1e-8)continue;
+                double epsilon=Math.min(length*.001,1e-4),cx=(p[0]+q[0])/2,cy=(p[1]+q[1])/2;
+                for(int sign:new int[]{-1,1}){double[] witness={cx-sign*dy/length*epsilon,cy+sign*dx/length*epsilon};if(strictlyInside(a,witness)&&strictlyInside(b,witness))return true;}
+            }
+            return false;
+        }
         public Svg(double x,double y,double w,double h){s.append("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"").append(w).append("\" height=\"").append(h).append("\" viewBox=\"").append(x).append(' ').append(y).append(' ').append(w).append(' ').append(h).append("\"><rect x=\"").append(x).append("\" y=\"").append(y).append("\" width=\"").append(w).append("\" height=\"").append(h).append("\" fill=\"white\"/>");}
         private String color(int c){return String.format(Locale.ROOT,"#%06x",c&0xffffff);}
         private double alpha(int c){return (c>>>24)/255.0;}
