@@ -26,12 +26,15 @@ def main():
     parser.add_argument('--synthetic-strokes',action='store_true',help='Measure 1,000 synthetic strokes and process resources without a note archive')
     parser.add_argument('--interaction-suite',action='store_true',help='Measure editor navigation, tools, layers, reopen, history, and page switching on disposable notes')
     parser.add_argument('--cold-start',action='store_true',help='Measure process-cold opens of a copied note')
+    parser.add_argument('--checkpoint-performance',action='store_true',help='Measure checkpoint write cost on a copied note')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
     parser.add_argument('--seed-proxy-config',action='store_true',help='Seed an isolated, offline proxy document index for cold-start measurement')
+    parser.add_argument('--background-checkpoint',action='store_true',help='Before cold-start samples, background the editor and wait for its automatic checkpoint')
     parser.add_argument('--mode',choices=['partial','item'],default='partial')
     args=parser.parse_args()
-    if sum((args.synthetic_strokes,args.interaction_suite,args.cold_start))>1: parser.error('Choose one performance mode')
+    if sum((args.synthetic_strokes,args.interaction_suite,args.cold_start,args.checkpoint_performance))>1: parser.error('Choose one performance mode')
+    if args.background_checkpoint and not args.cold_start: parser.error('--background-checkpoint requires --cold-start')
     if not args.synthetic_strokes and (not args.archive or not args.document): parser.error('--archive and --document are required for erasing or interaction timing')
     if not os.environ.get('IN_NIX_SHELL'): parser.error('Run through nix-shell')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False,mode=0o700)
@@ -40,7 +43,8 @@ def main():
     metadata={'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
               'source_changes':subprocess.check_output(['git','diff','--stat'],cwd=ROOT,text=True),
               'synthetic_strokes':args.synthetic_strokes,'cold_start':args.cold_start,
-              'compile_speed':args.compile_speed,'seed_proxy_config':args.seed_proxy_config}
+              'compile_speed':args.compile_speed,'seed_proxy_config':args.seed_proxy_config,
+              'background_checkpoint':args.background_checkpoint}
     for prop in ('ro.product.model','ro.build.version.sdk','ro.build.fingerprint'):
         metadata[prop]=call('shell','getprop',prop).decode().strip()
     (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
@@ -102,6 +106,21 @@ def main():
         call('shell','run-as',PACKAGE,'cp','-r',*sources,'.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')
         if args.cold_start:
+            checkpoint_ms=None
+            if args.background_checkpoint:
+                journal=next((replica/'files').glob('document-*.json.journal'))
+                relative='files/'+journal.name
+                def journal_size(): return int(call('shell','run-as',PACKAGE,'stat','-c','%s',relative).decode().strip())
+                assert journal_size()>=1024*1024,'Checkpoint fixture WAL is too small'
+                launch=call('shell','am','start','-W','-n',PACKAGE+'/com.notemaker.MainActivity',timeout=120).decode()
+                assert 'Status: ok' in launch,launch
+                assert journal_size()>=1024*1024,'Checkpoint ran while editor was visible'
+                begun=time.monotonic_ns()
+                call('shell','input','keyevent','KEYCODE_HOME')
+                deadline=time.monotonic()+30
+                while journal_size()!=0 and time.monotonic()<deadline: time.sleep(.1)
+                assert journal_size()==0,'Background checkpoint did not finish'
+                checkpoint_ms=(time.monotonic_ns()-begun)/1e6
             ticks=int(call('shell','getconf','CLK_TCK').decode().strip())
             samples=[]
             for index in range(12):
@@ -128,10 +147,17 @@ def main():
                                 'android_wait_ms':int(fields['WaitTime']),
                                 'host_start_wall_ms':host_ms,'process_cpu_ms':cpu_ms,
                                 'pss_kib':int(pss.group(1)),'io':io})
-            (out/'metrics.json').write_text(json.dumps({'warmup':2,'samples':samples},indent=2)+'\n')
+            (out/'metrics.json').write_text(json.dumps({'warmup':2,'background_checkpoint_ms':checkpoint_ms,'samples':samples},indent=2)+'\n')
             timed=sorted(sample['android_total_ms'] for sample in samples[2:])
             print(json.dumps({'samples':len(timed),'android_total_p50_ms':statistics.median(timed),
                               'android_total_p95_ms':timed[int(.95*len(timed))]}))
+            return
+        if args.checkpoint_performance:
+            output=call('shell','am','instrument','-w','-e','action','checkpoint-performance',PACKAGE+'/com.notemaker.Integration',timeout=180).decode()
+            (out/'instrumentation.txt').write_text(output)
+            assert 'PASS checkpoint-performance' in output,output
+            (out/'metrics.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/checkpoint-performance.json'))
+            print((out/'metrics.json').read_text())
             return
         action='performance' if args.synthetic_strokes else 'interaction-performance' if args.interaction_suite else 'erase-performance'
         output=call('shell','am','instrument','-w','-e','action',action,'-e','mode',args.mode,PACKAGE+'/com.notemaker.Integration',timeout=600).decode()

@@ -1,6 +1,6 @@
 # ADR 0020: Durable local replica checkpoints
 
-Status: accepted on `perf/journal-checkpoint`, 2026-10-20.
+Status: accepted on `perf/checkpoint-scheduling`, 2026-10-20.
 
 ## Context
 
@@ -23,10 +23,12 @@ append transactions after the checkpoint.
 
 ## Consequences
 
-The checkpoint requires serialization and disk writes, so it must be measured
-separately from interactive action latency. The command is manual on this
-branch; automatic scheduling needs evidence that the checkpoint improves
-subsequent launches and does not stall editing. Backups still need a consistent
+The checkpoint requires serialization and disk writes, so Android queues it
+through the shared local proxy after the editor becomes hidden, and only when
+its WAL is at least 1 MiB. It runs after queued saves. A foregrounded editor
+skips work that has not begun. Android can kill the process during background
+work; the old WAL or checkpointed base remains recoverable. The CLI command
+remains available for explicit maintenance. Backups still need a consistent
 base-plus-journal pair under the document lock or with writers stopped.
 
 The proxy uses its persisted document-name index to skip a redundant full-base
@@ -35,5 +37,9 @@ copied physical-device note, checkpointed process-cold launches were 1,385 and
 1,401 ms median versus 1,653 ms with the original WAL. Without this index,
 checkpointed launch regressed to 1,801 ms. CLI and proxy checks passed,
 including restart, actor history, and an interrupted-truncation simulation.
-The initial checkpoint's device-side write cost and E Ink scanout remain
-unmeasured; see `docs/design/performance/journal-checkpoint.md`.
+On the physical NoteAir6C, a 4.6 MiB WAL checkpoint took 298–305 ms wall time,
+470–477 ms process CPU, and 2.42 MiB charged writes. Sending the editor home
+checkpointed the copied note; subsequent process-cold launches were 1,416 and
+1,443 ms median versus 1,660 ms without a checkpoint on the same APK. The
+physical E Ink scanout remains unmeasured. See
+`docs/design/performance/checkpoint-scheduling.md`.

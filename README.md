@@ -411,6 +411,11 @@ Use `apps/cli/notemaker --proxy-file PATH --document NAME checkpoint` to fold a
 large journal into its durable base while preserving the revision and undo
 history. The command returns the revision and journal bytes before and after;
 keep the proxy running and selected for this maintenance write.
+On Android, the local editor also queues a checkpoint after it becomes hidden
+when that document's journal is at least 1 MiB. It runs after queued saves;
+the visible editor does not checkpoint during pen input. Android may stop the
+background process before it finishes, so the next launch can still replay the
+journal safely.
 
 ### Automated test tiers
 
@@ -669,6 +674,10 @@ ahead-of-time compilation separately. Summarize multiple runs with
 `nix-shell --run 'python3 tests/summarize_cold_start.py OUTPUT.json RUN1 RUN2'`.
 Use `--seed-proxy-config` for a disposable offline proxy index containing the
 copied document name; it does not copy the source proxy's credentials.
+Use `--background-checkpoint` with cold-start mode to launch the copied note,
+send the editor home, require its journal to reach zero, and then measure cold
+launches. `--checkpoint-performance` measures the selected-proxy checkpoint's
+wall time, process CPU, PSS, and I/O on the copied note.
 For paired comparisons of the earlier three-mode suite, run
 `nix-shell --run 'python3 tests/summarize_interaction_performance.py
 BASELINE_FIRST CANDIDATE_FIRST CANDIDATE_REPEAT BASELINE_REPEAT OUTPUT.json'`.

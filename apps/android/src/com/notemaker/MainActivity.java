@@ -64,6 +64,7 @@ public class MainActivity extends Activity {
     String pendingTextFamily="sans-serif", pendingTextAlignment="left";
     int objectFillColor=Color.TRANSPARENT;
     volatile boolean running=true;
+    volatile boolean foreground;
     CanvasView canvas;
     EditorUi editor;
     AgentUi agent;
@@ -123,6 +124,19 @@ public class MainActivity extends Activity {
 
     }
     @Override public void onDestroy(){running=false;if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);if(previewExpiryTask!=null)selectionHandler.removeCallbacks(previewExpiryTask);if(previewDispatchTask!=null)selectionHandler.removeCallbacks(previewDispatchTask);AppReplica departing=replica;if(departing!=null&&selectionSession!=null)ReplicaService.writes.execute(()->{try{departing.command(Arrays.asList("selection","disconnect"),null);}catch(Exception ignored){}});if(replica!=null)replica.close();if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
+    @Override protected void onStart(){super.onStart();foreground=true;}
+    @Override protected void onStop(){
+        foreground=false;
+        AppReplica target=replica;
+        if(target!=null&&!target.remote()&&new File(target.local.file+".journal").length()>=1024*1024){
+            // Queue after outstanding edits. A hidden editor can spend a few
+            // hundred milliseconds folding its WAL without delaying pen input.
+            ReplicaService.writes.execute(()->{if(foreground)return;try{
+                target.command(Arrays.asList("checkpoint"),null);
+            }catch(Exception e){android.util.Log.w("NoteMaker","Background checkpoint failed",e);}});
+        }
+        super.onStop();
+    }
     File stateFile(){return store.file;}
     void configureProxy(){
         final AppReplica target=replica;final String targetType=type;

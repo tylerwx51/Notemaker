@@ -43,6 +43,11 @@ public class Integration extends Instrumentation {
                 try(java.io.FileOutputStream out=app.openFileOutput("interaction-performance.json",0)){out.write(metrics.getBytes("UTF-8"));}
                 result.putString("stream","PASS interaction-performance\n");finish(Activity.RESULT_OK,result);return;
             }
+            if(action.equals("checkpoint-performance")){
+                String metrics=com.notemaker.core.Json.write(CheckpointPerformance.run(app));
+                try(java.io.FileOutputStream out=app.openFileOutput("checkpoint-performance.json",0)){out.write(metrics.getBytes("UTF-8"));}
+                result.putString("stream","PASS checkpoint-performance\n");finish(Activity.RESULT_OK,result);return;
+            }
             if(action.equals("stroke-pixels")){StrokeCheck.run(this,app);result.putString("stream","PASS stroke-pixels\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("viewport")){ViewportCheck.run(this,app);result.putString("stream","PASS viewport\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("coverage")){CoverageCheck.run(this,app);result.putString("stream","PASS coverage\n");finish(Activity.RESULT_OK,result);return;}
