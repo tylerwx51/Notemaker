@@ -169,7 +169,7 @@ def main():
             for name,local in [('performance.json','metrics.json'),('performance-resources.json','resources.json')]:
                 try: (out/local).write_bytes(call('shell','run-as',PACKAGE,'cat','files/'+name))
                 except subprocess.CalledProcessError: pass
-        (out/'logcat.txt').write_bytes(call('logcat','-d','-s','AndroidRuntime','NoteMaker','NoteMakerPerformance'))
+        (out/'logcat.txt').write_bytes(call('logcat','-d','-s','AndroidRuntime','NoteMaker','NoteMakerPerformance','NoteMakerStartup'))
         if installed: call('uninstall',PACKAGE)
         call('shell','rm','-rf',remote)
         call('shell','am','start','-n','com.notemaker/.MainActivity')

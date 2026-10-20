@@ -1,0 +1,123 @@
+{
+  "device_model": "NoteAir6C",
+  "android_api": "36",
+  "source_apk_sha256": "4a3350c3c1e93e7baa9f594a97c0353077d97bcfa69d86c275315c0e99f3b4c8",
+  "source_revision": "7031c34dcc90b0ae27735c246b268649a49acd21",
+  "process_cold_launches": 12,
+  "phases": {
+    "preferences_done": {
+      "samples": 12,
+      "median_ms": 5.9540105,
+      "min_ms": 3.596354,
+      "max_ms": 7.952552
+    },
+    "load_reset": {
+      "samples": 12,
+      "median_ms": 6.0705205,
+      "min_ms": 3.703854,
+      "max_ms": 8.067032
+    },
+    "replica_created": {
+      "samples": 12,
+      "median_ms": 7.977031499999999,
+      "min_ms": 5.332031,
+      "max_ms": 9.978907
+    },
+    "snapshot_read": {
+      "samples": 12,
+      "median_ms": 1001.668359,
+      "min_ms": 982.150156,
+      "max_ms": 1039.853437
+    },
+    "shared_state_refreshed": {
+      "samples": 12,
+      "median_ms": 1023.4752599999999,
+      "min_ms": 1006.294531,
+      "max_ms": 1063.807604
+    },
+    "load_done": {
+      "samples": 12,
+      "median_ms": 1023.5650515,
+      "min_ms": 1006.379219,
+      "max_ms": 1063.896093
+    },
+    "view_built": {
+      "samples": 12,
+      "median_ms": 1048.7178385,
+      "min_ms": 1031.48026,
+      "max_ms": 1088.782447
+    },
+    "first_draw_start": {
+      "samples": 12,
+      "median_ms": 1124.0381765,
+      "min_ms": 1103.027656,
+      "max_ms": 1169.602656
+    },
+    "post_draw_callback": {
+      "samples": 12,
+      "median_ms": 1383.3047655,
+      "min_ms": 1362.214791,
+      "max_ms": 1443.195208
+    },
+    "proxy_document_scan": {
+      "samples": 12,
+      "median_ms": 5.128385,
+      "min_ms": 4.939584,
+      "max_ms": 5.955677
+    },
+    "proxy_root_validation": {
+      "samples": 12,
+      "median_ms": 975.3609114999999,
+      "min_ms": 960.849947,
+      "max_ms": 1018.559062
+    },
+    "proxy_config_synced": {
+      "samples": 12,
+      "median_ms": 985.77039,
+      "min_ms": 967.270208,
+      "max_ms": 1025.115364
+    },
+    "proxy_descriptor_synced": {
+      "samples": 12,
+      "median_ms": 990.147057,
+      "min_ms": 970.440208,
+      "max_ms": 1027.923645
+    },
+    "proxy_ensure_duration": {
+      "samples": 12,
+      "median_ms": 991.274609,
+      "min_ms": 971.647083,
+      "max_ms": 1029.105573
+    },
+    "snapshot_execute_duration": {
+      "samples": 12,
+      "median_ms": 2.1219010000000003,
+      "min_ms": 2.057917,
+      "max_ms": 2.24401
+    },
+    "root_validation_duration": {
+      "samples": 12,
+      "median_ms": 970.2583595,
+      "min_ms": 955.390312,
+      "max_ms": 1013.5317180000001
+    },
+    "model_refresh_duration": {
+      "samples": 12,
+      "median_ms": 22.722161500000027,
+      "min_ms": 16.968905999999947,
+      "max_ms": 24.144374999999968
+    },
+    "view_build_duration": {
+      "samples": 12,
+      "median_ms": 24.540885499999888,
+      "min_ms": 24.28130299999998,
+      "max_ms": 31.09010400000011
+    },
+    "draw_wait_duration": {
+      "samples": 12,
+      "median_ms": 76.6464054999999,
+      "min_ms": 66.21520900000019,
+      "max_ms": 88.3743750000001
+    }
+  }
+}

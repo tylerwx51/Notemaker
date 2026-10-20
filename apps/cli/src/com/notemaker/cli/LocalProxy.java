@@ -47,23 +47,32 @@ public final class LocalProxy implements Closeable {
         owner=new RandomAccessFile(new File(directory,"proxy.lock"),"rw");
         FileLock held;try{held=owner.getChannel().tryLock();}catch(OverlappingFileLockException e){held=null;}
         if(held==null){owner.close();throw new IOException("A proxy already owns this replica");}ownership=held;
+        Timing.mark("proxy_lock_done");
         try {
             File config=new File(directory,"proxy-config.json");
             settings=new ConcurrentHashMap<>(config.exists()?map(parse(new String(Files.readAllBytes(config.toPath()),StandardCharsets.UTF_8))):object("id",UUID.randomUUID().toString(),"token",UUID.randomUUID().toString()+UUID.randomUUID()));
             id=string(settings,"id");token=string(settings,"token");
+            Timing.mark("proxy_config_read");
             if(settings.containsKey("upstream"))upstream=new Endpoint(map(settings.get("upstream")));
             for(Object document:list(settings.getOrDefault("documents",Collections.emptyList())))store((String)document);
+            Timing.mark("proxy_known_documents");
             File[] files=directory.listFiles((d,n)->n.startsWith("document-")&&n.endsWith(".json"));
             if(files!=null)for(File file:files){Map<String,Object> state=map(parse(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)));if(state.containsKey("document"))store(string(state,"document"));}
+            Timing.mark("proxy_document_scan");
             for(Store local:documents.values()){Object root=local.read().get("serverId");if(root!=null){require(!settings.containsKey("rootId")||root.equals(settings.get("rootId")),"Replica contains different server databases");settings.put("rootId",root);}}
+            Timing.mark("proxy_root_validation");
             settings.put("documents",new ArrayList<>(documents.keySet()));saveSettings();initialized=true;
+            Timing.mark("proxy_config_synced");
             listener.setReuseAddress(true);listener.bind(new InetSocketAddress("127.0.0.1",port));
+            Timing.mark("proxy_bound");
             durable(new File(directory,"proxy.json"),object("url","http://127.0.0.1:"+port(),"token",token,"id",id));
+            Timing.mark("proxy_descriptor_synced");
         } catch(Exception e){ownership.release();owner.close();listener.close();throw new IOException(e);}
         // Long-lived streams must not exhaust a fixed command-worker pool.
         acceptor=new Thread(()->{while(running)try{Socket socket=listener.accept();sockets.add(socket);clients.execute(()->handle(socket));}catch(IOException e){if(running)System.err.println("Proxy accept: "+e);}},"local-proxy");
         synchronizer=new Thread(this::syncLoop,"proxy-sync");subscriber=new Thread(this::subscribe,"proxy-notifications");
         synchronized(changes){uploadDue=hasPending()?now()+500:Long.MAX_VALUE;}
+        Timing.mark("proxy_pending_checked");
         acceptor.start();synchronizer.start();subscriber.start();Runtime.getRuntime().addShutdownHook(new Thread(()->{try{close();}catch(IOException ignored){}} ,"notemaker-proxy-shutdown"));
     }
     private static long now(){return System.nanoTime()/1000000;}

@@ -68,6 +68,8 @@ public class MainActivity extends Activity {
     EditorUi editor;
     AgentUi agent;
     boolean displayedConnected;
+    boolean traceColdLoad;
+    long startupEpoch;
     Thread syncThread, localThread;
     Store store;
     Model model=new Model();
@@ -78,23 +80,46 @@ public class MainActivity extends Activity {
         JSONObject o=new JSONObject(); try {for(int i=0;i<args.length;i+=2)o.put((String)args[i],args[i+1]);}catch(Exception e){throw new RuntimeException(e);}return o;
     }
     static String id(){return UUID.randomUUID().toString();}
+    private static void startupMark(boolean enabled,String phase,long started){
+        if(enabled)android.util.Log.i("NoteMakerStartup",phase+"="+((System.nanoTime()-started)/1e6));
+    }
     @Override public void onCreate(Bundle b){
+        long startupStarted=System.nanoTime();
         super.onCreate(b);
+        boolean startupTrace=getPackageName().equals("com.notemaker.latency");
+        traceColdLoad=startupTrace;startupEpoch=startupStarted;
+        startupMark(startupTrace,"super_done",startupStarted);
         android.content.SharedPreferences prefs=getSharedPreferences("settings",0);
         scribbleToErase=prefs.getBoolean("scribbleToErase",false);
         freeformLasso=prefs.getBoolean("freeformLasso",false);
         material=Math.max(0,Math.min(100,prefs.getInt("penMaterial",50)));
         try{String savedClipboard=prefs.getString("selectionClipboard","");if(!savedClipboard.isEmpty())selectionClipboard=Json.map(Json.parse(savedClipboard));}catch(Exception ignored){}
         try{host=normalizeServerAddress(prefs.getString("host",host));}catch(Exception invalidSavedHost){host="";}document=prefs.getString("document",document);proxyUrl=prefs.getString("proxyUrl","");proxyToken=prefs.getString("proxyToken","");
+        startupMark(startupTrace,"preferences_done",startupStarted);
         load("fixed");
+        traceColdLoad=false;
+        startupMark(startupTrace,"load_done",startupStarted);
         agent=new AgentUi(this);
+        startupMark(startupTrace,"agent_created",startupStarted);
         editor=new EditorUi(this);
         View root=editor.build();
+        startupMark(startupTrace,"view_built",startupStarted);
         setContentView(root);
+        startupMark(startupTrace,"content_set",startupStarted);
+        if(startupTrace){
+            final android.view.ViewTreeObserver.OnDrawListener[] first={null};
+            final boolean[] seen={false};
+            first[0]=()->{if(!seen[0]){seen[0]=true;startupMark(true,"first_draw_start",startupStarted);
+                root.post(()->{root.getViewTreeObserver().removeOnDrawListener(first[0]);
+                    startupMark(true,"post_draw_callback",startupStarted);});}};
+            root.getViewTreeObserver().addOnDrawListener(first[0]);
+        }
         if(Build.VERSION.SDK_INT>=30)root.post(()->{WindowInsetsController controller=getWindow().getInsetsController();if(controller!=null){int appearance=WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;controller.setSystemBarsAppearance(appearance,appearance);}});
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         update();
+        startupMark(startupTrace,"update_done",startupStarted);
         configureProxy();
+        startupMark(startupTrace,"configure_done",startupStarted);
 
     }
     @Override public void onDestroy(){running=false;if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);if(previewExpiryTask!=null)selectionHandler.removeCallbacks(previewExpiryTask);if(previewDispatchTask!=null)selectionHandler.removeCallbacks(previewDispatchTask);AppReplica departing=replica;if(departing!=null&&selectionSession!=null)ReplicaService.writes.execute(()->{try{departing.command(Arrays.asList("selection","disconnect"),null);}catch(Exception ignored){}});if(replica!=null)replica.close();if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
@@ -175,14 +200,22 @@ public class MainActivity extends Activity {
         historyPending=false;
         // Reuse unchanged entity wrappers for a warm reopen, never across documents.
         eventCount=pendingCount=0;optimistic.clear();if(!document.equals(renderedDocument))renderedEntities.clear();cursor=0;revision=-1;hidden.clear();undo.clear();redo.clear();selected="base";page=0;type=newType;
+        startupMark(traceColdLoad,"load_reset",startupEpoch);
         try{
-            if(replica!=null)replica.close();replica=new AppReplica(this,document,proxyUrl,proxyToken);store=replica.local;Map<String,Object> state=replica.remote()?Json.object("effectiveModel",new Model().json(),"revision",-1,"cursor",0,"eventCount",0,"pendingCount",0):replica.read();
+            if(replica!=null)replica.close();replica=new AppReplica(this,document,proxyUrl,proxyToken);store=replica.local;
+            startupMark(traceColdLoad,"replica_created",startupEpoch);
+            Map<String,Object> state=replica.remote()?Json.object("effectiveModel",new Model().json(),"revision",-1,"cursor",0,"eventCount",0,"pendingCount",0):replica.read();
+            startupMark(traceColdLoad,"snapshot_read",startupEpoch);
             for(Object item:Json.list(state.getOrDefault("hidden",Collections.emptyList())))hidden.add((String)item);
             for(Object item:Json.list(state.getOrDefault("undo",Collections.emptyList())))undo.add((String)item);
             for(Object item:Json.list(state.getOrDefault("redo",Collections.emptyList())))redo.add((String)item);
-            selected=(String)state.getOrDefault("selected","base");page=((Number)state.getOrDefault("page",0)).intValue();refreshShared(state);renderedDocument=document;
+            selected=(String)state.getOrDefault("selected","base");page=((Number)state.getOrDefault("page",0)).intValue();
+            startupMark(traceColdLoad,"saved_preferences_restored",startupEpoch);
+            refreshShared(state);renderedDocument=document;
+            startupMark(traceColdLoad,"shared_state_refreshed",startupEpoch);
             if(replica.remote())type=newType;
             if(!replica.remote()&&eventCount==0&&pendingCount==0)enqueue(obj("kind","document","type",newType));
+            startupMark(traceColdLoad,"load_complete",startupEpoch);
         }catch(Exception e){throw new RuntimeException("Cannot read saved document",e);}
     }}
     void apply(JSONObject o){apply(o,Json.map(Json.parse(o.toString())));}

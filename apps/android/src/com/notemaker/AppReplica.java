@@ -31,7 +31,19 @@ final class AppReplica {
     }
     Object command(String name,List<String> args,Object input) throws Exception {
         if(remote())return LocalProxy.request(descriptor,name,"human",args,input);
-        return ReplicaService.ensure(app).execute(object("document",name,"actor","human","args",args,"input",input));
+        boolean trace=app.traceColdLoad&&args.size()==1&&args.get(0).equals("snapshot");
+        long started=trace?System.nanoTime():0;
+        long ensureStarted=started;
+        java.util.function.Consumer<String> previous=com.notemaker.core.Timing.observer.get();
+        if(trace)com.notemaker.core.Timing.observer.set(phase->android.util.Log.i("NoteMakerStartup",
+                phase+"="+((System.nanoTime()-ensureStarted)/1e6)));
+        LocalProxy proxy;
+        try{proxy=ReplicaService.ensure(app);}finally{if(trace)com.notemaker.core.Timing.observer.set(previous);}
+        if(trace)android.util.Log.i("NoteMakerStartup","proxy_ensure_duration="+((System.nanoTime()-started)/1e6));
+        started=trace?System.nanoTime():0;
+        Object result=proxy.execute(object("document",name,"actor","human","args",args,"input",input));
+        if(trace)android.util.Log.i("NoteMakerStartup","snapshot_execute_duration="+((System.nanoTime()-started)/1e6));
+        return result;
     }
     void listen(Runnable changed) throws Exception {
         HttpURLConnection connection=new Endpoint(descriptor).open("/api/stream");stream=connection;connection.setReadTimeout(45000);
