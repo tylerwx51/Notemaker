@@ -29,6 +29,12 @@ ADR 0017.
 Committing or rebuilding a stroke therefore does not switch its
 compositing path. This is a presentation change; actions, local persistence,
 actor histories and the offline protocol are unchanged.
+The Android live path now builds the shared item map directly from the
+in-memory point array, preserving its original numeric values instead of
+serializing and reparsing the stroke on every frame. The same map feeds
+emission, so live and persisted geometry follow one representation. Physical
+app-draw timing and the numeric-serialization tradeoff are recorded in
+`docs/design/performance/live-stroke-map-experiment.md`.
 
 Regression coverage includes actual CLI PNG/SVG exports, Android crossing
 pixels, and complete drawing-canvas pixel equality before and after live

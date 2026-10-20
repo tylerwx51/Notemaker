@@ -1,0 +1,428 @@
+{
+  "source_revision": "e2655044941b5d76035ca7f6741fed996e3985ef",
+  "source_apk_sha256": "ddd3c55d79ff30f4fc4e0897e2daf7581101b257f65c80d958b7f50d7f8f43fd",
+  "device_model": "NoteAir6C",
+  "android_api": "36",
+  "workload": {
+    "strokes": 1000,
+    "short_stroke_points": 50,
+    "figure_eight_points": 500,
+    "viewport_wrapped": true
+  },
+  "latency_ms": {
+    "stroke_latency": {
+      "over_30_ms": 5425,
+      "samples": 7920,
+      "p50_ms": 50.053542,
+      "p95_ms": 72.492343,
+      "p99_ms": 87.297604,
+      "max_ms": 117.297343
+    },
+    "down_latency": {
+      "over_30_ms": 142,
+      "samples": 990,
+      "p50_ms": 25.17474,
+      "p95_ms": 35.800781,
+      "p99_ms": 51.121146,
+      "max_ms": 77.678281
+    },
+    "move_latency": {
+      "over_30_ms": 4528,
+      "samples": 5940,
+      "p50_ms": 52.498593,
+      "p95_ms": 73.611719,
+      "p99_ms": 87.361771,
+      "max_ms": 117.297343
+    },
+    "up_latency": {
+      "over_30_ms": 755,
+      "samples": 990,
+      "p50_ms": 51.693281,
+      "p95_ms": 70.593385,
+      "p99_ms": 92.829791,
+      "max_ms": 102.411146
+    },
+    "figure_eight_latency": {
+      "over_30_ms": 53,
+      "samples": 80,
+      "p50_ms": 52.25349,
+      "p95_ms": 82.343073,
+      "p99_ms": 92.23151,
+      "max_ms": 92.23151
+    }
+  },
+  "windows": [
+    {
+      "strokes": "1-100 (10 warmup)",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 720,
+        "p50_ms": 0.91599,
+        "p95_ms": 2.455104,
+        "p99_ms": 3.755052,
+        "max_ms": 5.765833
+      },
+      "dispatch": {
+        "over_30_ms": 166,
+        "samples": 720,
+        "p50_ms": 9.356823,
+        "p95_ms": 40.493281,
+        "p99_ms": 43.128906,
+        "max_ms": 45.924323
+      },
+      "input_to_draw": {
+        "over_30_ms": 33,
+        "samples": 683,
+        "p50_ms": 21.079843,
+        "p95_ms": 29.793333,
+        "p99_ms": 34.012604,
+        "max_ms": 37.997552
+      },
+      "frame": {
+        "over_30_ms": 684,
+        "samples": 684,
+        "p50_ms": 61.137429,
+        "p95_ms": 90.182875,
+        "p99_ms": 91.718794,
+        "max_ms": 92.691073
+      }
+    },
+    {
+      "strokes": "401-500",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 800,
+        "p50_ms": 0.756198,
+        "p95_ms": 2.495937,
+        "p99_ms": 2.997552,
+        "max_ms": 6.352968
+      },
+      "dispatch": {
+        "over_30_ms": 270,
+        "samples": 800,
+        "p50_ms": 23.348333,
+        "p95_ms": 43.5675,
+        "p99_ms": 46.116302,
+        "max_ms": 52.868959
+      },
+      "input_to_draw": {
+        "over_30_ms": 67,
+        "samples": 746,
+        "p50_ms": 22.785156,
+        "p95_ms": 32.083906,
+        "p99_ms": 39.355416,
+        "max_ms": 51.070521
+      },
+      "frame": {
+        "over_30_ms": 741,
+        "samples": 747,
+        "p50_ms": 89.641307,
+        "p95_ms": 94.243896,
+        "p99_ms": 94.925552,
+        "max_ms": 95.64094
+      }
+    },
+    {
+      "strokes": "901-1000",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 800,
+        "p50_ms": 0.520208,
+        "p95_ms": 1.428646,
+        "p99_ms": 2.364427,
+        "max_ms": 4.675677
+      },
+      "dispatch": {
+        "over_30_ms": 218,
+        "samples": 800,
+        "p50_ms": 22.649948,
+        "p95_ms": 39.445989,
+        "p99_ms": 49.091875,
+        "max_ms": 54.939687
+      },
+      "input_to_draw": {
+        "over_30_ms": 461,
+        "samples": 666,
+        "p50_ms": 34.614219,
+        "p95_ms": 50.718334,
+        "p99_ms": 55.067031,
+        "max_ms": 63.229687
+      },
+      "frame": {
+        "over_30_ms": 670,
+        "samples": 672,
+        "p50_ms": 91.656947,
+        "p95_ms": 92.938071,
+        "p99_ms": 94.253667,
+        "max_ms": 96.717486
+      }
+    }
+  ],
+  "dispatch_stalls": 2345,
+  "elapsed_seconds": 326.82835649,
+  "drain_ms": 920.084271,
+  "max_save_queue": 3,
+  "incremental_matches_replay": true,
+  "tile_cache": {
+    "tile_renders": 8536,
+    "item_renders": 264347,
+    "geometry_renders": 8328,
+    "path_command_reuses": 255195,
+    "transient_path_command_reuses": 824,
+    "path_command_misses": 2031,
+    "path_command_evictions": 488,
+    "reused_tiles": 77020,
+    "current_bytes": 21300480,
+    "peak_bytes": 21300480,
+    "max_bytes": 100663296,
+    "path_command_bytes_estimate": 5669632,
+    "path_command_points_estimate": 13955,
+    "max_path_command_bytes_estimate": 25165824,
+    "max_path_command_points_estimate": 100000,
+    "reused_tile_repaints": 8516
+  },
+  "resources": [
+    {
+      "strokes": 0,
+      "pss_kib": 105324,
+      "private_dirty_kib": 87772,
+      "java_used_bytes": 6770528,
+      "native_allocated_bytes": 15200848,
+      "process_cpu_ms": 2099,
+      "sampling_ms": 65.905312,
+      "read_bytes": 0,
+      "write_bytes": 192512,
+      "memory_parts_kib": {
+        "java-heap_kib": 12296,
+        "native-heap_kib": 12628,
+        "code_kib": 2136,
+        "stack_kib": 1124,
+        "graphics_kib": 58708,
+        "private-other_kib": 3296,
+        "system_kib": 15136,
+        "total-swap_kib": 17892
+      }
+    },
+    {
+      "strokes": 100,
+      "pss_kib": 164474,
+      "private_dirty_kib": 145516,
+      "java_used_bytes": 7930048,
+      "native_allocated_bytes": 20669536,
+      "process_cpu_ms": 28859,
+      "sampling_ms": 30.324011,
+      "read_bytes": 77824,
+      "write_bytes": 4124672,
+      "memory_parts_kib": {
+        "java-heap_kib": 52420,
+        "native-heap_kib": 18348,
+        "code_kib": 2668,
+        "stack_kib": 1052,
+        "graphics_kib": 69560,
+        "private-other_kib": 4448,
+        "system_kib": 15978,
+        "total-swap_kib": 17520
+      }
+    },
+    {
+      "strokes": 200,
+      "pss_kib": 150481,
+      "private_dirty_kib": 131368,
+      "java_used_bytes": 20488384,
+      "native_allocated_bytes": 25475952,
+      "process_cpu_ms": 58449,
+      "sampling_ms": 81.891979,
+      "read_bytes": 77824,
+      "write_bytes": 7954432,
+      "memory_parts_kib": {
+        "java-heap_kib": 27824,
+        "native-heap_kib": 22984,
+        "code_kib": 2720,
+        "stack_kib": 1052,
+        "graphics_kib": 76468,
+        "private-other_kib": 3356,
+        "system_kib": 16077,
+        "total-swap_kib": 17520
+      }
+    },
+    {
+      "strokes": 300,
+      "pss_kib": 173533,
+      "private_dirty_kib": 154396,
+      "java_used_bytes": 45895872,
+      "native_allocated_bytes": 25864880,
+      "process_cpu_ms": 88254,
+      "sampling_ms": 91.35776,
+      "read_bytes": 77824,
+      "write_bytes": 11931648,
+      "memory_parts_kib": {
+        "java-heap_kib": 52100,
+        "native-heap_kib": 22776,
+        "code_kib": 2736,
+        "stack_kib": 1052,
+        "graphics_kib": 75328,
+        "private-other_kib": 3448,
+        "system_kib": 16093,
+        "total-swap_kib": 17520
+      }
+    },
+    {
+      "strokes": 400,
+      "pss_kib": 201966,
+      "private_dirty_kib": 182776,
+      "java_used_bytes": 70992064,
+      "native_allocated_bytes": 27281248,
+      "process_cpu_ms": 120933,
+      "sampling_ms": 83.052447,
+      "read_bytes": 77824,
+      "write_bytes": 15904768,
+      "memory_parts_kib": {
+        "java-heap_kib": 76808,
+        "native-heap_kib": 23876,
+        "code_kib": 2736,
+        "stack_kib": 1056,
+        "graphics_kib": 77804,
+        "private-other_kib": 3540,
+        "system_kib": 16146,
+        "total-swap_kib": 17520
+      }
+    },
+    {
+      "strokes": 500,
+      "pss_kib": 211874,
+      "private_dirty_kib": 192676,
+      "java_used_bytes": 78688448,
+      "native_allocated_bytes": 30545904,
+      "process_cpu_ms": 154420,
+      "sampling_ms": 98.834896,
+      "read_bytes": 77824,
+      "write_bytes": 19877888,
+      "memory_parts_kib": {
+        "java-heap_kib": 82096,
+        "native-heap_kib": 26968,
+        "code_kib": 2740,
+        "stack_kib": 1056,
+        "graphics_kib": 79276,
+        "private-other_kib": 3592,
+        "system_kib": 16146,
+        "total-swap_kib": 17520
+      }
+    },
+    {
+      "strokes": 600,
+      "pss_kib": 174089,
+      "private_dirty_kib": 154864,
+      "java_used_bytes": 36794560,
+      "native_allocated_bytes": 29920880,
+      "process_cpu_ms": 190980,
+      "sampling_ms": 32.924635,
+      "read_bytes": 77824,
+      "write_bytes": 23969792,
+      "memory_parts_kib": {
+        "java-heap_kib": 42780,
+        "native-heap_kib": 27124,
+        "code_kib": 2736,
+        "stack_kib": 1056,
+        "graphics_kib": 80552,
+        "private-other_kib": 3676,
+        "system_kib": 16165,
+        "total-swap_kib": 17516
+      }
+    },
+    {
+      "strokes": 700,
+      "pss_kib": 267050,
+      "private_dirty_kib": 247784,
+      "java_used_bytes": 119832768,
+      "native_allocated_bytes": 35051088,
+      "process_cpu_ms": 229823,
+      "sampling_ms": 26.809532,
+      "read_bytes": 77824,
+      "write_bytes": 28246016,
+      "memory_parts_kib": {
+        "java-heap_kib": 123384,
+        "native-heap_kib": 31408,
+        "code_kib": 2728,
+        "stack_kib": 1056,
+        "graphics_kib": 85696,
+        "private-other_kib": 6572,
+        "system_kib": 16206,
+        "total-swap_kib": 17516
+      }
+    },
+    {
+      "strokes": 800,
+      "pss_kib": 195470,
+      "private_dirty_kib": 176184,
+      "java_used_bytes": 48767168,
+      "native_allocated_bytes": 34356576,
+      "process_cpu_ms": 268638,
+      "sampling_ms": 75.289271,
+      "read_bytes": 98304,
+      "write_bytes": 32448512,
+      "memory_parts_kib": {
+        "java-heap_kib": 53388,
+        "native-heap_kib": 31264,
+        "code_kib": 2740,
+        "stack_kib": 1056,
+        "graphics_kib": 86996,
+        "private-other_kib": 3804,
+        "system_kib": 16222,
+        "total-swap_kib": 17516
+      }
+    },
+    {
+      "strokes": 900,
+      "pss_kib": 280058,
+      "private_dirty_kib": 260748,
+      "java_used_bytes": 127930560,
+      "native_allocated_bytes": 39054784,
+      "process_cpu_ms": 307732,
+      "sampling_ms": 33.673698,
+      "read_bytes": 98304,
+      "write_bytes": 36909056,
+      "memory_parts_kib": {
+        "java-heap_kib": 129660,
+        "native-heap_kib": 35496,
+        "code_kib": 2740,
+        "stack_kib": 1056,
+        "graphics_kib": 91016,
+        "private-other_kib": 3844,
+        "system_kib": 16246,
+        "total-swap_kib": 17516
+      }
+    },
+    {
+      "strokes": 1000,
+      "pss_kib": 265720,
+      "private_dirty_kib": 246364,
+      "java_used_bytes": 112660672,
+      "native_allocated_bytes": 38913072,
+      "process_cpu_ms": 347844,
+      "sampling_ms": 74.077031,
+      "read_bytes": 98304,
+      "write_bytes": 41504768,
+      "memory_parts_kib": {
+        "java-heap_kib": 115352,
+        "native-heap_kib": 35340,
+        "code_kib": 2740,
+        "stack_kib": 1056,
+        "graphics_kib": 91024,
+        "private-other_kib": 3940,
+        "system_kib": 16268,
+        "total-swap_kib": 17516
+      }
+    }
+  ],
+  "io_counters_delta_before_final_drain": {
+    "rchar": 26767808,
+    "wchar": 4812724,
+    "syscr": 53348,
+    "syscw": 74793,
+    "read_bytes": 98304,
+    "write_bytes": 41312256,
+    "cancelled_write_bytes": 0
+  },
+  "io_note": "Linux per-process counters. write_bytes is charged I/O, not measured storage latency.",
+  "restart_verified": true
+}
