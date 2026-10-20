@@ -5,9 +5,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import statistics
 import subprocess
 import tarfile
+import time
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -22,11 +25,12 @@ def main():
     parser.add_argument('--document')
     parser.add_argument('--synthetic-strokes',action='store_true',help='Measure 1,000 synthetic strokes and process resources without a note archive')
     parser.add_argument('--interaction-suite',action='store_true',help='Measure editor navigation, tools, layers, reopen, history, and page switching on disposable notes')
+    parser.add_argument('--cold-start',action='store_true',help='Measure process-cold opens of a copied note')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
     parser.add_argument('--mode',choices=['partial','item'],default='partial')
     args=parser.parse_args()
-    if args.synthetic_strokes and args.interaction_suite: parser.error('Choose either --synthetic-strokes or --interaction-suite')
+    if sum((args.synthetic_strokes,args.interaction_suite,args.cold_start))>1: parser.error('Choose one performance mode')
     if not args.synthetic_strokes and (not args.archive or not args.document): parser.error('--archive and --document are required for erasing or interaction timing')
     if not os.environ.get('IN_NIX_SHELL'): parser.error('Run through nix-shell')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False,mode=0o700)
@@ -34,7 +38,8 @@ def main():
     def call(*cmd,**kw): return subprocess.check_output(adb+list(cmd),timeout=kw.get('timeout',60))
     metadata={'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
               'source_changes':subprocess.check_output(['git','diff','--stat'],cwd=ROOT,text=True),
-              'synthetic_strokes':args.synthetic_strokes,'compile_speed':args.compile_speed}
+              'synthetic_strokes':args.synthetic_strokes,'cold_start':args.cold_start,
+              'compile_speed':args.compile_speed}
     for prop in ('ro.product.model','ro.build.version.sdk','ro.build.fingerprint'):
         metadata[prop]=call('shell','getprop',prop).decode().strip()
     (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
@@ -64,6 +69,9 @@ def main():
     apk=out/'latency.apk'
     subprocess.run([str(build/'zipalign'),'-f','4',str(out/'base.apk'),str(apk)],check=True)
     subprocess.run([str(build/'apksigner'),'sign','--ks',str(ROOT/'apps/android/build/debug.keystore'),'--ks-pass','pass:android',str(apk)],check=True)
+    with apk.open('rb') as isolated_apk:
+        metadata['isolated_apk_sha256']=hashlib.file_digest(isolated_apk,'sha256').hexdigest()
+    (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
     capture=out/'capture'
     if args.archive and not args.synthetic_strokes:
         with tarfile.open(args.archive) as archive: archive.extractall(capture,filter='data')
@@ -88,6 +96,38 @@ def main():
         sources=[remote+'/shared_prefs'] if args.synthetic_strokes else [remote+'/files',remote+'/shared_prefs']
         call('shell','run-as',PACKAGE,'cp','-r',*sources,'.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')
+        if args.cold_start:
+            ticks=int(call('shell','getconf','CLK_TCK').decode().strip())
+            samples=[]
+            for index in range(12):
+                call('shell','am','force-stop',PACKAGE)
+                time.sleep(.2)
+                stopped=subprocess.run(adb+['shell','pidof',PACKAGE],capture_output=True,timeout=30)
+                assert not stopped.stdout.strip(),f'Package remained running after force-stop: {stopped.stdout!r}'
+                begun=time.monotonic_ns()
+                launch=call('shell','am','start','-W','-n',PACKAGE+'/com.notemaker.MainActivity',timeout=120).decode()
+                host_ms=(time.monotonic_ns()-begun)/1e6
+                fields=dict(re.findall(r'^([A-Za-z]+):\s*(.+)$',launch,re.M))
+                assert fields.get('Status')=='ok' and fields.get('LaunchState')=='COLD',launch
+                pid=call('shell','pidof',PACKAGE).decode().strip()
+                assert pid.isdigit(),pid
+                io_text=call('shell','run-as',PACKAGE,'cat',f'/proc/{pid}/io').decode()
+                io={key:int(value) for key,value in re.findall(r'^(\w+):\s*(\d+)$',io_text,re.M)}
+                stat=call('shell','run-as',PACKAGE,'cat',f'/proc/{pid}/stat').decode()
+                cpu_fields=stat[stat.rfind(')')+2:].split()
+                cpu_ms=(int(cpu_fields[11])+int(cpu_fields[12]))*1000/ticks
+                memory=call('shell','dumpsys','meminfo',PACKAGE).decode()
+                pss=re.search(r'TOTAL PSS:\s*(\d+)',memory)
+                assert pss, memory[-2000:]
+                samples.append({'index':index,'android_total_ms':int(fields['TotalTime']),
+                                'android_wait_ms':int(fields['WaitTime']),
+                                'host_start_wall_ms':host_ms,'process_cpu_ms':cpu_ms,
+                                'pss_kib':int(pss.group(1)),'io':io})
+            (out/'metrics.json').write_text(json.dumps({'warmup':2,'samples':samples},indent=2)+'\n')
+            timed=sorted(sample['android_total_ms'] for sample in samples[2:])
+            print(json.dumps({'samples':len(timed),'android_total_p50_ms':statistics.median(timed),
+                              'android_total_p95_ms':timed[int(.95*len(timed))]}))
+            return
         action='performance' if args.synthetic_strokes else 'interaction-performance' if args.interaction_suite else 'erase-performance'
         output=call('shell','am','instrument','-w','-e','action',action,'-e','mode',args.mode,PACKAGE+'/com.notemaker.Integration',timeout=600).decode()
         (out/'instrumentation.txt').write_text(output)

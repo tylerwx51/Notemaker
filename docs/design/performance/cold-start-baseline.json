@@ -1,0 +1,1160 @@
+{
+  "measurement": "Android am start -W after force-stop, with a copied note in an isolated package; Android TotalTime excludes physical E Ink scanout",
+  "runs": [
+    {
+      "compile_speed": false,
+      "source_revision": "07e3e6c9d12cd1739040163e7f16599c733b943b",
+      "source_apk_sha256": "528fc835f9f7f0490de85a96f549c64b10acec2c72b1c3a69598e15e1b0c39b8",
+      "isolated_apk_sha256": "478db6f4f3f9cd096977380f1a3963c887a9d615873cbb6151a87c4c7802ebfb",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "warmup": 2,
+      "sample_count": 10,
+      "stats": {
+        "android_total_ms": {
+          "min": 1605,
+          "p50": 1635.5,
+          "max": 1671
+        },
+        "android_wait_ms": {
+          "min": 1610,
+          "p50": 1638.5,
+          "max": 1683
+        },
+        "host_start_wall_ms": {
+          "min": 1703.534031,
+          "p50": 1730.311899,
+          "max": 1782.83233
+        },
+        "process_cpu_ms": {
+          "min": 2570.0,
+          "p50": 2655.0,
+          "max": 2700.0
+        },
+        "pss_kib": {
+          "min": 197597,
+          "p50": 197900.5,
+          "max": 204933
+        },
+        "io": {
+          "rchar": {
+            "min": 5473850,
+            "p50": 5473882.0,
+            "max": 5473914
+          },
+          "wchar": {
+            "min": 7982,
+            "p50": 7998.0,
+            "max": 8038
+          },
+          "read_bytes": {
+            "min": 0,
+            "p50": 0.0,
+            "max": 0
+          },
+          "write_bytes": {
+            "min": 32768,
+            "p50": 32768.0,
+            "max": 32768
+          }
+        }
+      },
+      "samples": [
+        {
+          "index": 2,
+          "android_total_ms": 1649,
+          "android_wait_ms": 1656,
+          "host_start_wall_ms": 1751.530927,
+          "process_cpu_ms": 2700.0,
+          "pss_kib": 197734,
+          "io": {
+            "rchar": 5473914,
+            "wchar": 8022,
+            "syscr": 7837,
+            "syscw": 180,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 3,
+          "android_total_ms": 1639,
+          "android_wait_ms": 1642,
+          "host_start_wall_ms": 1742.874698,
+          "process_cpu_ms": 2660.0,
+          "pss_kib": 204767,
+          "io": {
+            "rchar": 5473882,
+            "wchar": 7998,
+            "syscr": 7833,
+            "syscw": 177,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 4,
+          "android_total_ms": 1633,
+          "android_wait_ms": 1636,
+          "host_start_wall_ms": 1733.736277,
+          "process_cpu_ms": 2640.0,
+          "pss_kib": 197597,
+          "io": {
+            "rchar": 5473874,
+            "wchar": 7990,
+            "syscr": 7832,
+            "syscw": 176,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 5,
+          "android_total_ms": 1623,
+          "android_wait_ms": 1636,
+          "host_start_wall_ms": 1723.378715,
+          "process_cpu_ms": 2570.0,
+          "pss_kib": 204339,
+          "io": {
+            "rchar": 5473874,
+            "wchar": 7998,
+            "syscr": 7832,
+            "syscw": 177,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 6,
+          "android_total_ms": 1633,
+          "android_wait_ms": 1636,
+          "host_start_wall_ms": 1710.421374,
+          "process_cpu_ms": 2660.0,
+          "pss_kib": 197649,
+          "io": {
+            "rchar": 5473906,
+            "wchar": 8038,
+            "syscr": 7836,
+            "syscw": 182,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 7,
+          "android_total_ms": 1606,
+          "android_wait_ms": 1615,
+          "host_start_wall_ms": 1710.466605,
+          "process_cpu_ms": 2610.0,
+          "pss_kib": 204933,
+          "io": {
+            "rchar": 5473874,
+            "wchar": 7982,
+            "syscr": 7832,
+            "syscw": 175,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 8,
+          "android_total_ms": 1646,
+          "android_wait_ms": 1650,
+          "host_start_wall_ms": 1735.2013,
+          "process_cpu_ms": 2660.0,
+          "pss_kib": 197933,
+          "io": {
+            "rchar": 5473898,
+            "wchar": 7984,
+            "syscr": 7835,
+            "syscw": 177,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 9,
+          "android_total_ms": 1638,
+          "android_wait_ms": 1641,
+          "host_start_wall_ms": 1726.887521,
+          "process_cpu_ms": 2650.0,
+          "pss_kib": 197868,
+          "io": {
+            "rchar": 5473850,
+            "wchar": 7990,
+            "syscr": 7829,
+            "syscw": 176,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 10,
+          "android_total_ms": 1605,
+          "android_wait_ms": 1610,
+          "host_start_wall_ms": 1703.534031,
+          "process_cpu_ms": 2600.0,
+          "pss_kib": 197724,
+          "io": {
+            "rchar": 5473882,
+            "wchar": 8006,
+            "syscr": 7833,
+            "syscw": 178,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 11,
+          "android_total_ms": 1671,
+          "android_wait_ms": 1683,
+          "host_start_wall_ms": 1782.83233,
+          "process_cpu_ms": 2670.0,
+          "pss_kib": 204859,
+          "io": {
+            "rchar": 5473882,
+            "wchar": 8014,
+            "syscr": 7833,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        }
+      ]
+    },
+    {
+      "compile_speed": false,
+      "source_revision": "07e3e6c9d12cd1739040163e7f16599c733b943b",
+      "source_apk_sha256": "528fc835f9f7f0490de85a96f549c64b10acec2c72b1c3a69598e15e1b0c39b8",
+      "isolated_apk_sha256": "859c471efd33e9c504e1ad6532ce44df453e6b1a013108a7f79989a3252d3737",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "warmup": 2,
+      "sample_count": 10,
+      "stats": {
+        "android_total_ms": {
+          "min": 1632,
+          "p50": 1657.0,
+          "max": 1691
+        },
+        "android_wait_ms": {
+          "min": 1638,
+          "p50": 1661.0,
+          "max": 1695
+        },
+        "host_start_wall_ms": {
+          "min": 1732.965922,
+          "p50": 1748.89697,
+          "max": 1800.356947
+        },
+        "process_cpu_ms": {
+          "min": 2630.0,
+          "p50": 2680.0,
+          "max": 2740.0
+        },
+        "pss_kib": {
+          "min": 197615,
+          "p50": 197817.0,
+          "max": 204867
+        },
+        "io": {
+          "rchar": {
+            "min": 5473874,
+            "p50": 5473910.0,
+            "max": 5473930
+          },
+          "wchar": {
+            "min": 7998,
+            "p50": 8034.0,
+            "max": 8062
+          },
+          "read_bytes": {
+            "min": 0,
+            "p50": 0.0,
+            "max": 0
+          },
+          "write_bytes": {
+            "min": 32768,
+            "p50": 32768.0,
+            "max": 32768
+          }
+        }
+      },
+      "samples": [
+        {
+          "index": 2,
+          "android_total_ms": 1647,
+          "android_wait_ms": 1653,
+          "host_start_wall_ms": 1737.680473,
+          "process_cpu_ms": 2670.0,
+          "pss_kib": 197870,
+          "io": {
+            "rchar": 5473922,
+            "wchar": 8062,
+            "syscr": 7838,
+            "syscw": 185,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 3,
+          "android_total_ms": 1666,
+          "android_wait_ms": 1668,
+          "host_start_wall_ms": 1752.444415,
+          "process_cpu_ms": 2680.0,
+          "pss_kib": 197797,
+          "io": {
+            "rchar": 5473922,
+            "wchar": 8038,
+            "syscr": 7838,
+            "syscw": 182,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 4,
+          "android_total_ms": 1657,
+          "android_wait_ms": 1660,
+          "host_start_wall_ms": 1745.349525,
+          "process_cpu_ms": 2680.0,
+          "pss_kib": 197701,
+          "io": {
+            "rchar": 5473890,
+            "wchar": 8022,
+            "syscr": 7834,
+            "syscw": 180,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 5,
+          "android_total_ms": 1657,
+          "android_wait_ms": 1662,
+          "host_start_wall_ms": 1754.734129,
+          "process_cpu_ms": 2720.0,
+          "pss_kib": 204867,
+          "io": {
+            "rchar": 5473874,
+            "wchar": 7998,
+            "syscr": 7832,
+            "syscw": 177,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 6,
+          "android_total_ms": 1668,
+          "android_wait_ms": 1675,
+          "host_start_wall_ms": 1778.07649,
+          "process_cpu_ms": 2720.0,
+          "pss_kib": 197837,
+          "io": {
+            "rchar": 5473930,
+            "wchar": 8038,
+            "syscr": 7839,
+            "syscw": 182,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 7,
+          "android_total_ms": 1691,
+          "android_wait_ms": 1695,
+          "host_start_wall_ms": 1800.356947,
+          "process_cpu_ms": 2740.0,
+          "pss_kib": 204697,
+          "io": {
+            "rchar": 5473914,
+            "wchar": 8046,
+            "syscr": 7837,
+            "syscw": 183,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 8,
+          "android_total_ms": 1642,
+          "android_wait_ms": 1645,
+          "host_start_wall_ms": 1735.366855,
+          "process_cpu_ms": 2630.0,
+          "pss_kib": 197716,
+          "io": {
+            "rchar": 5473890,
+            "wchar": 8022,
+            "syscr": 7834,
+            "syscw": 180,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 9,
+          "android_total_ms": 1639,
+          "android_wait_ms": 1644,
+          "host_start_wall_ms": 1732.965922,
+          "process_cpu_ms": 2680.0,
+          "pss_kib": 204771,
+          "io": {
+            "rchar": 5473890,
+            "wchar": 8030,
+            "syscr": 7834,
+            "syscw": 181,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 10,
+          "android_total_ms": 1632,
+          "android_wait_ms": 1638,
+          "host_start_wall_ms": 1741.075743,
+          "process_cpu_ms": 2680.0,
+          "pss_kib": 197615,
+          "io": {
+            "rchar": 5473930,
+            "wchar": 8046,
+            "syscr": 7839,
+            "syscw": 183,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 11,
+          "android_total_ms": 1668,
+          "android_wait_ms": 1670,
+          "host_start_wall_ms": 1755.821621,
+          "process_cpu_ms": 2700.0,
+          "pss_kib": 197781,
+          "io": {
+            "rchar": 5473906,
+            "wchar": 8030,
+            "syscr": 7836,
+            "syscw": 181,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        }
+      ]
+    },
+    {
+      "compile_speed": false,
+      "source_revision": "07e3e6c9d12cd1739040163e7f16599c733b943b",
+      "source_apk_sha256": "528fc835f9f7f0490de85a96f549c64b10acec2c72b1c3a69598e15e1b0c39b8",
+      "isolated_apk_sha256": "42f95a368c58d82ebd0269c1ac888e84b57006fb961a7d61aefade4db317c9b7",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "warmup": 2,
+      "sample_count": 10,
+      "stats": {
+        "android_total_ms": {
+          "min": 1621,
+          "p50": 1655.5,
+          "max": 1701
+        },
+        "android_wait_ms": {
+          "min": 1624,
+          "p50": 1658.0,
+          "max": 1704
+        },
+        "host_start_wall_ms": {
+          "min": 1710.28014,
+          "p50": 1746.4079835,
+          "max": 1795.851054
+        },
+        "process_cpu_ms": {
+          "min": 2620.0,
+          "p50": 2660.0,
+          "max": 2780.0
+        },
+        "pss_kib": {
+          "min": 197744,
+          "p50": 198117.0,
+          "max": 205144
+        },
+        "io": {
+          "rchar": {
+            "min": 5473866,
+            "p50": 5473886.0,
+            "max": 5473922
+          },
+          "wchar": {
+            "min": 7960,
+            "p50": 8010.0,
+            "max": 8054
+          },
+          "read_bytes": {
+            "min": 0,
+            "p50": 0.0,
+            "max": 0
+          },
+          "write_bytes": {
+            "min": 28672,
+            "p50": 32768.0,
+            "max": 32768
+          }
+        }
+      },
+      "samples": [
+        {
+          "index": 2,
+          "android_total_ms": 1650,
+          "android_wait_ms": 1653,
+          "host_start_wall_ms": 1744.668758,
+          "process_cpu_ms": 2650.0,
+          "pss_kib": 197744,
+          "io": {
+            "rchar": 5473874,
+            "wchar": 8006,
+            "syscr": 7832,
+            "syscw": 178,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 3,
+          "android_total_ms": 1621,
+          "android_wait_ms": 1624,
+          "host_start_wall_ms": 1710.28014,
+          "process_cpu_ms": 2620.0,
+          "pss_kib": 204831,
+          "io": {
+            "rchar": 5473922,
+            "wchar": 8054,
+            "syscr": 7838,
+            "syscw": 184,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 4,
+          "android_total_ms": 1626,
+          "android_wait_ms": 1629,
+          "host_start_wall_ms": 1714.532899,
+          "process_cpu_ms": 2640.0,
+          "pss_kib": 204780,
+          "io": {
+            "rchar": 5473914,
+            "wchar": 8038,
+            "syscr": 7837,
+            "syscw": 182,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 5,
+          "android_total_ms": 1670,
+          "android_wait_ms": 1673,
+          "host_start_wall_ms": 1769.193764,
+          "process_cpu_ms": 2670.0,
+          "pss_kib": 197858,
+          "io": {
+            "rchar": 5473874,
+            "wchar": 8006,
+            "syscr": 7832,
+            "syscw": 178,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 6,
+          "android_total_ms": 1666,
+          "android_wait_ms": 1669,
+          "host_start_wall_ms": 1756.958676,
+          "process_cpu_ms": 2710.0,
+          "pss_kib": 198006,
+          "io": {
+            "rchar": 5473890,
+            "wchar": 8022,
+            "syscr": 7834,
+            "syscw": 180,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 7,
+          "android_total_ms": 1632,
+          "android_wait_ms": 1636,
+          "host_start_wall_ms": 1728.767515,
+          "process_cpu_ms": 2630.0,
+          "pss_kib": 205144,
+          "io": {
+            "rchar": 5473922,
+            "wchar": 8045,
+            "syscr": 7838,
+            "syscw": 183,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 8,
+          "android_total_ms": 1639,
+          "android_wait_ms": 1643,
+          "host_start_wall_ms": 1729.309245,
+          "process_cpu_ms": 2640.0,
+          "pss_kib": 198027,
+          "io": {
+            "rchar": 5473866,
+            "wchar": 7990,
+            "syscr": 7831,
+            "syscw": 176,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 9,
+          "android_total_ms": 1701,
+          "android_wait_ms": 1704,
+          "host_start_wall_ms": 1795.851054,
+          "process_cpu_ms": 2780.0,
+          "pss_kib": 198150,
+          "io": {
+            "rchar": 5473890,
+            "wchar": 8014,
+            "syscr": 7834,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 10,
+          "android_total_ms": 1665,
+          "android_wait_ms": 1667,
+          "host_start_wall_ms": 1765.27277,
+          "process_cpu_ms": 2690.0,
+          "pss_kib": 205106,
+          "io": {
+            "rchar": 5473882,
+            "wchar": 7960,
+            "syscr": 7833,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 11,
+          "android_total_ms": 1661,
+          "android_wait_ms": 1663,
+          "host_start_wall_ms": 1748.147209,
+          "process_cpu_ms": 2690.0,
+          "pss_kib": 198084,
+          "io": {
+            "rchar": 5473866,
+            "wchar": 8006,
+            "syscr": 7831,
+            "syscw": 178,
+            "read_bytes": 0,
+            "write_bytes": 28672,
+            "cancelled_write_bytes": 0
+          }
+        }
+      ]
+    },
+    {
+      "compile_speed": true,
+      "source_revision": "07e3e6c9d12cd1739040163e7f16599c733b943b",
+      "source_apk_sha256": "528fc835f9f7f0490de85a96f549c64b10acec2c72b1c3a69598e15e1b0c39b8",
+      "isolated_apk_sha256": "5bd07740a3d79057896868907b291d4e5425baa0e1d9ea5947806e9a094048b2",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "warmup": 2,
+      "sample_count": 10,
+      "stats": {
+        "android_total_ms": {
+          "min": 1579,
+          "p50": 1612.0,
+          "max": 1664
+        },
+        "android_wait_ms": {
+          "min": 1581,
+          "p50": 1614.5,
+          "max": 1666
+        },
+        "host_start_wall_ms": {
+          "min": 1668.310885,
+          "p50": 1694.15696,
+          "max": 1755.033347
+        },
+        "process_cpu_ms": {
+          "min": 2550.0,
+          "p50": 2610.0,
+          "max": 2670.0
+        },
+        "pss_kib": {
+          "min": 197176,
+          "p50": 200826.5,
+          "max": 204394
+        },
+        "io": {
+          "rchar": {
+            "min": 5045754,
+            "p50": 5045778.0,
+            "max": 5045826
+          },
+          "wchar": {
+            "min": 7981,
+            "p50": 8014.0,
+            "max": 8062
+          },
+          "read_bytes": {
+            "min": 0,
+            "p50": 0.0,
+            "max": 4096
+          },
+          "write_bytes": {
+            "min": 32768,
+            "p50": 32768.0,
+            "max": 36864
+          }
+        }
+      },
+      "samples": [
+        {
+          "index": 2,
+          "android_total_ms": 1631,
+          "android_wait_ms": 1633,
+          "host_start_wall_ms": 1729.775173,
+          "process_cpu_ms": 2640.0,
+          "pss_kib": 197212,
+          "io": {
+            "rchar": 5045826,
+            "wchar": 8062,
+            "syscr": 7824,
+            "syscw": 185,
+            "read_bytes": 4096,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 3,
+          "android_total_ms": 1638,
+          "android_wait_ms": 1644,
+          "host_start_wall_ms": 1733.292187,
+          "process_cpu_ms": 2650.0,
+          "pss_kib": 204394,
+          "io": {
+            "rchar": 5045762,
+            "wchar": 8014,
+            "syscr": 7816,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 4,
+          "android_total_ms": 1610,
+          "android_wait_ms": 1613,
+          "host_start_wall_ms": 1696.730832,
+          "process_cpu_ms": 2570.0,
+          "pss_kib": 204289,
+          "io": {
+            "rchar": 5045770,
+            "wchar": 8006,
+            "syscr": 7817,
+            "syscw": 178,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 5,
+          "android_total_ms": 1605,
+          "android_wait_ms": 1608,
+          "host_start_wall_ms": 1687.536918,
+          "process_cpu_ms": 2550.0,
+          "pss_kib": 197176,
+          "io": {
+            "rchar": 5045754,
+            "wchar": 7998,
+            "syscr": 7815,
+            "syscw": 177,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 6,
+          "android_total_ms": 1664,
+          "android_wait_ms": 1666,
+          "host_start_wall_ms": 1755.033347,
+          "process_cpu_ms": 2670.0,
+          "pss_kib": 204331,
+          "io": {
+            "rchar": 5045818,
+            "wchar": 8038,
+            "syscr": 7823,
+            "syscw": 182,
+            "read_bytes": 4096,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 7,
+          "android_total_ms": 1614,
+          "android_wait_ms": 1616,
+          "host_start_wall_ms": 1691.583088,
+          "process_cpu_ms": 2610.0,
+          "pss_kib": 204313,
+          "io": {
+            "rchar": 5045794,
+            "wchar": 8038,
+            "syscr": 7820,
+            "syscw": 182,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 8,
+          "android_total_ms": 1655,
+          "android_wait_ms": 1659,
+          "host_start_wall_ms": 1749.816055,
+          "process_cpu_ms": 2660.0,
+          "pss_kib": 197364,
+          "io": {
+            "rchar": 5045786,
+            "wchar": 8014,
+            "syscr": 7819,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 9,
+          "android_total_ms": 1599,
+          "android_wait_ms": 1602,
+          "host_start_wall_ms": 1687.092795,
+          "process_cpu_ms": 2610.0,
+          "pss_kib": 197285,
+          "io": {
+            "rchar": 5045754,
+            "wchar": 7981,
+            "syscr": 7815,
+            "syscw": 175,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 10,
+          "android_total_ms": 1579,
+          "android_wait_ms": 1581,
+          "host_start_wall_ms": 1668.310885,
+          "process_cpu_ms": 2590.0,
+          "pss_kib": 197306,
+          "io": {
+            "rchar": 5045762,
+            "wchar": 8006,
+            "syscr": 7816,
+            "syscw": 178,
+            "read_bytes": 0,
+            "write_bytes": 36864,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 11,
+          "android_total_ms": 1602,
+          "android_wait_ms": 1606,
+          "host_start_wall_ms": 1683.966154,
+          "process_cpu_ms": 2570.0,
+          "pss_kib": 204310,
+          "io": {
+            "rchar": 5045794,
+            "wchar": 8038,
+            "syscr": 7820,
+            "syscw": 182,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        }
+      ]
+    },
+    {
+      "compile_speed": true,
+      "source_revision": "07e3e6c9d12cd1739040163e7f16599c733b943b",
+      "source_apk_sha256": "528fc835f9f7f0490de85a96f549c64b10acec2c72b1c3a69598e15e1b0c39b8",
+      "isolated_apk_sha256": "039fe14520e95ff4362f99b92137e0438c04517db50362f0a250f8a9bfbbd20a",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "warmup": 2,
+      "sample_count": 10,
+      "stats": {
+        "android_total_ms": {
+          "min": 1602,
+          "p50": 1645.5,
+          "max": 1711
+        },
+        "android_wait_ms": {
+          "min": 1604,
+          "p50": 1651.5,
+          "max": 1714
+        },
+        "host_start_wall_ms": {
+          "min": 1702.574956,
+          "p50": 1741.871678,
+          "max": 1818.854111
+        },
+        "process_cpu_ms": {
+          "min": 2610.0,
+          "p50": 2650.0,
+          "max": 2750.0
+        },
+        "pss_kib": {
+          "min": 197248,
+          "p50": 204160.0,
+          "max": 204466
+        },
+        "io": {
+          "rchar": {
+            "min": 5045730,
+            "p50": 5045794.0,
+            "max": 5045826
+          },
+          "wchar": {
+            "min": 7966,
+            "p50": 8014.0,
+            "max": 8054
+          },
+          "read_bytes": {
+            "min": 0,
+            "p50": 0.0,
+            "max": 4096
+          },
+          "write_bytes": {
+            "min": 32768,
+            "p50": 32768.0,
+            "max": 32768
+          }
+        }
+      },
+      "samples": [
+        {
+          "index": 2,
+          "android_total_ms": 1656,
+          "android_wait_ms": 1658,
+          "host_start_wall_ms": 1745.594067,
+          "process_cpu_ms": 2620.0,
+          "pss_kib": 204134,
+          "io": {
+            "rchar": 5045794,
+            "wchar": 8000,
+            "syscr": 7820,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 3,
+          "android_total_ms": 1657,
+          "android_wait_ms": 1662,
+          "host_start_wall_ms": 1753.2293,
+          "process_cpu_ms": 2660.0,
+          "pss_kib": 204193,
+          "io": {
+            "rchar": 5045818,
+            "wchar": 8045,
+            "syscr": 7823,
+            "syscw": 183,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 4,
+          "android_total_ms": 1638,
+          "android_wait_ms": 1645,
+          "host_start_wall_ms": 1736.066858,
+          "process_cpu_ms": 2680.0,
+          "pss_kib": 197251,
+          "io": {
+            "rchar": 5045754,
+            "wchar": 7998,
+            "syscr": 7815,
+            "syscw": 177,
+            "read_bytes": 4096,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 5,
+          "android_total_ms": 1639,
+          "android_wait_ms": 1641,
+          "host_start_wall_ms": 1738.149289,
+          "process_cpu_ms": 2630.0,
+          "pss_kib": 197308,
+          "io": {
+            "rchar": 5045794,
+            "wchar": 8046,
+            "syscr": 7820,
+            "syscw": 183,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 6,
+          "android_total_ms": 1711,
+          "android_wait_ms": 1714,
+          "host_start_wall_ms": 1818.854111,
+          "process_cpu_ms": 2750.0,
+          "pss_kib": 197248,
+          "io": {
+            "rchar": 5045754,
+            "wchar": 7990,
+            "syscr": 7815,
+            "syscw": 176,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 7,
+          "android_total_ms": 1602,
+          "android_wait_ms": 1604,
+          "host_start_wall_ms": 1705.855362,
+          "process_cpu_ms": 2610.0,
+          "pss_kib": 204186,
+          "io": {
+            "rchar": 5045802,
+            "wchar": 8022,
+            "syscr": 7821,
+            "syscw": 180,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 8,
+          "android_total_ms": 1604,
+          "android_wait_ms": 1609,
+          "host_start_wall_ms": 1702.574956,
+          "process_cpu_ms": 2610.0,
+          "pss_kib": 204466,
+          "io": {
+            "rchar": 5045794,
+            "wchar": 8014,
+            "syscr": 7820,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 9,
+          "android_total_ms": 1634,
+          "android_wait_ms": 1639,
+          "host_start_wall_ms": 1722.72642,
+          "process_cpu_ms": 2640.0,
+          "pss_kib": 197273,
+          "io": {
+            "rchar": 5045730,
+            "wchar": 7966,
+            "syscr": 7812,
+            "syscw": 173,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 10,
+          "android_total_ms": 1652,
+          "android_wait_ms": 1658,
+          "host_start_wall_ms": 1747.521888,
+          "process_cpu_ms": 2680.0,
+          "pss_kib": 204431,
+          "io": {
+            "rchar": 5045826,
+            "wchar": 8054,
+            "syscr": 7824,
+            "syscw": 184,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        },
+        {
+          "index": 11,
+          "android_total_ms": 1660,
+          "android_wait_ms": 1663,
+          "host_start_wall_ms": 1747.178833,
+          "process_cpu_ms": 2710.0,
+          "pss_kib": 204397,
+          "io": {
+            "rchar": 5045778,
+            "wchar": 8014,
+            "syscr": 7818,
+            "syscw": 179,
+            "read_bytes": 0,
+            "write_bytes": 32768,
+            "cancelled_write_bytes": 0
+          }
+        }
+      ]
+    }
+  ]
+}

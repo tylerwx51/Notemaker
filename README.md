@@ -634,6 +634,7 @@ nix-shell --run 'python3 tests/tablet_erase_latency.py --synthetic-strokes --ser
 nix-shell --run 'python3 tests/summarize_performance.py .test-artifacts/latency/strokes-run docs/design/performance/strokes-candidate.json'
 nix-shell --run 'python3 tests/tablet_erase_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/ui-run'
 nix-shell --run 'python3 tests/tablet_erase_latency.py --interaction-suite --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/interaction-run'
+nix-shell --run 'python3 tests/tablet_erase_latency.py --cold-start --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/cold-start-run'
 # Coverage retention memory or exact old/new geometry parity on a disposable replica:
 nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --android-jar apps/cli/build/notemaker-android.jar --probe CacheFootprintProbe --output .test-artifacts/latency/memory-run'
 # Replace CacheFootprintProbe with CoverageParity to compare hit-test signatures.
@@ -656,6 +657,12 @@ change. History samples wait for the local undo or redo action to update the
 model and reach a draw. Page switching runs the page-change work after page
 selection and excludes dialog entry. For note-free per-mode summaries, run
 `nix-shell --run 'python3 tests/summarize_editor_actions.py OUTPUT.json RUN1 RUN2'`.
+The cold-start mode force-stops and opens the isolated package 12 times, omits
+two warmups, and records Android launch time plus process CPU, PSS, and I/O.
+It leaves the copied note in the device page cache; it does not time a cold
+storage read or physical E Ink scanout. Use `--compile-speed` to compare forced
+ahead-of-time compilation separately. Summarize multiple runs with
+`nix-shell --run 'python3 tests/summarize_cold_start.py OUTPUT.json RUN1 RUN2'`.
 For paired comparisons of the earlier three-mode suite, run
 `nix-shell --run 'python3 tests/summarize_interaction_performance.py
 BASELINE_FIRST CANDIDATE_FIRST CANDIDATE_REPEAT BASELINE_REPEAT OUTPUT.json'`.
