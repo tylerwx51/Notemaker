@@ -21,8 +21,17 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('runs', nargs='+', type=Path)
     args = parser.parse_args()
-    summary = {'workload': '60 synthetic pans, 40 zoom redraws, 40 tool switches, 40 empty-layer switches, 12 warm same-note reopens; 5 warmups except 2 reopens',
-               'timing': 'enqueue to end of app Canvas draw; not E Ink scanout or physical finger sampling',
+    history_runs = ['history_toggle' in json.loads((run / 'metrics.json').read_text())['modes']
+                    for run in args.runs]
+    if len(set(history_runs)) != 1:
+        parser.error('All runs must use the same interaction suite version')
+    workload = ('60 synthetic pans, 40 zoom redraws, 40 tool switches, '
+                '40 empty-layer switches, 12 warm same-note reopens; '
+                '5 warmups except 2 reopens')
+    if history_runs[0]:
+        workload += '; 60 alternating object undo/redo actions with 6 warmups'
+    summary = {'workload': workload,
+               'timing': 'enqueue to app Canvas draw or first window UI draw as named by each metric; not E Ink scanout or physical finger sampling',
                'runs': []}
     for run in args.runs:
         metrics = json.loads((run / 'metrics.json').read_text())
@@ -36,6 +45,8 @@ def main():
                   'device_model': metadata['ro.product.model'],
                   'android_api': metadata['ro.build.version.sdk'],
                   'modes': modes}
+        if 'history_directions' in metrics:
+            result['history_directions'] = metrics['history_directions']
         if 'post_gc_resources' in metrics:
             result['post_gc'] = counters(metrics['end_resources'], metrics['post_gc_resources'])
         summary['runs'].append(result)

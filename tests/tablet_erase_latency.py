@@ -21,7 +21,7 @@ def main():
     parser.add_argument('--archive',type=Path)
     parser.add_argument('--document')
     parser.add_argument('--synthetic-strokes',action='store_true',help='Measure 1,000 synthetic strokes and process resources without a note archive')
-    parser.add_argument('--interaction-suite',action='store_true',help='Measure pan, zoom redraw, and tool switching on a disposable note archive')
+    parser.add_argument('--interaction-suite',action='store_true',help='Measure editor navigation, tools, layers, reopen, and object history on a disposable note archive')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
     parser.add_argument('--mode',choices=['partial','item'],default='partial')
@@ -98,6 +98,8 @@ def main():
             assert all(report['modes'][name]['input_to_draw']['samples']>=35 for name in ('pan','zoom_redraw','tool_switch'))
             assert report['modes']['layer_switch']['input_to_ui_draw']['samples']>=35
             assert report['modes']['document_reopen']['input_to_draw']['samples']>=10
+            assert report['modes']['history_toggle']['input_to_draw']['samples']>=54
+            assert all(report['history_directions'][direction]['input_to_ui_draw']['samples']==27 for direction in ('undo','redo'))
             print(json.dumps({name:report['modes'][name]['input_to_ui_draw'] for name in report['modes']}))
             return
         if args.synthetic_strokes:

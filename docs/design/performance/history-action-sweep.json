@@ -1,0 +1,1224 @@
+{
+  "workload": "60 synthetic pans, 40 zoom redraws, 40 tool switches, 40 empty-layer switches, 12 warm same-note reopens; 5 warmups except 2 reopens; 60 alternating object undo/redo actions with 6 warmups",
+  "timing": "enqueue to app Canvas draw or first window UI draw as named by each metric; not E Ink scanout or physical finger sampling",
+  "runs": [
+    {
+      "source_revision": "f8ef6c941d998fdaf4aaaea808f13d4902816a7f",
+      "source_apk_sha256": "f3222d341671d3da617b8fead1e720ba2c5abd3208aa5247a191946a37e9a62d",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "modes": {
+        "pan": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.812656,
+            "p95_ms": 4.993333,
+            "p99_ms": 5.933646,
+            "max_ms": 5.933646
+          },
+          "input_to_draw": {
+            "over_30_ms": 9,
+            "samples": 55,
+            "p50_ms": 24.327917,
+            "p95_ms": 47.798907,
+            "p99_ms": 51.036094,
+            "max_ms": 51.036094
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 12.006198,
+            "p95_ms": 29.189792,
+            "p99_ms": 29.855834,
+            "max_ms": 29.855834
+          },
+          "window_frame": {
+            "over_30_ms": 5,
+            "samples": 60,
+            "p50_ms": 25.249966,
+            "p95_ms": 33.437656,
+            "p99_ms": 33.795628,
+            "max_ms": 33.795628
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 0.703386,
+            "p95_ms": 1.626771,
+            "p99_ms": 2.770365,
+            "max_ms": 2.770365
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.141093,
+            "p95_ms": 3.478073,
+            "p99_ms": 3.713958,
+            "max_ms": 3.713958
+          },
+          "handler_to_draw": {
+            "over_30_ms": 8,
+            "samples": 55,
+            "p50_ms": 21.730729,
+            "p95_ms": 43.779427,
+            "p99_ms": 45.102448,
+            "max_ms": 45.102448
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 60,
+            "p50_ms": 12.341875,
+            "p95_ms": 20.334896,
+            "p99_ms": 21.940416,
+            "max_ms": 21.940416
+          },
+          "frame_command_issue": {
+            "over_30_ms": 0,
+            "samples": 60,
+            "p50_ms": 2.967813,
+            "p95_ms": 3.335104,
+            "p99_ms": 3.720416,
+            "max_ms": 3.720416
+          },
+          "resources": {
+            "process_cpu_ms": 1784,
+            "pss_kib_before_after": [
+              168919,
+              142709
+            ],
+            "java_used_bytes_before_after": [
+              15188784,
+              16421680
+            ],
+            "io_delta": {
+              "rchar": 2684248,
+              "wchar": 3436,
+              "read_bytes": 0,
+              "write_bytes": 0
+            }
+          }
+        },
+        "zoom_redraw": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.431354,
+            "p95_ms": 1.892136,
+            "p99_ms": 1.977916,
+            "max_ms": 1.977916
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 24.108021,
+            "p95_ms": 28.929583,
+            "p99_ms": 30.406354,
+            "max_ms": 30.406354
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 13.16375,
+            "p95_ms": 19.759062,
+            "p99_ms": 19.843385,
+            "max_ms": 19.843385
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 23.557451,
+            "p95_ms": 25.4697,
+            "p99_ms": 29.255327,
+            "max_ms": 29.255327
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 0.693594,
+            "p95_ms": 1.22599,
+            "p99_ms": 1.331094,
+            "max_ms": 1.331094
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 0.695782,
+            "p95_ms": 0.925104,
+            "p99_ms": 0.941927,
+            "max_ms": 0.941927
+          },
+          "handler_to_draw": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 22.215885,
+            "p95_ms": 27.770312,
+            "p99_ms": 29.349844,
+            "max_ms": 29.349844
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 11.074584,
+            "p95_ms": 12.435052,
+            "p99_ms": 12.576979,
+            "max_ms": 12.576979
+          },
+          "frame_command_issue": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 2.655312,
+            "p95_ms": 3.370416,
+            "p99_ms": 3.427864,
+            "max_ms": 3.427864
+          },
+          "resources": {
+            "process_cpu_ms": 1074,
+            "pss_kib_before_after": [
+              142729,
+              142937
+            ],
+            "java_used_bytes_before_after": [
+              16442160,
+              17158960
+            ],
+            "io_delta": {
+              "rchar": 2666937,
+              "wchar": 119723,
+              "read_bytes": 0,
+              "write_bytes": 135168
+            }
+          }
+        },
+        "tool_switch": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 6.013177,
+            "p95_ms": 7.745,
+            "p99_ms": 8.363541,
+            "max_ms": 8.363541
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 24.346041,
+            "p95_ms": 29.941354,
+            "p99_ms": 46.152865,
+            "max_ms": 46.152865
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 9.211198,
+            "p95_ms": 13.459531,
+            "p99_ms": 29.420469,
+            "max_ms": 29.420469
+          },
+          "window_frame": {
+            "over_30_ms": 33,
+            "samples": 41,
+            "p50_ms": 32.002547,
+            "p95_ms": 37.731501,
+            "p99_ms": 43.615442,
+            "max_ms": 43.615442
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 0.410833,
+            "p95_ms": 1.552708,
+            "p99_ms": 2.10125,
+            "max_ms": 2.10125
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 5.28849,
+            "p95_ms": 7.357761,
+            "p99_ms": 7.789062,
+            "max_ms": 7.789062
+          },
+          "handler_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 17.858021,
+            "p95_ms": 25.802656,
+            "p99_ms": 40.139688,
+            "max_ms": 40.139688
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 41,
+            "p50_ms": 14.772552,
+            "p95_ms": 16.886302,
+            "p99_ms": 17.390469,
+            "max_ms": 17.390469
+          },
+          "frame_command_issue": {
+            "over_30_ms": 0,
+            "samples": 41,
+            "p50_ms": 6.104063,
+            "p95_ms": 9.093959,
+            "p99_ms": 9.342813,
+            "max_ms": 9.342813
+          },
+          "resources": {
+            "process_cpu_ms": 1466,
+            "pss_kib_before_after": [
+              142957,
+              144261
+            ],
+            "java_used_bytes_before_after": [
+              17179440,
+              18215728
+            ],
+            "io_delta": {
+              "rchar": 2667673,
+              "wchar": 2104,
+              "read_bytes": 0,
+              "write_bytes": 0
+            }
+          }
+        },
+        "layer_switch": {
+          "handler": {
+            "over_30_ms": 5,
+            "samples": 35,
+            "p50_ms": 10.124739,
+            "p95_ms": 31.950781,
+            "p99_ms": 34.886458,
+            "max_ms": 34.886458
+          },
+          "input_to_draw": {
+            "over_30_ms": 0,
+            "samples": 0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "p99_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 9,
+            "samples": 35,
+            "p50_ms": 24.602917,
+            "p95_ms": 49.413542,
+            "p99_ms": 52.462864,
+            "max_ms": 52.462864
+          },
+          "window_frame": {
+            "over_30_ms": 59,
+            "samples": 63,
+            "p50_ms": 61.624891,
+            "p95_ms": 91.004014,
+            "p99_ms": 91.960764,
+            "max_ms": 91.960764
+          },
+          "queue": {
+            "over_30_ms": 3,
+            "samples": 35,
+            "p50_ms": 8.600208,
+            "p95_ms": 30.045261,
+            "p99_ms": 33.745364,
+            "max_ms": 33.745364
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.71625,
+            "p95_ms": 2.84224,
+            "p99_ms": 3.00052,
+            "max_ms": 3.00052
+          },
+          "handler_to_draw": {
+            "over_30_ms": 0,
+            "samples": 0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "p99_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 63,
+            "p50_ms": 4.991615,
+            "p95_ms": 10.294166,
+            "p99_ms": 11.389427,
+            "max_ms": 11.389427
+          },
+          "frame_command_issue": {
+            "over_30_ms": 27,
+            "samples": 63,
+            "p50_ms": 23.794583,
+            "p95_ms": 49.264844,
+            "p99_ms": 52.815938,
+            "max_ms": 52.815938
+          },
+          "resources": {
+            "process_cpu_ms": 2478,
+            "pss_kib_before_after": [
+              144849,
+              162257
+            ],
+            "java_used_bytes_before_after": [
+              18793296,
+              36377456
+            ],
+            "io_delta": {
+              "rchar": 2659980,
+              "wchar": 6897,
+              "read_bytes": 0,
+              "write_bytes": 335872
+            }
+          }
+        },
+        "document_reopen": {
+          "handler": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 50.959115,
+            "p95_ms": 52.541406,
+            "p99_ms": 52.541406,
+            "max_ms": 52.541406
+          },
+          "input_to_draw": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 53.588282,
+            "p95_ms": 55.368594,
+            "p99_ms": 55.368594,
+            "max_ms": 55.368594
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 51.359323,
+            "p95_ms": 52.894427,
+            "p99_ms": 52.894427,
+            "max_ms": 52.894427
+          },
+          "window_frame": {
+            "over_30_ms": 11,
+            "samples": 14,
+            "p50_ms": 42.287184,
+            "p95_ms": 87.930017,
+            "p99_ms": 87.930017,
+            "max_ms": 87.930017
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 10,
+            "p50_ms": 1.13276,
+            "p95_ms": 1.667865,
+            "p99_ms": 1.667865,
+            "max_ms": 1.667865
+          },
+          "action": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 49.462552,
+            "p95_ms": 51.928229,
+            "p99_ms": 51.928229,
+            "max_ms": 51.928229
+          },
+          "handler_to_draw": {
+            "over_30_ms": 0,
+            "samples": 10,
+            "p50_ms": 2.666719,
+            "p95_ms": 4.808125,
+            "p99_ms": 4.808125,
+            "max_ms": 4.808125
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 14,
+            "p50_ms": 2.296146,
+            "p95_ms": 11.787344,
+            "p99_ms": 11.787344,
+            "max_ms": 11.787344
+          },
+          "frame_command_issue": {
+            "over_30_ms": 1,
+            "samples": 14,
+            "p50_ms": 0.732708,
+            "p95_ms": 44.908906,
+            "p99_ms": 44.908906,
+            "max_ms": 44.908906
+          },
+          "resources": {
+            "process_cpu_ms": 887,
+            "pss_kib_before_after": [
+              162277,
+              195605
+            ],
+            "java_used_bytes_before_after": [
+              36438896,
+              70321392
+            ],
+            "io_delta": {
+              "rchar": 2657232,
+              "wchar": 680,
+              "read_bytes": 0,
+              "write_bytes": 0
+            }
+          }
+        },
+        "history_toggle": {
+          "handler": {
+            "over_30_ms": 1,
+            "samples": 54,
+            "p50_ms": 7.545364,
+            "p95_ms": 27.576771,
+            "p99_ms": 30.364843,
+            "max_ms": 30.364843
+          },
+          "input_to_draw": {
+            "over_30_ms": 54,
+            "samples": 54,
+            "p50_ms": 70.33823,
+            "p95_ms": 94.269375,
+            "p99_ms": 103.99276,
+            "max_ms": 103.99276
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 54,
+            "samples": 54,
+            "p50_ms": 65.270625,
+            "p95_ms": 89.890677,
+            "p99_ms": 95.370312,
+            "max_ms": 95.370312
+          },
+          "window_frame": {
+            "over_30_ms": 133,
+            "samples": 141,
+            "p50_ms": 66.786262,
+            "p95_ms": 92.004988,
+            "p99_ms": 92.783002,
+            "max_ms": 92.903181
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 54,
+            "p50_ms": 6.598021,
+            "p95_ms": 26.054739,
+            "p99_ms": 28.945104,
+            "max_ms": 28.945104
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 54,
+            "p50_ms": 0.836562,
+            "p95_ms": 2.118125,
+            "p99_ms": 2.65276,
+            "max_ms": 2.65276
+          },
+          "handler_to_draw": {
+            "over_30_ms": 54,
+            "samples": 54,
+            "p50_ms": 59.505729,
+            "p95_ms": 76.420469,
+            "p99_ms": 78.423542,
+            "max_ms": 78.423542
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 141,
+            "p50_ms": 5.071042,
+            "p95_ms": 10.728646,
+            "p99_ms": 13.186042,
+            "max_ms": 16.754063
+          },
+          "frame_command_issue": {
+            "over_30_ms": 84,
+            "samples": 141,
+            "p50_ms": 39.926874,
+            "p95_ms": 49.8425,
+            "p99_ms": 52.153125,
+            "max_ms": 52.30276
+          },
+          "resources": {
+            "process_cpu_ms": 5910,
+            "pss_kib_before_after": [
+              200069,
+              187243
+            ],
+            "java_used_bytes_before_after": [
+              71357680,
+              42869616
+            ],
+            "io_delta": {
+              "rchar": 2746480,
+              "wchar": 89555,
+              "read_bytes": 0,
+              "write_bytes": 1146880
+            }
+          }
+        }
+      },
+      "history_directions": {
+        "undo": {
+          "input_to_ui_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 65.021094,
+            "p95_ms": 89.890677,
+            "p99_ms": 93.089167,
+            "max_ms": 93.089167
+          },
+          "input_to_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 69.132656,
+            "p95_ms": 94.269375,
+            "p99_ms": 101.476562,
+            "max_ms": 101.476562
+          }
+        },
+        "redo": {
+          "input_to_ui_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 68.886407,
+            "p95_ms": 72.096927,
+            "p99_ms": 95.370312,
+            "max_ms": 95.370312
+          },
+          "input_to_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 77.087917,
+            "p95_ms": 86.237865,
+            "p99_ms": 103.99276,
+            "max_ms": 103.99276
+          }
+        }
+      },
+      "post_gc": {
+        "process_cpu_ms": 132,
+        "pss_kib_before_after": [
+          187373,
+          147347
+        ],
+        "java_used_bytes_before_after": [
+          42890096,
+          15614832
+        ],
+        "io_delta": {
+          "rchar": 2735431,
+          "wchar": 171,
+          "read_bytes": 0,
+          "write_bytes": 0
+        }
+      }
+    },
+    {
+      "source_revision": "f8ef6c941d998fdaf4aaaea808f13d4902816a7f",
+      "source_apk_sha256": "f3222d341671d3da617b8fead1e720ba2c5abd3208aa5247a191946a37e9a62d",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "modes": {
+        "pan": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.48875,
+            "p95_ms": 3.062552,
+            "p99_ms": 3.270677,
+            "max_ms": 3.270677
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 55,
+            "p50_ms": 24.28224,
+            "p95_ms": 27.52401,
+            "p99_ms": 33.621615,
+            "max_ms": 33.621615
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 11.78125,
+            "p95_ms": 18.866094,
+            "p99_ms": 23.432448,
+            "max_ms": 23.432448
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 60,
+            "p50_ms": 24.69294,
+            "p95_ms": 25.938201,
+            "p99_ms": 26.288249,
+            "max_ms": 26.288249
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 0.365208,
+            "p95_ms": 1.039792,
+            "p99_ms": 1.098958,
+            "max_ms": 1.098958
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.099739,
+            "p95_ms": 2.485364,
+            "p99_ms": 2.617343,
+            "max_ms": 2.617343
+          },
+          "handler_to_draw": {
+            "over_30_ms": 1,
+            "samples": 55,
+            "p50_ms": 21.875678,
+            "p95_ms": 24.461458,
+            "p99_ms": 30.776302,
+            "max_ms": 30.776302
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 60,
+            "p50_ms": 12.174218,
+            "p95_ms": 13.508021,
+            "p99_ms": 13.625833,
+            "max_ms": 13.625833
+          },
+          "frame_command_issue": {
+            "over_30_ms": 0,
+            "samples": 60,
+            "p50_ms": 2.547656,
+            "p95_ms": 3.366302,
+            "p99_ms": 3.934531,
+            "max_ms": 3.934531
+          },
+          "resources": {
+            "process_cpu_ms": 1692,
+            "pss_kib_before_after": [
+              224496,
+              141927
+            ],
+            "java_used_bytes_before_after": [
+              85283056,
+              16220976
+            ],
+            "io_delta": {
+              "rchar": 2683528,
+              "wchar": 3476,
+              "read_bytes": 0,
+              "write_bytes": 0
+            }
+          }
+        },
+        "zoom_redraw": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.404323,
+            "p95_ms": 1.820052,
+            "p99_ms": 2.004844,
+            "max_ms": 2.004844
+          },
+          "input_to_draw": {
+            "over_30_ms": 2,
+            "samples": 35,
+            "p50_ms": 24.589687,
+            "p95_ms": 30.809688,
+            "p99_ms": 31.921771,
+            "max_ms": 31.921771
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 12.712656,
+            "p95_ms": 19.043073,
+            "p99_ms": 19.854688,
+            "max_ms": 19.854688
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 23.872078,
+            "p95_ms": 25.258411,
+            "p99_ms": 25.50797,
+            "max_ms": 25.50797
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 0.451093,
+            "p95_ms": 1.090729,
+            "p99_ms": 1.284844,
+            "max_ms": 1.284844
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 0.740053,
+            "p95_ms": 1.141354,
+            "p99_ms": 1.388229,
+            "max_ms": 1.388229
+          },
+          "handler_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 23.457864,
+            "p95_ms": 29.884792,
+            "p99_ms": 31.021979,
+            "max_ms": 31.021979
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 10.945625,
+            "p95_ms": 12.899427,
+            "p99_ms": 13.160052,
+            "max_ms": 13.160052
+          },
+          "frame_command_issue": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 2.672292,
+            "p95_ms": 3.165,
+            "p99_ms": 3.197917,
+            "max_ms": 3.197917
+          },
+          "resources": {
+            "process_cpu_ms": 1037,
+            "pss_kib_before_after": [
+              141983,
+              142593
+            ],
+            "java_used_bytes_before_after": [
+              16241456,
+              16958256
+            ],
+            "io_delta": {
+              "rchar": 2666847,
+              "wchar": 119723,
+              "read_bytes": 0,
+              "write_bytes": 135168
+            }
+          }
+        },
+        "tool_switch": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 5.963438,
+            "p95_ms": 8.179271,
+            "p99_ms": 8.395781,
+            "max_ms": 8.395781
+          },
+          "input_to_draw": {
+            "over_30_ms": 5,
+            "samples": 35,
+            "p50_ms": 24.384375,
+            "p95_ms": 45.598125,
+            "p99_ms": 49.299115,
+            "max_ms": 49.299115
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 9.726354,
+            "p95_ms": 28.072917,
+            "p99_ms": 31.700781,
+            "max_ms": 31.700781
+          },
+          "window_frame": {
+            "over_30_ms": 32,
+            "samples": 41,
+            "p50_ms": 33.643616,
+            "p95_ms": 38.014872,
+            "p99_ms": 38.634154,
+            "max_ms": 38.634154
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 0.42625,
+            "p95_ms": 0.942917,
+            "p99_ms": 2.305104,
+            "max_ms": 2.305104
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 5.380573,
+            "p95_ms": 7.431302,
+            "p99_ms": 7.443333,
+            "max_ms": 7.443333
+          },
+          "handler_to_draw": {
+            "over_30_ms": 3,
+            "samples": 35,
+            "p50_ms": 18.431615,
+            "p95_ms": 39.291198,
+            "p99_ms": 40.903334,
+            "max_ms": 40.903334
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 41,
+            "p50_ms": 14.462084,
+            "p95_ms": 17.532083,
+            "p99_ms": 18.892136,
+            "max_ms": 18.892136
+          },
+          "frame_command_issue": {
+            "over_30_ms": 0,
+            "samples": 41,
+            "p50_ms": 6.856927,
+            "p95_ms": 9.014427,
+            "p99_ms": 9.404896,
+            "max_ms": 9.404896
+          },
+          "resources": {
+            "process_cpu_ms": 1511,
+            "pss_kib_before_after": [
+              142613,
+              143945
+            ],
+            "java_used_bytes_before_after": [
+              16978736,
+              18047792
+            ],
+            "io_delta": {
+              "rchar": 2667583,
+              "wchar": 2104,
+              "read_bytes": 0,
+              "write_bytes": 0
+            }
+          }
+        },
+        "layer_switch": {
+          "handler": {
+            "over_30_ms": 5,
+            "samples": 35,
+            "p50_ms": 11.438907,
+            "p95_ms": 31.462552,
+            "p99_ms": 31.812187,
+            "max_ms": 31.812187
+          },
+          "input_to_draw": {
+            "over_30_ms": 0,
+            "samples": 0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "p99_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 6,
+            "samples": 35,
+            "p50_ms": 24.746146,
+            "p95_ms": 49.720937,
+            "p99_ms": 50.243229,
+            "max_ms": 50.243229
+          },
+          "window_frame": {
+            "over_30_ms": 52,
+            "samples": 62,
+            "p50_ms": 61.323095,
+            "p95_ms": 89.941964,
+            "p99_ms": 91.650573,
+            "max_ms": 91.650573
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 10.055573,
+            "p95_ms": 29.609792,
+            "p99_ms": 29.913802,
+            "max_ms": 29.913802
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.557605,
+            "p95_ms": 3.059948,
+            "p99_ms": 3.069948,
+            "max_ms": 3.069948
+          },
+          "handler_to_draw": {
+            "over_30_ms": 0,
+            "samples": 0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "p99_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 62,
+            "p50_ms": 5.183646,
+            "p95_ms": 9.494688,
+            "p99_ms": 12.013438,
+            "max_ms": 12.013438
+          },
+          "frame_command_issue": {
+            "over_30_ms": 24,
+            "samples": 62,
+            "p50_ms": 23.630208,
+            "p95_ms": 48.583958,
+            "p99_ms": 50.569375,
+            "max_ms": 50.569375
+          },
+          "resources": {
+            "process_cpu_ms": 2423,
+            "pss_kib_before_after": [
+              144545,
+              161761
+            ],
+            "java_used_bytes_before_after": [
+              18625360,
+              35947376
+            ],
+            "io_delta": {
+              "rchar": 2659946,
+              "wchar": 6881,
+              "read_bytes": 0,
+              "write_bytes": 335872
+            }
+          }
+        },
+        "document_reopen": {
+          "handler": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 52.180781,
+            "p95_ms": 53.497813,
+            "p99_ms": 53.497813,
+            "max_ms": 53.497813
+          },
+          "input_to_draw": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 54.747813,
+            "p95_ms": 56.719063,
+            "p99_ms": 56.719063,
+            "max_ms": 56.719063
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 52.507969,
+            "p95_ms": 53.992709,
+            "p99_ms": 53.992709,
+            "max_ms": 53.992709
+          },
+          "window_frame": {
+            "over_30_ms": 12,
+            "samples": 14,
+            "p50_ms": 48.276043,
+            "p95_ms": 87.243308,
+            "p99_ms": 87.243308,
+            "max_ms": 87.243308
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 10,
+            "p50_ms": 1.162865,
+            "p95_ms": 1.509271,
+            "p99_ms": 1.509271,
+            "max_ms": 1.509271
+          },
+          "action": {
+            "over_30_ms": 10,
+            "samples": 10,
+            "p50_ms": 50.950416,
+            "p95_ms": 52.375469,
+            "p99_ms": 52.375469,
+            "max_ms": 52.375469
+          },
+          "handler_to_draw": {
+            "over_30_ms": 0,
+            "samples": 10,
+            "p50_ms": 2.686041,
+            "p95_ms": 4.656354,
+            "p99_ms": 4.656354,
+            "max_ms": 4.656354
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 14,
+            "p50_ms": 2.305573,
+            "p95_ms": 8.843802,
+            "p99_ms": 8.843802,
+            "max_ms": 8.843802
+          },
+          "frame_command_issue": {
+            "over_30_ms": 1,
+            "samples": 14,
+            "p50_ms": 0.725156,
+            "p95_ms": 42.610052,
+            "p99_ms": 42.610052,
+            "max_ms": 42.610052
+          },
+          "resources": {
+            "process_cpu_ms": 902,
+            "pss_kib_before_after": [
+              161781,
+              195401
+            ],
+            "java_used_bytes_before_after": [
+              36008816,
+              70247664
+            ],
+            "io_delta": {
+              "rchar": 2657150,
+              "wchar": 688,
+              "read_bytes": 0,
+              "write_bytes": 0
+            }
+          }
+        },
+        "history_toggle": {
+          "handler": {
+            "over_30_ms": 3,
+            "samples": 54,
+            "p50_ms": 8.45276,
+            "p95_ms": 30.174791,
+            "p99_ms": 30.957395,
+            "max_ms": 30.957395
+          },
+          "input_to_draw": {
+            "over_30_ms": 54,
+            "samples": 54,
+            "p50_ms": 72.644271,
+            "p95_ms": 104.96427,
+            "p99_ms": 107.472448,
+            "max_ms": 107.472448
+          },
+          "input_to_ui_draw": {
+            "over_30_ms": 54,
+            "samples": 54,
+            "p50_ms": 65.430885,
+            "p95_ms": 95.501563,
+            "p99_ms": 97.188645,
+            "max_ms": 97.188645
+          },
+          "window_frame": {
+            "over_30_ms": 133,
+            "samples": 142,
+            "p50_ms": 65.862198,
+            "p95_ms": 91.913809,
+            "p99_ms": 92.277675,
+            "max_ms": 92.441277
+          },
+          "queue": {
+            "over_30_ms": 0,
+            "samples": 54,
+            "p50_ms": 7.461875,
+            "p95_ms": 28.728593,
+            "p99_ms": 29.330572,
+            "max_ms": 29.330572
+          },
+          "action": {
+            "over_30_ms": 0,
+            "samples": 54,
+            "p50_ms": 1.252031,
+            "p95_ms": 2.400208,
+            "p99_ms": 2.686979,
+            "max_ms": 2.686979
+          },
+          "handler_to_draw": {
+            "over_30_ms": 54,
+            "samples": 54,
+            "p50_ms": 63.230573,
+            "p95_ms": 77.067083,
+            "p99_ms": 79.829739,
+            "max_ms": 79.829739
+          },
+          "frame_draw": {
+            "over_30_ms": 0,
+            "samples": 142,
+            "p50_ms": 5.328542,
+            "p95_ms": 12.400729,
+            "p99_ms": 15.960521,
+            "max_ms": 16.646771
+          },
+          "frame_command_issue": {
+            "over_30_ms": 82,
+            "samples": 142,
+            "p50_ms": 40.163334,
+            "p95_ms": 49.208541,
+            "p99_ms": 51.017187,
+            "max_ms": 51.396823
+          },
+          "resources": {
+            "process_cpu_ms": 6159,
+            "pss_kib_before_after": [
+              199877,
+              187377
+            ],
+            "java_used_bytes_before_after": [
+              71251184,
+              43037552
+            ],
+            "io_delta": {
+              "rchar": 2748736,
+              "wchar": 89667,
+              "read_bytes": 0,
+              "write_bytes": 1146880
+            }
+          }
+        }
+      },
+      "history_directions": {
+        "undo": {
+          "input_to_ui_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 65.309219,
+            "p95_ms": 92.574688,
+            "p99_ms": 95.558072,
+            "max_ms": 95.558072
+          },
+          "input_to_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 70.680573,
+            "p95_ms": 100.011718,
+            "p99_ms": 100.437344,
+            "max_ms": 100.437344
+          }
+        },
+        "redo": {
+          "input_to_ui_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 68.07224,
+            "p95_ms": 95.501563,
+            "p99_ms": 97.188645,
+            "max_ms": 97.188645
+          },
+          "input_to_draw": {
+            "over_30_ms": 27,
+            "samples": 27,
+            "p50_ms": 78.041406,
+            "p95_ms": 106.714584,
+            "p99_ms": 107.472448,
+            "max_ms": 107.472448
+          }
+        }
+      },
+      "post_gc": {
+        "process_cpu_ms": 127,
+        "pss_kib_before_after": [
+          187507,
+          147333
+        ],
+        "java_used_bytes_before_after": [
+          43090800,
+          15651696
+        ],
+        "io_delta": {
+          "rchar": 2737591,
+          "wchar": 171,
+          "read_bytes": 0,
+          "write_bytes": 0
+        }
+      }
+    }
+  ]
+}

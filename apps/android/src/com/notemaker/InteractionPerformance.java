@@ -6,6 +6,7 @@ import android.view.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.BooleanSupplier;
 import static com.notemaker.core.Json.*;
 
 /** Draw timing for common viewport and toolbar changes on a disposable note. */
@@ -16,7 +17,8 @@ final class InteractionPerformance {
         Map<String,List<Double>> draw=new LinkedHashMap<>(),handler=new LinkedHashMap<>(),frame=new LinkedHashMap<>();
         Map<String,List<Double>> queue=new LinkedHashMap<>(),action=new LinkedHashMap<>(),drawWait=new LinkedHashMap<>(),uiDraw=new LinkedHashMap<>();
         Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
-        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen")){
+        List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
+        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
             queue.put(name,new ArrayList<>());action.put(name,new ArrayList<>());drawWait.put(name,new ArrayList<>());uiDraw.put(name,new ArrayList<>());
@@ -25,7 +27,11 @@ final class InteractionPerformance {
         }
         AtomicReference<String> current=new AtomicReference<>(null);
         AtomicReference<Runnable> uiDrawAck=new AtomicReference<>(null);
-        ViewTreeObserver.OnDrawListener uiListener=()->{Runnable ack=uiDrawAck.getAndSet(null);if(ack!=null)ack.run();};
+        AtomicReference<BooleanSupplier> uiDrawReady=new AtomicReference<>(null);
+        ViewTreeObserver.OnDrawListener uiListener=()->{
+            Runnable ack=uiDrawAck.get();BooleanSupplier ready=uiDrawReady.get();
+            if(ack!=null&&(ready==null||ready.getAsBoolean())&&uiDrawAck.compareAndSet(ack,null))ack.run();
+        };
         Window.OnFrameMetricsAvailableListener listener=(window,metrics,dropped)->{
             String name=current.get();if(name!=null){frame.get(name).add(metrics.getMetric(FrameMetrics.TOTAL_DURATION)/1e6);
                 frameDraw.get(name).add(metrics.getMetric(FrameMetrics.DRAW_DURATION)/1e6);
@@ -38,6 +44,7 @@ final class InteractionPerformance {
         Map<String,Object> start=Performance.resources(0);
         Map<String,Object> modeResources=new LinkedHashMap<>();
         String originalLayer=app.selected,extraLayer="performance-"+UUID.randomUUID();
+        String historyId="performance-history-"+UUID.randomUUID();
         try {
             for(String name:draw.keySet()){
                 if(name.equals("layer_switch")){
@@ -46,18 +53,32 @@ final class InteractionPerformance {
                     test.runOnMainSync(()->{try{app.refreshShared(state);app.update();}catch(Exception error){throw new RuntimeException(error);}});
                     test.waitForIdleSync();
                 }
+                if(name.equals("history_toggle")){
+                    app.replica.command(Arrays.asList("object","put","-"),object("kind","object","object",historyId,
+                            "shape","rect","layer",app.selected,"page",app.page,"x",120,"y",140,"w",180,"h",110,
+                            "color",android.graphics.Color.BLACK,"width",5,"fontSize",24,"text",""));
+                    Map<String,Object> state=app.replica.read();
+                    test.runOnMainSync(()->{try{app.refreshShared(state);app.undo.clear();app.redo.clear();
+                        app.undo.add("object-action");app.save();app.update();}catch(Exception error){throw new RuntimeException(error);}});
+                    test.waitForIdleSync();
+                }
                 Map<String,Object> modeStart=Performance.resources(0);
                 current.set(name);
-                int count=name.equals("pan")?60:name.equals("document_reopen")?12:40;
-                int warmup=name.equals("document_reopen")?2:5;
+                int count=name.equals("pan")||name.equals("history_toggle")?60:name.equals("document_reopen")?12:40;
+                int warmup=name.equals("document_reopen")?2:name.equals("history_toggle")?6:5;
                 for(int i=0;i<count;i++){
                     int index=i;CountDownLatch painted=new CountDownLatch(1),handled=new CountDownLatch(1),uiPainted=new CountDownLatch(1);
                     AtomicLong drawn=new AtomicLong(),uiDrawn=new AtomicLong(),started=new AtomicLong(),completed=new AtomicLong();
                     long queued=System.nanoTime();
                     input.post(()->{
                         started.set(System.nanoTime());
+                        boolean history=name.equals("history_toggle"),forward=index%2==1;
+                        BooleanSupplier ready=()->!history||(!app.historyPending&&
+                                (forward?!Boolean.FALSE.equals(app.model.objectActive.get(historyId)):
+                                        Boolean.FALSE.equals(app.model.objectActive.get(historyId))));
+                        uiDrawReady.set(ready);
                         uiDrawAck.set(()->{uiDrawn.set(System.nanoTime());uiPainted.countDown();});
-                        app.canvas.afterDraw=()->{drawn.set(System.nanoTime());painted.countDown();};
+                        app.canvas.afterDraw=()->{if(ready.getAsBoolean()){drawn.set(System.nanoTime());painted.countDown();}};
                         if(name.equals("pan")){
                             app.pan=true;float x=app.canvas.getWidth()/2f,y=app.canvas.getHeight()/2f;
                             long when=SystemClock.uptimeMillis();
@@ -71,6 +92,8 @@ final class InteractionPerformance {
                             app.setDrawingTool(index%2==0?"rectangle":null);
                         }else if(name.equals("layer_switch")){
                             app.selectLayer(index%2==0?extraLayer:originalLayer);
+                        }else if(history){
+                            app.history(forward);
                         }else{
                             app.load(app.type);app.configureProxy();app.update();
                         }
@@ -84,8 +107,21 @@ final class InteractionPerformance {
                         queue.get(name).add((started.get()-queued)/1e6);action.get(name).add((completed.get()-started.get())/1e6);
                         if(!name.equals("layer_switch")){draw.get(name).add((drawn.get()-queued)/1e6);
                             drawWait.get(name).add((drawn.get()-completed.get())/1e6);}
+                        if(name.equals("history_toggle")){
+                            (index%2==0?undoUiDraw:redoUiDraw).add((uiDrawn.get()-queued)/1e6);
+                            (index%2==0?undoCanvasDraw:redoCanvasDraw).add((drawn.get()-queued)/1e6);
+                        }
                     }
                     Thread.sleep(25);
+                }
+                if(name.equals("history_toggle")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    Map<String,Object> durable=app.replica.read();
+                    com.notemaker.core.Model saved=com.notemaker.core.Store.model(durable);
+                    com.notemaker.core.Model.require(saved.objects.containsKey(historyId)&&
+                            !Boolean.FALSE.equals(saved.objectActive.get(historyId)),"History toggle did not persist final object");
+                    test.runOnMainSync(()->com.notemaker.core.Model.require(app.undo.size()==1&&app.redo.isEmpty(),
+                            "History toggle did not restore editor history"));
                 }
                 test.waitForIdleSync();modeResources.put(name,object("before",modeStart,"after",Performance.resources(0)));
             }
@@ -93,7 +129,8 @@ final class InteractionPerformance {
             test.waitForIdleSync();Thread.sleep(250);
         }finally{
             current.set(null);
-            test.runOnMainSync(()->{app.canvas.afterDraw=null;app.getWindow().removeOnFrameMetricsAvailableListener(listener);
+            test.runOnMainSync(()->{app.canvas.afterDraw=null;uiDrawAck.set(null);uiDrawReady.set(null);
+                app.getWindow().removeOnFrameMetricsAvailableListener(listener);
                 app.getWindow().getDecorView().getViewTreeObserver().removeOnDrawListener(uiListener);});
             frames.quitSafely();
         }
@@ -106,8 +143,12 @@ final class InteractionPerformance {
                 "queue",Performance.stats(queue.get(name)),"action",Performance.stats(action.get(name)),
                 "handler_to_draw",Performance.stats(drawWait.get(name)),"frame_draw",Performance.stats(frameDraw.get(name)),
                 "frame_command_issue",Performance.stats(frameCommand.get(name))));
+        Map<String,Object> historyDirections=object(
+                "undo",object("input_to_ui_draw",Performance.stats(undoUiDraw),"input_to_draw",Performance.stats(undoCanvasDraw)),
+                "redo",object("input_to_ui_draw",Performance.stats(redoUiDraw),"input_to_draw",Performance.stats(redoCanvasDraw)));
         return object("modes",modes,"mode_resources",modeResources,"start_resources",start,"end_resources",end,"post_gc_resources",postGc,
-                "latency_definition","enqueue to end of Canvas draw; 5 warmup actions per mode except 2 for document reopen; synthetic pan and viewport zoom redraw",
+                "history_directions",historyDirections,
+                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen; synthetic pan and viewport zoom redraw; history alternates object undo and redo",
                 "document",app.document,"state_revision",app.replica.read().get("revision"));
     }
 }
