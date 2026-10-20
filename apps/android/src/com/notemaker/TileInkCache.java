@@ -31,8 +31,9 @@ final class TileInkCache {
         public int hashCode(){return Objects.hash(layer,x,y,tier,culling);}
         public boolean equals(Object other){if(!(other instanceof Key))return false;Key k=(Key)other;return x==k.x&&y==k.y&&tier==k.tier&&culling==k.culling&&layer.equals(k.layer);}
     }
-    private static final class Tile {final Bitmap bitmap;final BitmapShader shader;List<Item> items;final long bytes;
-        Tile(Bitmap bitmap,List<Item> items,int tx,int ty,int tier,int tileSize){this.bitmap=bitmap;this.items=items;bytes=(long)bitmap.getRowBytes()*bitmap.getHeight();shader=shader(bitmap,tx*tileSize,ty*tileSize,tier);}}
+    private static final class Tile {final Bitmap bitmap;final BitmapShader shader;final Matrix bitmapMatrix;List<Item> items;final long bytes;
+        Tile(Bitmap bitmap,List<Item> items,int tx,int ty,int tier,int tileSize){this.bitmap=bitmap;this.items=items;bytes=(long)bitmap.getRowBytes()*bitmap.getHeight();shader=shader(bitmap,tx*tileSize,ty*tileSize,tier);
+            bitmapMatrix=new Matrix();float inv=1f/tier;bitmapMatrix.setValues(new float[]{inv,0,tx*tileSize-GUTTER*inv,0,inv,ty*tileSize-GUTTER*inv,0,0,1});}}
     private static final class PathEntry {final com.notemaker.cli.Png.StrokeCommands commands;final Map<String,Object> source;final long bytes,points;
         PathEntry(com.notemaker.cli.Png.StrokeCommands commands,Map<String,Object> source,long bytes,long points){this.commands=commands;this.source=source;this.bytes=bytes;this.points=points;}}
     private final LinkedHashMap<Key,Tile> tiles=new LinkedHashMap<>(32,.75f,true);
@@ -59,7 +60,7 @@ final class TileInkCache {
             ArrayList<Item> contributors=new ArrayList<>();if(cullItems){for(Item item:items)if(RectF.intersects(core,item.bounds))contributors.add(item);}else contributors.addAll(items);
             Key key=new Key(layer,tx,ty,tier,true);Tile tile=cullItems?tiles.get(key):null;
             if(contributors.isEmpty()){if(tile!=null)remove(key,tile);continue;}
-            if(tile!=null&&same(tile.items,contributors)){reusedTiles++;drawTile(destination,tile.shader,tx,ty,tileSize);continue;}
+            if(tile!=null&&same(tile.items,contributors)){reusedTiles++;drawTileBitmap(destination,tile,tx,ty,tileSize);continue;}
             // Full tile repaint preserves Skia's exact anti-aliasing at changed
             // item edges. Reuse a resident bitmap to avoid graphics allocation.
             if(cullItems)for(Item item:items)if(!RectF.intersects(core,item.bounds))culledItems++;
@@ -69,7 +70,7 @@ final class TileInkCache {
             canvas.scale(tier,tier);canvas.translate(-left+gutter,-top+gutter);
             if(cullItems)canvas.clipRect(left-gutter,top-gutter,left+tileSize+gutter,top+tileSize+gutter);
             for(Item item:contributors){if(cullItems){itemRenders++;recordRendered(item.id);drawItem(canvas,item,renderer);}else renderer.accept(canvas,item.value);}
-            if(cullItems){if(tile==null){tile=new Tile(bitmap,contributors,tx,ty,tier,tileSize);tiles.put(key,tile);currentBytes+=tile.bytes;allocatedTiles++;peakBytes=Math.max(peakBytes,currentBytes);}else tile.items=contributors;drawTile(destination,tile.shader,tx,ty,tileSize);tileRenders++;}else{BitmapShader shader=shader(bitmap,left,top,tier);drawTile(destination,shader,tx,ty,tileSize);}
+            if(cullItems){if(tile==null){tile=new Tile(bitmap,contributors,tx,ty,tier,tileSize);tiles.put(key,tile);currentBytes+=tile.bytes;allocatedTiles++;peakBytes=Math.max(peakBytes,currentBytes);}else tile.items=contributors;drawTileBitmap(destination,tile,tx,ty,tileSize);tileRenders++;}else{BitmapShader shader=shader(bitmap,left,top,tier);drawTile(destination,shader,tx,ty,tileSize);}
         }}finally{if(referenceBitmap!=null)referenceBitmap.recycle();}
     }
     void drawMonolithic(Canvas destination,List<Item> items,RectF probe,int tier,BiConsumer<Canvas,Map<String,Object>> renderer){
@@ -81,6 +82,9 @@ final class TileInkCache {
     }
     private static BitmapShader shader(Bitmap bitmap,float originX,float originY,int tier){BitmapShader shader=new BitmapShader(bitmap,Shader.TileMode.CLAMP,Shader.TileMode.CLAMP);Matrix local=new Matrix();float inv=1f/tier,left=originX-GUTTER*inv,top=originY-GUTTER*inv;local.setValues(new float[]{inv,0,left,0,inv,top,0,0,1});shader.setLocalMatrix(local);return shader;}
     private void drawTile(Canvas destination,BitmapShader shader,int tx,int ty,int tileSize){float x=tx*tileSize,y=ty*tileSize;drawCore(destination,shader,x,y,x+tileSize,y+tileSize);}
+    private void drawTileBitmap(Canvas destination,Tile tile,int tx,int ty,int tileSize){float x=tx*tileSize,y=ty*tileSize;
+        destination.save();destination.clipRect(x,y,x+tileSize,y+tileSize);bitmapPaint.setShader(null);bitmapPaint.setAntiAlias(false);
+        destination.drawBitmap(tile.bitmap,tile.bitmapMatrix,bitmapPaint);destination.restore();}
     private void drawCore(Canvas destination,BitmapShader shader,float left,float top,float right,float bottom){bitmapPaint.setShader(shader);bitmapPaint.setAntiAlias(false);destination.drawRect(left,top,right,bottom,bitmapPaint);bitmapPaint.setShader(null);}
     private static boolean same(List<Item> a,List<Item> b){if(a.size()!=b.size())return false;for(int i=0;i<a.size();i++){Map<String,Object> av=a.get(i).value,bv=b.get(i).value;if(av!=bv&&!av.equals(bv))return false;}return true;}
     private void trimFor(long incoming){Iterator<Map.Entry<Key,Tile>> it=tiles.entrySet().iterator();while(currentBytes+incoming>MAX_BYTES&&it.hasNext()){Map.Entry<Key,Tile> e=it.next();currentBytes-=e.getValue().bytes;e.getValue().bitmap.recycle();it.remove();evictedTiles++;}}

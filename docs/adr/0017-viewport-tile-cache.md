@@ -85,3 +85,7 @@ at 901–1,000 strokes, command issue reached 49.9 ms p95 and app draw 30.7 ms
 p95. This separates the growing Java/render traversal cost from the larger
 device command-submission cost; see
 `docs/design/performance/frame-phase-breakdown.md`.
+The direct-bitmap submission experiment on `perf/direct-tile-bitmaps` retains
+the same tile gutter and exact emulator pixel results. Two physical runs showed
+a small app-draw improvement without a material frame-time change; see
+`docs/design/performance/direct-tile-bitmaps.md`.
