@@ -1,0 +1,143 @@
+{
+  "device": "NoteAir6C, Android 16 (API 36)",
+  "date": "2026-10-20",
+  "warmup_per_run": 2,
+  "runs": [
+    {
+      "name": "tablet-original-indexed-1",
+      "samples": 10,
+      "apk_sha256": "10520be1d467a58941dcabff0941c03f56e8b17bf3802afc1754453e0f51e72c",
+      "android_total_ms": {
+        "median": 1653.0,
+        "p95": 1710,
+        "min": 1622,
+        "max": 1710
+      },
+      "host_start_wall_ms": {
+        "median": 1743.605628,
+        "p95": 1792.378879,
+        "min": 1717.307633,
+        "max": 1792.378879
+      },
+      "process_cpu_ms": {
+        "median": 2660.0,
+        "p95": 2750.0,
+        "min": 2620.0,
+        "max": 2750.0
+      },
+      "pss_kib": {
+        "median": 203517.5,
+        "p95": 203695,
+        "min": 196371,
+        "max": 203695
+      },
+      "rchar_median": 5476149.0,
+      "read_bytes_median": 2048.0,
+      "write_bytes_median": 32768.0
+    },
+    {
+      "name": "tablet-checkpoint-indexed-1",
+      "samples": 10,
+      "apk_sha256": "9c1e06df3ac8f0d8433a65ce4809b4234850f604b48a95d879788b766c23da19",
+      "android_total_ms": {
+        "median": 1385.0,
+        "p95": 1435,
+        "min": 1340,
+        "max": 1435
+      },
+      "host_start_wall_ms": {
+        "median": 1475.9552145,
+        "p95": 1529.039944,
+        "min": 1434.174968,
+        "max": 1529.039944
+      },
+      "process_cpu_ms": {
+        "median": 2360.0,
+        "p95": 2450.0,
+        "min": 2290.0,
+        "max": 2450.0
+      },
+      "pss_kib": {
+        "median": 174018.0,
+        "p95": 174734,
+        "min": 167567,
+        "max": 174734
+      },
+      "rchar_median": 3056588.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0
+    },
+    {
+      "name": "tablet-checkpoint-indexed-2",
+      "samples": 10,
+      "apk_sha256": "3067b37deec14be9ad2caad582547cea86397fa9356b82f25eb1b1283eab17b1",
+      "android_total_ms": {
+        "median": 1400.5,
+        "p95": 1446,
+        "min": 1373,
+        "max": 1446
+      },
+      "host_start_wall_ms": {
+        "median": 1498.6329074999999,
+        "p95": 1527.001138,
+        "min": 1471.537588,
+        "max": 1527.001138
+      },
+      "process_cpu_ms": {
+        "median": 2400.0,
+        "p95": 2480.0,
+        "min": 2340.0,
+        "max": 2480.0
+      },
+      "pss_kib": {
+        "median": 170400.0,
+        "p95": 174085,
+        "min": 166986,
+        "max": 174085
+      },
+      "rchar_median": 3056616.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0
+    },
+    {
+      "name": "tablet-checkpoint-1",
+      "samples": 10,
+      "apk_sha256": "a5c3d760893dd0f71d7749a0b1b5418625fd8bc6c15f53ca81675481c304f940",
+      "android_total_ms": {
+        "median": 1800.5,
+        "p95": 1862,
+        "min": 1758,
+        "max": 1862
+      },
+      "host_start_wall_ms": {
+        "median": 1898.1927759999999,
+        "p95": 1930.290328,
+        "min": 1860.868049,
+        "max": 1930.290328
+      },
+      "process_cpu_ms": {
+        "median": 2790.0,
+        "p95": 2890.0,
+        "min": 2690.0,
+        "max": 2890.0
+      },
+      "pss_kib": {
+        "median": 205759.0,
+        "p95": 212759,
+        "min": 205531,
+        "max": 212759
+      },
+      "rchar_median": 5447729.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0
+    }
+  ],
+  "fixture": {
+    "document": "copied captured note, name omitted",
+    "original_base_bytes": 111,
+    "original_wal_bytes": 4810638,
+    "checkpoint_base_bytes": 2391204,
+    "checkpoint_wal_bytes": 0,
+    "host_checkpoint_command_wall_ms": 124.6
+  }
+}

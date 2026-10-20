@@ -407,6 +407,10 @@ Local state consists of a baseline `document-*.json` plus its `.json.journal`
 file. Preserve both when backing up, with writers stopped or the document locked.
 Use CLI `log` to inspect live state. Do not use an older app/CLI to write a migrated
 replica. Existing notes are migrated without clearing them.
+Use `apps/cli/notemaker --proxy-file PATH --document NAME checkpoint` to fold a
+large journal into its durable base while preserving the revision and undo
+history. The command returns the revision and journal bytes before and after;
+keep the proxy running and selected for this maintenance write.
 
 ### Automated test tiers
 
@@ -663,6 +667,8 @@ It leaves the copied note in the device page cache; it does not time a cold
 storage read or physical E Ink scanout. Use `--compile-speed` to compare forced
 ahead-of-time compilation separately. Summarize multiple runs with
 `nix-shell --run 'python3 tests/summarize_cold_start.py OUTPUT.json RUN1 RUN2'`.
+Use `--seed-proxy-config` for a disposable offline proxy index containing the
+copied document name; it does not copy the source proxy's credentials.
 For paired comparisons of the earlier three-mode suite, run
 `nix-shell --run 'python3 tests/summarize_interaction_performance.py
 BASELINE_FIRST CANDIDATE_FIRST CANDIDATE_REPEAT BASELINE_REPEAT OUTPUT.json'`.

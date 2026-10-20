@@ -29,6 +29,29 @@ final class Journal {
             try{return cache.accessLocked(file,document,edit,writable);}catch(Rejected e){throw e.original;}catch(Exception e){cache.state=null;throw e;}
         }}
     }
+    static Map<String,Object> checkpoint(File file,String document) throws Exception {
+        String path=file.getCanonicalPath();Journal cache=caches.computeIfAbsent(path,k->new Journal());
+        synchronized(cache){try(RandomAccessFile lock=new RandomAccessFile(path+".lock","rw");FileLock held=lock.getChannel().lock()){
+            try {
+                cache.accessLocked(file,document,null,true);
+                File wal=new File(file+".journal");long before=wal.length();
+                if(before==0)return object("revision",cache.state.get("revision"),"journalBytesBefore",0,"journalBytesAfter",0);
+                Path temporary=Files.createTempFile(file.getParentFile().toPath(),"document-checkpoint-",".tmp");
+                try {
+                    try(FileOutputStream out=new FileOutputStream(temporary.toFile())){
+                        out.write(write(cache.state).getBytes(StandardCharsets.UTF_8));out.getFD().sync();
+                    }
+                    Files.move(temporary,file.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+                    try(FileChannel directory=FileChannel.open(file.getParentFile().toPath(),StandardOpenOption.READ)){directory.force(true);}
+                    // A crash before truncation leaves the old WAL in place. Its
+                    // revisions are already in the new base and replay skips them.
+                    try(RandomAccessFile log=new RandomAccessFile(wal,"rw")){log.setLength(0);log.getFD().sync();}
+                    cache.offset=0;cache.stamp=file.lastModified();cache.size=file.length();
+                    return object("revision",cache.state.get("revision"),"journalBytesBefore",before,"journalBytesAfter",0);
+                } finally {Files.deleteIfExists(temporary);}
+            }catch(Exception e){cache.state=null;throw e;}
+        }}
+    }
     private Map<String,Object> accessLocked(File file,String document,Store.Edit edit,boolean writable) throws Exception {
         File wal=new File(file+".journal");
         if(state==null||stamp!=file.lastModified()||size!=file.length()||wal.length()<offset){

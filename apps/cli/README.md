@@ -90,6 +90,7 @@ The current trusted-LAN server has no authentication.
 | `document list` | List documents in this local directory. Does not discover server documents. |
 | `inspect` | Effective document type, ordered layers/strokes/objects and active-state maps. Missing active entry means true. |
 | `status` | Pending count, cursor, local revision and pinned server identity. |
+| `checkpoint` | Atomically fold the current local journal into the base file without changing the revision or actor histories. Requires the selected proxy; returns revision and journal byte counts. |
 | `log` | Committed events, pending operations, actor histories and local settings. |
 | `diagram add FILE\|-` | Create a new layer and editable objects atomically. |
 | `svg add FILE.svg\|- [PLACEMENT.json]` | Place a static SVG as one object; `-` reads raw SVG from stdin. |

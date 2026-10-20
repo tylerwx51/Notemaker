@@ -12,6 +12,39 @@ import server_checks
 from topology_support import Link, Proxy, eventually, http
 
 class ProxyChecks(server_checks.ServerChecks):
+    def test_checkpoint_preserves_history_and_skips_pretruncate_journal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp);proxy=Proxy(directory,'checkpoint-history')
+            def cli(*args,value=None,actor='writer',remote=True):
+                location=['--proxy-file',str(proxy.descriptor_path)] if remote else ['--state',str(directory)]
+                result=subprocess.run([str(CLI),*location,'--document','checkpoint-history','--actor',actor,*args],
+                                      input=json.dumps(value) if value is not None else None,
+                                      text=True,capture_output=True,timeout=30)
+                self.assertEqual(result.returncode,0,result.stderr)
+                return json.loads(result.stdout)
+            try:
+                cli('document','create','pages')
+                cli('object','put','-',value={'object':'before','shape':'rect','x':10})
+                baseline=cli('log');journal=next(directory.glob('*.journal'))
+                original=journal.read_bytes();self.assertTrue(original)
+                result=cli('checkpoint')
+                self.assertEqual(result['revision'],baseline['revision'])
+                self.assertEqual(result['journalBytesBefore'],len(original))
+                self.assertEqual(journal.stat().st_size,0)
+                self.assertEqual(cli('log'),baseline)
+                # Simulate a crash after the base rename but before WAL truncation.
+                journal.write_bytes(original)
+            finally:proxy.stop()
+            self.assertEqual(cli('log',remote=False),baseline)
+            proxy=Proxy(directory,'checkpoint-history')
+            try:
+                cli('object','put','-',value={'object':'after','shape':'rect','x':20})
+                cli('undo');self.assertFalse(cli('inspect')['objectActive']['after'])
+                cli('undo');self.assertFalse(cli('inspect')['objectActive']['before'])
+                cli('redo');self.assertTrue(cli('inspect')['objectActive']['before'])
+            finally:proxy.stop()
+            self.assertEqual(len(cli('inspect',remote=False)['objects']),2)
+
     def test_editor_undo_list_journal_stays_linear_and_replays(self):
         with tempfile.TemporaryDirectory() as temp:
             directory=Path(temp);proxy=Proxy(directory,'editor-history-growth')

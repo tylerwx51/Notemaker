@@ -33,6 +33,11 @@ public final class Store {
     public Model model() throws Exception {return model(read());}
     private Map<String,Object> overlay(Map<String,Object> state){state.remove("leases");state.remove("activeSessions");state.put("leases",copy(coordination.leases));state.put("activeSessions",copy(coordination.sessions));return state;}
     public Map<String,Object> read() throws Exception {synchronized(coordination){return overlay(locked(null));}}
+    /** Save the materialized replica as a durable base without changing its revision. */
+    public Map<String,Object> checkpoint() throws Exception {synchronized(coordination){
+        Model.require(writable,"Checkpoint requires the selected proxy");
+        return Journal.checkpoint(file,document);
+    }}
     public Map<String,Object> edit(Edit edit) throws Exception {synchronized(coordination){
         final Map<String,Object> leases=new LinkedHashMap<>(),sessions=new LinkedHashMap<>();
         Map<String,Object> state=locked(s->{overlay(s);edit.apply(s);leases.putAll(map(copy(s.get("leases"))));sessions.putAll(map(copy(s.get("activeSessions"))));s.remove("leases");s.remove("activeSessions");});

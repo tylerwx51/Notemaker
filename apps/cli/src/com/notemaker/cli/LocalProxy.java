@@ -56,8 +56,16 @@ public final class LocalProxy implements Closeable {
             if(settings.containsKey("upstream"))upstream=new Endpoint(map(settings.get("upstream")));
             for(Object document:list(settings.getOrDefault("documents",Collections.emptyList())))store((String)document);
             Timing.mark("proxy_known_documents");
+            Set<String> knownFiles=new HashSet<>();
+            for(Store local:documents.values())knownFiles.add(local.file.getName());
             File[] files=directory.listFiles((d,n)->n.startsWith("document-")&&n.endsWith(".json"));
-            if(files!=null)for(File file:files){Map<String,Object> state=map(parse(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)));if(state.containsKey("document"))store(string(state,"document"));}
+            if(files!=null)for(File file:files){
+                // Known documents are validated by Store.read below. Parsing a
+                // checkpointed base here would deserialize it twice on startup.
+                if(knownFiles.contains(file.getName()))continue;
+                Map<String,Object> state=map(parse(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8)));
+                if(state.containsKey("document"))store(string(state,"document"));
+            }
             Timing.mark("proxy_document_scan");
             for(Store local:documents.values()){Object root=local.read().get("serverId");if(root!=null){require(!settings.containsKey("rootId")||root.equals(settings.get("rootId")),"Replica contains different server databases");settings.put("rootId",root);}}
             Timing.mark("proxy_root_validation");
@@ -275,7 +283,7 @@ public final class LocalProxy implements Closeable {
         if(cmd.equals("transform")&&args.size()==3&&args.get(1).equals("preview")&&args.get(2).equals("-")){
             Map<String,Object> request=map(body.get("input"));Map<String,Object> transform=map(request.get("transform"));return preview(doc,actor,string(request,"session"),list(request.get("entities")),transform);
         }
-        require(Arrays.asList("document","inspect","snapshot","append","settings","status","log","diagram","svg","image","erase","fill","template","shape","apply","layer","object","stroke","undo","redo","selection","transform","conflicts","conflict").contains(cmd),"Unsupported proxy command");
+        require(Arrays.asList("document","inspect","snapshot","append","settings","status","log","checkpoint","diagram","svg","image","erase","fill","template","shape","apply","layer","object","stroke","undo","redo","selection","transform","conflicts","conflict").contains(cmd),"Unsupported proxy command");
         List<String> localArgs=new ArrayList<>(Arrays.asList("--state",directory.getAbsolutePath(),"--document",doc,"--actor",actor));localArgs.addAll(args);
         Main.proxyInput.set(body.get("input"));Main.inProxy.set(true);Map<String,Object> beforeState=local.read();long before=((Number)beforeState.get("revision")).longValue();Map<String,Object> previousLeases=map(copy(beforeState.getOrDefault("leases",object())));
         try{Object result=Main.run(localArgs.toArray(new String[0]));if(cmd.equals("transform")&&args.size()>1&&args.get(1).equals("commit")){Map<String,Object> request=map(body.get("input"));clearPreview(doc,string(request,"session"),actor);}if(cmd.equals("status")){map(result).put("connected",Boolean.TRUE.equals(connected.get(doc)));map(result).put("upstreamError",errors.get(doc));map(result).put("proxyId",id);}if(cmd.equals("snapshot")){Map<String,Object> state=local.read();Collaboration.expire(state,System.currentTimeMillis());map(result).put("leases",copy(state.getOrDefault("leases",object())));map(result).put("previews",previewSnapshot(doc,state));map(result).put("conflicts",local.conflicts());}return result;}finally{

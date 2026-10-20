@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--cold-start',action='store_true',help='Measure process-cold opens of a copied note')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
+    parser.add_argument('--seed-proxy-config',action='store_true',help='Seed an isolated, offline proxy document index for cold-start measurement')
     parser.add_argument('--mode',choices=['partial','item'],default='partial')
     args=parser.parse_args()
     if sum((args.synthetic_strokes,args.interaction_suite,args.cold_start))>1: parser.error('Choose one performance mode')
@@ -39,7 +40,7 @@ def main():
     metadata={'revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
               'source_changes':subprocess.check_output(['git','diff','--stat'],cwd=ROOT,text=True),
               'synthetic_strokes':args.synthetic_strokes,'cold_start':args.cold_start,
-              'compile_speed':args.compile_speed}
+              'compile_speed':args.compile_speed,'seed_proxy_config':args.seed_proxy_config}
     for prop in ('ro.product.model','ro.build.version.sdk','ro.build.fingerprint'):
         metadata[prop]=call('shell','getprop',prop).decode().strip()
     (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
@@ -84,6 +85,10 @@ def main():
             if journal.exists(): shutil.copy(journal,replica/'files'/journal.name)
             found=True
     assert found or args.synthetic_strokes,'Document absent'
+    if args.seed_proxy_config:
+        assert args.cold_start and found,'--seed-proxy-config requires --cold-start and a copied note'
+        (replica/'files'/'proxy-config.json').write_text(json.dumps({'id':str(uuid.uuid4()),
+            'token':uuid.uuid4().hex+uuid.uuid4().hex,'documents':[args.document]}))
     prefs=ET.Element('map')
     for key,value in [('document',args.document or 'synthetic-performance'),('host','')]: ET.SubElement(prefs,'string',name=key).text=value
     ET.ElementTree(prefs).write(replica/'shared_prefs/settings.xml',encoding='utf-8')
