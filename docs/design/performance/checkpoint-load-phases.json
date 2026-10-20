@@ -1,0 +1,15 @@
+{
+  "device": "NoteAir6C, Android 16 (API 36)",
+  "date": "2026-10-20",
+  "samples": 10,
+  "warmup": 2,
+  "isolated_apk_sha256": "57375a91c4a18fc23c03f01c5d97c05f5c56eacac8fa53c6719a237cbd95e5f3",
+  "phase_median_ms": {
+    "proxy_document_scan_to_journal_base_parsed": 723.78,
+    "journal_base_parsed_to_journal_relay_ready": 0.63,
+    "journal_relay_ready_to_journal_committed_ready": 10.12,
+    "journal_committed_ready_to_journal_effective_ready": 0.51,
+    "journal_effective_ready_to_proxy_root_validation": 0.64
+  },
+  "android_launch_median_ms": 1387.5
+}

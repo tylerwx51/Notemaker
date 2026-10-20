@@ -56,11 +56,15 @@ final class Journal {
         File wal=new File(file+".journal");
         if(state==null||stamp!=file.lastModified()||size!=file.length()||wal.length()<offset){
             state=file.exists()?map(parse(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8))):object("events",new ArrayList<>(),"pending",new ArrayList<>(),"cursor",0);
+            Timing.mark("journal_base_parsed");
             state.putIfAbsent("relay",new ArrayList<>());if(list(state.get("relay")).isEmpty()){list(state.get("relay")).addAll(list(state.get("events")));list(state.get("relay")).addAll(list(state.get("pending")));}
             receivedIds=new HashSet<>();for(Object op:list(state.get("relay")))receivedIds.add(map(op).get("id"));
             state.putIfAbsent("actors",object());state.putIfAbsent("revision",0);state.putIfAbsent("document",document);
+            Timing.mark("journal_relay_ready");
             committed=new Model();for(Object op:list(state.get("events")))committed.apply(map(op));
+            Timing.mark("journal_committed_ready");
             effective=new Model(committed);for(Object op:list(state.get("pending")))effective.apply(map(op));
+            Timing.mark("journal_effective_ready");
             offset=0;stamp=file.lastModified();size=file.length();
         }
         if(!file.exists()&&writable){
@@ -86,6 +90,7 @@ final class Journal {
                 if(((Number)delta.get("revision")).longValue()>((Number)state.get("revision")).longValue())apply(delta);
                 offset=log.getFilePointer();
             }
+            Timing.mark("journal_wal_ready");
             if(edit!=null){
                 Timing.mark("journal_begin");
                 State next=snapshot();Map<String,Object> delta;byte[] bytes;
