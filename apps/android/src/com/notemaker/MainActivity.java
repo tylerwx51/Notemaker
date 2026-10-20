@@ -174,11 +174,11 @@ public class MainActivity extends Activity {
         historyPending=false;
         eventCount=pendingCount=0;optimistic.clear();renderedEntities.clear();cursor=0;revision=-1;hidden.clear();undo.clear();redo.clear();selected="base";page=0;type=newType;
         try{
-            if(replica!=null)replica.close();replica=new AppReplica(this,document,proxyUrl,proxyToken);store=replica.local;Map<String,Object> state=replica.remote()?Json.object("effectiveModel",new Model().json(),"revision",-1,"cursor",0,"eventCount",0,"pendingCount",0):replica.read();JSONObject saved=new JSONObject(state);
-            JSONArray h=saved.optJSONArray("hidden");if(h!=null)for(int i=0;i<h.length();i++)hidden.add(h.getString(i));
-            h=saved.optJSONArray("undo");if(h!=null)for(int i=0;i<h.length();i++)undo.add(h.getString(i));
-            h=saved.optJSONArray("redo");if(h!=null)for(int i=0;i<h.length();i++)redo.add(h.getString(i));
-            selected=saved.optString("selected","base");page=saved.optInt("page",0);refreshShared(state);
+            if(replica!=null)replica.close();replica=new AppReplica(this,document,proxyUrl,proxyToken);store=replica.local;Map<String,Object> state=replica.remote()?Json.object("effectiveModel",new Model().json(),"revision",-1,"cursor",0,"eventCount",0,"pendingCount",0):replica.read();
+            for(Object item:Json.list(state.getOrDefault("hidden",Collections.emptyList())))hidden.add((String)item);
+            for(Object item:Json.list(state.getOrDefault("undo",Collections.emptyList())))undo.add((String)item);
+            for(Object item:Json.list(state.getOrDefault("redo",Collections.emptyList())))redo.add((String)item);
+            selected=(String)state.getOrDefault("selected","base");page=((Number)state.getOrDefault("page",0)).intValue();refreshShared(state);
             if(replica.remote())type=newType;
             if(!replica.remote()&&eventCount==0&&pendingCount==0)enqueue(obj("kind","document","type",newType));
         }catch(Exception e){throw new RuntimeException("Cannot read saved document",e);}
