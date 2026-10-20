@@ -78,12 +78,16 @@ public final class DrawingActions {
     public static List<Object> erase(Model m,Map<String,Object> input,Coverage.Factory factory){
         String mode=(String)input.getOrDefault("mode","stroke");require(Arrays.asList("stroke","item","partial","area","page").contains(mode),"Unknown eraser mode");
         LayerEditor editor=new LayerEditor(m,(String)input.getOrDefault("layer","base"),LayerEditor.page(input));
+        Timing.mark("erase_editor_ready");
         double radius=opt(input,"radius",12);require(Double.isFinite(radius)&&radius>=1&&radius<=10000,"Invalid eraser radius");
         List<double[][]> regions=mode.equals("page")?Collections.emptyList():eraseRegions(input);
-        List<Object> out=new ArrayList<>();for(DrawItem item:editor.items()){
+        Timing.mark("erase_regions_ready");
+        List<DrawItem> hits=new ArrayList<>();List<List<double[][]>> hitRegions=new ArrayList<>();for(DrawItem item:editor.items()){
             boolean hit=mode.equals("page");List<double[][]> touching=new ArrayList<>();for(double[][] region:regions)if(item.intersects(region,factory)){hit=true;if(mode.equals("partial"))touching.add(region);else break;}
-            if(hit)out.add(mode.equals("partial")?item.erase(touching):object("kind",item.kind.equals("stroke")?"active":"object-active",item.kind,item.id,"active",false));
-        }return checked(out);
+            if(hit){hits.add(item);hitRegions.add(touching);}
+        }Timing.mark("erase_scan_done");
+        List<Object> out=new ArrayList<>();for(int i=0;i<hits.size();i++){DrawItem item=hits.get(i);out.add(mode.equals("partial")?item.erase(hitRegions.get(i)):object("kind",item.kind.equals("stroke")?"active":"object-active",item.kind,item.id,"active",false));}
+        Timing.mark("erase_result_done");List<Object> result=checked(out);Timing.mark("erase_checked_done");return result;
     }
     /** Shared exact swept regions for transient feedback and durable erasing. */
     public static List<double[][]> eraseRegions(Map<String,Object> input){
