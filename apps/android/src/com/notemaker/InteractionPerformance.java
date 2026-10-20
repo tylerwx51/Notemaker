@@ -14,7 +14,7 @@ final class InteractionPerformance {
         Handler input=Handler.createAsync(Looper.getMainLooper());
         HandlerThread frames=new HandlerThread("interaction-frames");frames.start();
         Map<String,List<Double>> draw=new LinkedHashMap<>(),handler=new LinkedHashMap<>(),frame=new LinkedHashMap<>();
-        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch")){
+        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
         }
@@ -26,10 +26,20 @@ final class InteractionPerformance {
             app.getWindow().addOnFrameMetricsAvailableListener(listener,new Handler(frames.getLooper()));app.canvas.invalidate();});
         test.waitForIdleSync();
         Map<String,Object> start=Performance.resources(0);
+        Map<String,Object> modeResources=new LinkedHashMap<>();
+        String originalLayer=app.selected,extraLayer="performance-"+UUID.randomUUID();
         try {
             for(String name:draw.keySet()){
+                if(name.equals("layer_switch")){
+                    app.replica.command(Arrays.asList("layer","put","-"),object("layer",extraLayer,"name","Benchmark layer","force",false));
+                    Map<String,Object> state=app.replica.read();
+                    test.runOnMainSync(()->{try{app.refreshShared(state);app.update();}catch(Exception error){throw new RuntimeException(error);}});
+                    test.waitForIdleSync();
+                }
+                Map<String,Object> modeStart=Performance.resources(0);
                 current.set(name);
-                int count=name.equals("pan")?60:40;
+                int count=name.equals("pan")?60:name.equals("document_reopen")?12:40;
+                int warmup=name.equals("document_reopen")?2:5;
                 for(int i=0;i<count;i++){
                     int index=i;CountDownLatch painted=new CountDownLatch(1),handled=new CountDownLatch(1);
                     AtomicLong drawn=new AtomicLong(),completed=new AtomicLong();
@@ -45,15 +55,20 @@ final class InteractionPerformance {
                             down.recycle();move.recycle();
                         }else if(name.equals("zoom_redraw")){
                             app.canvas.zoom=index%2==0?1.2f:1f;app.canvas.invalidate();
-                        }else{
+                        }else if(name.equals("tool_switch")){
                             app.setDrawingTool(index%2==0?"rectangle":null);
+                        }else if(name.equals("layer_switch")){
+                            app.selectLayer(index%2==0?extraLayer:originalLayer);
+                        }else{
+                            app.load(app.type);app.configureProxy();app.update();
                         }
                         completed.set(System.nanoTime());handled.countDown();
                     });
                     if(!handled.await(5,TimeUnit.SECONDS)||!painted.await(5,TimeUnit.SECONDS))throw new IllegalStateException("Interaction draw timed out: "+name+" #"+index);
-                    if(index>=5){handler.get(name).add((completed.get()-queued)/1e6);draw.get(name).add((drawn.get()-queued)/1e6);}
+                    if(index>=warmup){handler.get(name).add((completed.get()-queued)/1e6);draw.get(name).add((drawn.get()-queued)/1e6);}
                     Thread.sleep(25);
                 }
+                test.waitForIdleSync();modeResources.put(name,object("before",modeStart,"after",Performance.resources(0)));
             }
             test.runOnMainSync(()->{app.canvas.afterDraw=null;app.pan=false;app.setDrawingTool(null);});
             test.waitForIdleSync();Thread.sleep(250);
@@ -63,10 +78,12 @@ final class InteractionPerformance {
             frames.quitSafely();
         }
         Map<String,Object> end=Performance.resources(0),modes=new LinkedHashMap<>();
+        System.gc();Thread.sleep(500);
+        Map<String,Object> postGc=Performance.resources(0);
         for(String name:draw.keySet())modes.put(name,object("handler",Performance.stats(handler.get(name)),
                 "input_to_draw",Performance.stats(draw.get(name)),"window_frame",Performance.stats(frame.get(name))));
-        return object("modes",modes,"start_resources",start,"end_resources",end,
-                "latency_definition","enqueue to end of Canvas draw; 5 warmup actions per mode; synthetic pan and viewport zoom redraw",
+        return object("modes",modes,"mode_resources",modeResources,"start_resources",start,"end_resources",end,"post_gc_resources",postGc,
+                "latency_definition","enqueue to end of Canvas draw; 5 warmup actions per mode except 2 for document reopen; synthetic pan and viewport zoom redraw",
                 "document",app.document,"state_revision",app.replica.read().get("revision"));
     }
 }
