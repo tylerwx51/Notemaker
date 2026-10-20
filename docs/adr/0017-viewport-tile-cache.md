@@ -80,3 +80,8 @@ bitmaps, not total graphics memory or process PSS. See
 `docs/design/performance/memory-breakdown.md`.
 ADR 0019 later changes full-tile repaint to reuse a resident bitmap, reducing
 graphics allocation while retaining this tile traversal and pixel contract.
+A subsequent physical 1,000-stroke run sampled Android window frame phases:
+at 901–1,000 strokes, command issue reached 49.9 ms p95 and app draw 30.7 ms
+p95. This separates the growing Java/render traversal cost from the larger
+device command-submission cost; see
+`docs/design/performance/frame-phase-breakdown.md`.

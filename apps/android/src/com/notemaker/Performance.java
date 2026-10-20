@@ -10,6 +10,11 @@ import static com.notemaker.core.Json.*;
 
 /** Real view input and window frame timing; run only in an isolated test package or emulator. */
 final class Performance {
+    private static final int[] FRAME_PHASE_IDS={FrameMetrics.UNKNOWN_DELAY_DURATION,FrameMetrics.INPUT_HANDLING_DURATION,
+            FrameMetrics.ANIMATION_DURATION,FrameMetrics.LAYOUT_MEASURE_DURATION,FrameMetrics.DRAW_DURATION,
+            FrameMetrics.SYNC_DURATION,FrameMetrics.COMMAND_ISSUE_DURATION,FrameMetrics.SWAP_BUFFERS_DURATION};
+    private static final String[] FRAME_PHASE_NAMES={"unknown_delay","input","animation","layout","draw",
+            "sync","command_issue","swap_buffers"};
     static void position(MotionEvent.PointerCoords pc,int stroke,int point,float scale,float visibleWidth,float visibleHeight){
         int columns=Math.max(1,Math.min(20,(int)((visibleWidth-100)/45)+1));
         int rows=Math.max(1,Math.min(50,(int)((visibleHeight-100)/24)+1));
@@ -24,6 +29,8 @@ final class Performance {
     static Map<String,Object> run(Instrumentation test,MainActivity app) throws Exception {
         @SuppressWarnings("unchecked") List<Double>[][] samples=new List[3][4];
         for(int b=0;b<3;b++)for(int m=0;m<4;m++)samples[b][m]=Collections.synchronizedList(new ArrayList<>());
+        @SuppressWarnings("unchecked") List<Double>[][] framePhases=new List[3][FRAME_PHASE_IDS.length];
+        for(int b=0;b<3;b++)for(int m=0;m<FRAME_PHASE_IDS.length;m++)framePhases[b][m]=Collections.synchronizedList(new ArrayList<>());
         List<Double> strokeLatency=Collections.synchronizedList(new ArrayList<>());
         List<Double> figureEightLatency=new ArrayList<>();
         @SuppressWarnings("unchecked") List<Double>[] phaseLatency=new List[3];
@@ -38,7 +45,10 @@ final class Performance {
         // runOnMainSync message does not, adding an artificial extra vsync of delay.
         Handler input=Handler.createAsync(Looper.getMainLooper());
         HandlerThread frames=new HandlerThread("performance-frames");frames.start();
-        Window.OnFrameMetricsAvailableListener listener=(window,metrics,dropped)->{int b=bucket(current.get());if(current.get()>=10&&b>=0)samples[b][3].add(metrics.getMetric(FrameMetrics.TOTAL_DURATION)/1e6);};
+        Window.OnFrameMetricsAvailableListener listener=(window,metrics,dropped)->{int b=bucket(current.get());if(current.get()>=10&&b>=0){
+            samples[b][3].add(metrics.getMetric(FrameMetrics.TOTAL_DURATION)/1e6);
+            for(int m=0;m<FRAME_PHASE_IDS.length;m++)framePhases[b][m].add(metrics.getMetric(FRAME_PHASE_IDS[m])/1e6);
+        }};
         test.runOnMainSync(()->{
             app.document="performance-"+System.currentTimeMillis();app.host="http://127.0.0.1:1";app.load("fixed");app.configureProxy();app.update();
             app.getSharedPreferences("settings",0).edit().putString("document",app.document).putString("host",app.host).commit();
@@ -98,7 +108,10 @@ final class Performance {
         tileCache.put("reused_tile_repaints",metricDelta(finalTileMetrics[0],initialTileMetrics,"reusedTileRepaints"));
         try(java.io.FileOutputStream out=app.openFileOutput("performance-resources.json",0)){out.write(write(object("samples",resources,"sampling","Process counters sampled between every 100 strokes; cost is outside input latency but included in elapsed time. I/O counters are cumulative, not storage latency.")).getBytes("UTF-8"));}
         List<Object> windows=new ArrayList<>();String[] names={"1-100 (10 warmup)","401-500","901-1000"};
-        for(int b=0;b<3;b++)windows.add(object("strokes",names[b],"handler",stats(samples[b][0]),"dispatch",stats(samples[b][1]),"input_to_draw",stats(samples[b][2]),"frame",stats(samples[b][3])));
+        for(int b=0;b<3;b++){
+            Map<String,Object> phases=object();for(int m=0;m<FRAME_PHASE_IDS.length;m++)phases.put(FRAME_PHASE_NAMES[m],stats(framePhases[b][m]));
+            windows.add(object("strokes",names[b],"handler",stats(samples[b][0]),"dispatch",stats(samples[b][1]),"input_to_draw",stats(samples[b][2]),"frame",stats(samples[b][3]),"frame_phases",phases));
+        }
         return object("dispatch_stalls",dispatchStalls,"slow_events",slowEvents,"latency_definition","UI enqueue to end of canvas draw; every event after 10 warmup strokes, including coalesced events", "stroke_latency",stats(strokeLatency),"figure_eight_latency",stats(figureEightLatency),"down_latency",stats(phaseLatency[0]),"move_latency",stats(phaseLatency[1]),"up_latency",stats(phaseLatency[2]),"document",app.document,"strokes",1000,"short_strokes",990,"short_stroke_points",50,"figure_eight_strokes",10,"figure_eight_points",500,"elapsed_seconds",(System.nanoTime()-start)/1e9,"drain_ms",(System.nanoTime()-drainStart)/1e6,"max_save_queue",maxSaving,"tile_cache",tileCache,"incremental_matches_replay",true,"windows",windows);
     }
     static Map<String,Object> resources(int strokes) {
