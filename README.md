@@ -640,6 +640,12 @@ nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/late
 nix-shell --run 'python3 tests/plot_drawing_latency.py'
 ```
 
+For a note-free comparison after collecting baseline and candidate runs in
+both erase modes, run `nix-shell --run 'python3
+tests/summarize_erase_performance.py BASELINE_PARTIAL CANDIDATE_PARTIAL
+BASELINE_ITEM CANDIDATE_ITEM OUTPUT.json'`. The output includes sample counts,
+median/nearest-rank p95 timings, geometry restoration, and APK hashes.
+
 See the [latency experiment report](docs/design/latency/report.md) for measured
 tradeoffs, retained experiment branches and the remaining gap to 30 ms.
 Omit `--serial` for JVM measurements; `--android-jar` tests a candidate CLI dex jar

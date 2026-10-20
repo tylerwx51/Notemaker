@@ -1,0 +1,66 @@
+{
+  "baseline_partial": {
+    "samples": 8,
+    "geometry_restored": true,
+    "source_apk_sha256": "f8c162f562f07b8b8513a7ca5d27b163f9cf5c9adf7c58d6f3c1e57c0135efdc",
+    "device_model": "NoteAir6C",
+    "input_to_feedback_ms": {
+      "p50": 24.211771,
+      "p95": 42.392761,
+      "max": 42.392761
+    },
+    "input_to_updated_draw_ms": {
+      "p50": 97.731953,
+      "p95": 153.34724,
+      "max": 153.34724
+    }
+  },
+  "current_partial": {
+    "samples": 8,
+    "geometry_restored": true,
+    "source_apk_sha256": "ddd3c55d79ff30f4fc4e0897e2daf7581101b257f65c80d958b7f50d7f8f43fd",
+    "device_model": "NoteAir6C",
+    "input_to_feedback_ms": {
+      "p50": 21.3379945,
+      "p95": 35.860312,
+      "max": 35.860312
+    },
+    "input_to_updated_draw_ms": {
+      "p50": 96.236719,
+      "p95": 129.723959,
+      "max": 129.723959
+    }
+  },
+  "baseline_item": {
+    "samples": 8,
+    "geometry_restored": true,
+    "source_apk_sha256": "f8c162f562f07b8b8513a7ca5d27b163f9cf5c9adf7c58d6f3c1e57c0135efdc",
+    "device_model": "NoteAir6C",
+    "input_to_feedback_ms": {
+      "p50": 49.068177,
+      "p95": 74.744843,
+      "max": 74.744843
+    },
+    "input_to_updated_draw_ms": {
+      "p50": 106.703125,
+      "p95": 147.456562,
+      "max": 147.456562
+    }
+  },
+  "current_item": {
+    "samples": 8,
+    "geometry_restored": true,
+    "source_apk_sha256": "ddd3c55d79ff30f4fc4e0897e2daf7581101b257f65c80d958b7f50d7f8f43fd",
+    "device_model": "NoteAir6C",
+    "input_to_feedback_ms": {
+      "p50": 41.614999999999995,
+      "p95": 70.522239,
+      "max": 70.522239
+    },
+    "input_to_updated_draw_ms": {
+      "p50": 92.605755,
+      "p95": 127.445885,
+      "max": 127.445885
+    }
+  }
+}
