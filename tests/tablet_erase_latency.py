@@ -106,7 +106,7 @@ def main():
         call('shell','run-as',PACKAGE,'cp','-r',*sources,'.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')
         if args.cold_start:
-            checkpoint_ms=None
+            checkpoint_ms=None;checkpoint_base_bytes=None
             if args.background_checkpoint:
                 journal=next((replica/'files').glob('document-*.json.journal'))
                 relative='files/'+journal.name
@@ -121,6 +121,8 @@ def main():
                 while journal_size()!=0 and time.monotonic()<deadline: time.sleep(.1)
                 assert journal_size()==0,'Background checkpoint did not finish'
                 checkpoint_ms=(time.monotonic_ns()-begun)/1e6
+                checkpoint_base_bytes=int(call('shell','run-as',PACKAGE,'stat','-c','%s',
+                    'files/'+journal.name.removesuffix('.journal')).decode().strip())
             ticks=int(call('shell','getconf','CLK_TCK').decode().strip())
             samples=[]
             for index in range(12):
@@ -147,7 +149,8 @@ def main():
                                 'android_wait_ms':int(fields['WaitTime']),
                                 'host_start_wall_ms':host_ms,'process_cpu_ms':cpu_ms,
                                 'pss_kib':int(pss.group(1)),'io':io})
-            (out/'metrics.json').write_text(json.dumps({'warmup':2,'background_checkpoint_ms':checkpoint_ms,'samples':samples},indent=2)+'\n')
+            (out/'metrics.json').write_text(json.dumps({'warmup':2,'background_checkpoint_ms':checkpoint_ms,
+                'background_checkpoint_base_bytes':checkpoint_base_bytes,'samples':samples},indent=2)+'\n')
             timed=sorted(sample['android_total_ms'] for sample in samples[2:])
             print(json.dumps({'samples':len(timed),'android_total_p50_ms':statistics.median(timed),
                               'android_total_p95_ms':timed[int(.95*len(timed))]}))

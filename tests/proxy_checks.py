@@ -12,6 +12,34 @@ import server_checks
 from topology_support import Link, Proxy, eventually, http
 
 class ProxyChecks(server_checks.ServerChecks):
+    def test_checkpoint_deduplicates_only_reconstructable_relay(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp);proxy=Proxy(directory,'relay-dedup')
+            try:
+                proxy.cli('document','create','pages')
+                proxy.cli('object','put','-',value={'object':'one','shape':'rect','x':10})
+                snapshot=proxy.cli('log')
+                proxy.cli('checkpoint')
+                base=next(directory.glob('document-*.json'))
+                self.assertEqual(json.loads(base.read_text())['relay'],[])
+            finally:proxy.stop()
+            # A retained ingress entry outside the current event/pending lists
+            # must survive a later checkpoint rather than being reconstructed.
+            extra={'id':'relay-only','kind':'document','type':'pages'}
+            persisted=json.loads(base.read_text())
+            persisted['relay']=snapshot['events']+snapshot['pending']+[extra]
+            base.write_text(json.dumps(persisted))
+            proxy=Proxy(directory,'relay-dedup')
+            try:
+                before=proxy.cli('log')
+                self.assertEqual(before['relay'][-1],extra)
+                proxy.cli('settings','-',value={'selected':'base'})
+                expected=proxy.cli('log')
+                proxy.cli('checkpoint')
+                self.assertEqual(json.loads(base.read_text())['relay'][-1],extra)
+                self.assertEqual(proxy.cli('log'),expected)
+            finally:proxy.stop()
+
     def test_json_string_fast_path_and_escapes_round_trip(self):
         with tempfile.TemporaryDirectory() as temp:
             proxy=Proxy(Path(temp),'json-strings');self.addCleanup(proxy.stop)

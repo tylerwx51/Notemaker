@@ -38,8 +38,18 @@ final class Journal {
                 if(before==0)return object("revision",cache.state.get("revision"),"journalBytesBefore",0,"journalBytesAfter",0);
                 Path temporary=Files.createTempFile(file.getParentFile().toPath(),"document-checkpoint-",".tmp");
                 try {
+                    Map<String,Object> persisted=new LinkedHashMap<>(cache.state);
+                    List<Object> relay=list(cache.state.get("relay")),events=list(cache.state.get("events")),pending=list(cache.state.get("pending"));
+                    // An empty stored relay is reconstructed from events and
+                    // pending on read. Omit its duplicate geometry only when
+                    // that reconstruction preserves every entry and its order.
+                    if(relay.size()==events.size()+pending.size()){
+                        boolean same=true;
+                        for(int i=0;i<relay.size();i++)if(!Objects.equals(relay.get(i),i<events.size()?events.get(i):pending.get(i-events.size()))){same=false;break;}
+                        if(same)persisted.put("relay",Collections.emptyList());
+                    }
                     try(FileOutputStream out=new FileOutputStream(temporary.toFile())){
-                        out.write(write(cache.state).getBytes(StandardCharsets.UTF_8));out.getFD().sync();
+                        out.write(write(persisted).getBytes(StandardCharsets.UTF_8));out.getFD().sync();
                     }
                     Files.move(temporary,file.toPath(),StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
                     try(FileChannel directory=FileChannel.open(file.getParentFile().toPath(),StandardOpenOption.READ)){directory.force(true);}

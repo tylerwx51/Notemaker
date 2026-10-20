@@ -1,6 +1,6 @@
 # ADR 0020: Durable local replica checkpoints
 
-Status: accepted on `perf/checkpoint-scheduling`, 2026-10-20.
+Status: accepted on `perf/checkpoint-relay-dedup`, 2026-10-20.
 
 ## Context
 
@@ -20,6 +20,11 @@ crash after base replacement but before truncation leaves old WAL records;
 replay skips records whose revisions are already in the base. If replacement
 does not happen, the old base and WAL remain usable. New edits continue to
 append transactions after the checkpoint.
+
+When the current `relay` is exactly the committed `events` followed by
+`pending`, the checkpoint stores it as an empty list. The reader already
+reconstructs that exact list, avoiding a second copy of operation geometry.
+Any other relay order or retained ingress entry is persisted in full.
 
 ## Consequences
 
@@ -43,3 +48,10 @@ checkpointed the copied note; subsequent process-cold launches were 1,416 and
 1,443 ms median versus 1,660 ms without a checkpoint on the same APK. The
 physical E Ink scanout remains unmeasured. See
 `docs/design/performance/checkpoint-scheduling.md`.
+
+With the later relay omission and fast JSON parser, the same copied note's
+checkpointed base shrank from 2,391,204 to 1,216,522 bytes. Physical
+process-cold launch medians were 1,094 and 1,067 ms, versus 1,171 and
+1,165 ms with the full relay and same parser. The Android background workflow
+produced the compact base and launched in 1,120 ms median. See
+`docs/design/performance/checkpoint-relay-dedup.md`.

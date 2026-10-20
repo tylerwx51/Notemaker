@@ -1,0 +1,281 @@
+{
+  "date": "2026-10-20",
+  "device": "NoteAir6C, Android 16 (API 36)",
+  "fixture": {
+    "original_journal_bytes": 4810638,
+    "old_checkpoint_base_bytes": 2391204,
+    "deduplicated_checkpoint_base_bytes": 1216522,
+    "relay_entries_reconstructed": 389
+  },
+  "warmup_per_launch_run": 2,
+  "launch_runs": [
+    {
+      "name": "tablet-json-parser-1",
+      "samples": 10,
+      "isolated_apk_sha256": "6538e7213f4c5eafefb5416cf51ad48b9269e85b0e162b4207d0880909bf0385",
+      "background_checkpoint_base_bytes": null,
+      "android_total_ms": {
+        "median": 1171.0,
+        "p95": 1206,
+        "min": 1134,
+        "max": 1206
+      },
+      "host_start_wall_ms": {
+        "median": 1264.807616,
+        "p95": 1286.652903,
+        "min": 1228.515242,
+        "max": 1286.652903
+      },
+      "process_cpu_ms": {
+        "median": 2150.0,
+        "p95": 2230.0,
+        "min": 2060.0,
+        "max": 2230.0
+      },
+      "pss_kib": {
+        "median": 170125.5,
+        "p95": 170352,
+        "min": 163182,
+        "max": 170352
+      },
+      "rchar_median": 3057758.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 486.059531
+    },
+    {
+      "name": "tablet-json-parser-2",
+      "samples": 10,
+      "isolated_apk_sha256": "1b7276b691a618e0a151f16bda99bbe9ec0abd11524914a46bae21239c30a62c",
+      "background_checkpoint_base_bytes": null,
+      "android_total_ms": {
+        "median": 1164.5,
+        "p95": 1188,
+        "min": 1138,
+        "max": 1188
+      },
+      "host_start_wall_ms": {
+        "median": 1254.9692559999999,
+        "p95": 1297.207713,
+        "min": 1231.309774,
+        "max": 1297.207713
+      },
+      "process_cpu_ms": {
+        "median": 2160.0,
+        "p95": 2200.0,
+        "min": 2120.0,
+        "max": 2200.0
+      },
+      "pss_kib": {
+        "median": 166601.0,
+        "p95": 170319,
+        "min": 163187,
+        "max": 170319
+      },
+      "rchar_median": 3057770.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 485.83026
+    },
+    {
+      "name": "tablet-relay-dedup-1",
+      "samples": 10,
+      "isolated_apk_sha256": "e1e9c47fa5fabfcf0bad93b67e7cb8873922cd1d77e8d316f501e446835cabcb",
+      "background_checkpoint_base_bytes": null,
+      "android_total_ms": {
+        "median": 1093.5,
+        "p95": 1284,
+        "min": 1067,
+        "max": 1284
+      },
+      "host_start_wall_ms": {
+        "median": 1192.8231765,
+        "p95": 1393.401862,
+        "min": 1160.817782,
+        "max": 1393.401862
+      },
+      "process_cpu_ms": {
+        "median": 2095.0,
+        "p95": 2310.0,
+        "min": 2050.0,
+        "max": 2310.0
+      },
+      "pss_kib": {
+        "median": 154441.0,
+        "p95": 154514,
+        "min": 146376,
+        "max": 154514
+      },
+      "rchar_median": 1883461.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 400.9859635
+    },
+    {
+      "name": "tablet-relay-dedup-2",
+      "samples": 10,
+      "isolated_apk_sha256": "00002358db5addd045ee956ecfa5123b23084867d5af09794d799b78d47da944",
+      "background_checkpoint_base_bytes": null,
+      "android_total_ms": {
+        "median": 1066.5,
+        "p95": 1131,
+        "min": 1027,
+        "max": 1131
+      },
+      "host_start_wall_ms": {
+        "median": 1160.198893,
+        "p95": 1235.514286,
+        "min": 1120.014681,
+        "max": 1235.514286
+      },
+      "process_cpu_ms": {
+        "median": 2045.0,
+        "p95": 2160.0,
+        "min": 1980.0,
+        "max": 2160.0
+      },
+      "pss_kib": {
+        "median": 154077.0,
+        "p95": 154509,
+        "min": 147432,
+        "max": 154509
+      },
+      "rchar_median": 1883465.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 394.3847655
+    },
+    {
+      "name": "tablet-relay-dedup-auto-1",
+      "samples": 10,
+      "isolated_apk_sha256": "7a359090eef02672a11097c98d39ab387e83b2c49ff53bd1f691046ebb1901d8",
+      "background_checkpoint_base_bytes": 1216522,
+      "android_total_ms": {
+        "median": 1119.5,
+        "p95": 1153,
+        "min": 1071,
+        "max": 1153
+      },
+      "host_start_wall_ms": {
+        "median": 1206.3860625,
+        "p95": 1250.100414,
+        "min": 1157.27706,
+        "max": 1250.100414
+      },
+      "process_cpu_ms": {
+        "median": 2120.0,
+        "p95": 2190.0,
+        "min": 2060.0,
+        "max": 2190.0
+      },
+      "pss_kib": {
+        "median": 154386.5,
+        "p95": 154579,
+        "min": 147489,
+        "max": 154579
+      },
+      "rchar_median": 1883445.0,
+      "read_bytes_median": 0.0,
+      "write_bytes_median": 32768.0,
+      "base_read_decode_parse_median_ms": 422.90630150000004
+    }
+  ],
+  "checkpoint_cost_runs": [
+    {
+      "name": "tablet-checkpoint-cost-1",
+      "isolated_apk_sha256": "ce5e656737e3f51a5fc0089c52403272abef0e96e686f3a09c6b32ccbbae1128",
+      "checkpoint": {
+        "result": {
+          "revision": 847,
+          "journalBytesBefore": 4810638,
+          "journalBytesAfter": 0
+        },
+        "wallMs": 298.27,
+        "processCpuMs": 470,
+        "pssBeforeKiB": 204068,
+        "pssAfterKiB": 152364,
+        "ioDelta": {
+          "rchar": 1948,
+          "wchar": 2391490,
+          "syscr": 7,
+          "syscw": 6,
+          "read_bytes": 0,
+          "write_bytes": 2420736,
+          "cancelled_write_bytes": 4816896
+        }
+      }
+    },
+    {
+      "name": "tablet-checkpoint-cost-2",
+      "isolated_apk_sha256": "c913ef93a4896935ab7bcfc29cb952a3ed87779ae59619503437057d2fd20ebc",
+      "checkpoint": {
+        "result": {
+          "revision": 847,
+          "journalBytesBefore": 4810638,
+          "journalBytesAfter": 0
+        },
+        "wallMs": 305.023385,
+        "processCpuMs": 477,
+        "pssBeforeKiB": 194951,
+        "pssAfterKiB": 150861,
+        "ioDelta": {
+          "rchar": 1953,
+          "wchar": 2391490,
+          "syscr": 7,
+          "syscw": 6,
+          "read_bytes": 0,
+          "write_bytes": 2416640,
+          "cancelled_write_bytes": 4816896
+        }
+      }
+    },
+    {
+      "name": "tablet-relay-dedup-cost-1",
+      "isolated_apk_sha256": "ea177285d4692e42c2eb640d318c2edce187b1aca814cb970465e6a7e78af31f",
+      "checkpoint": {
+        "result": {
+          "revision": 847,
+          "journalBytesBefore": 4810638,
+          "journalBytesAfter": 0
+        },
+        "wallMs": 237.504479,
+        "processCpuMs": 398,
+        "pssBeforeKiB": 184904,
+        "pssAfterKiB": 190662,
+        "ioDelta": {
+          "rchar": 1948,
+          "wchar": 1216588,
+          "syscr": 7,
+          "syscw": 2,
+          "read_bytes": 0,
+          "write_bytes": 1241088,
+          "cancelled_write_bytes": 4816896
+        }
+      }
+    },
+    {
+      "name": "tablet-relay-dedup-cost-2",
+      "isolated_apk_sha256": "4887ca23e5c9b15052811cf0edcf41a2329e8e4b8e339dd31641d5c1ffafbfdb",
+      "checkpoint": {
+        "result": {
+          "revision": 847,
+          "journalBytesBefore": 4810638,
+          "journalBytesAfter": 0
+        },
+        "wallMs": 199.358438,
+        "processCpuMs": 284,
+        "pssBeforeKiB": 185345,
+        "pssAfterKiB": 190621,
+        "ioDelta": {
+          "rchar": 1948,
+          "wchar": 1216588,
+          "syscr": 7,
+          "syscw": 2,
+          "read_bytes": 0,
+          "write_bytes": 1241088,
+          "cancelled_write_bytes": 4816896
+        }
+      }
+    }
+  ]
+}
