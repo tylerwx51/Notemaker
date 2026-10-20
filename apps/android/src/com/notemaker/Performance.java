@@ -103,12 +103,17 @@ final class Performance {
     private static Map<String,Object> resources(int strokes) {
         long start=System.nanoTime();
         Debug.MemoryInfo memory=new Debug.MemoryInfo();Debug.getMemoryInfo(memory);
+        Map<String,Object> memoryParts=new LinkedHashMap<>();
+        for(String category:Arrays.asList("java-heap","native-heap","code","stack","graphics","private-other","system","total-swap")){
+            String value=memory.getMemoryStat("summary."+category);
+            if(value!=null)try{memoryParts.put(category+"_kib",Long.parseLong(value));}catch(NumberFormatException ignored){}
+        }
         Map<String,Object> io=new LinkedHashMap<>();
         try(java.io.BufferedReader reader=new java.io.BufferedReader(new java.io.FileReader("/proc/self/io"))){
             String line;while((line=reader.readLine())!=null){String[] parts=line.split(":");if(parts.length==2)io.put(parts[0],Long.parseLong(parts[1].trim()));}
         }catch(Exception error){io.put("unavailable",error.getClass().getSimpleName());}
         Runtime runtime=Runtime.getRuntime();
-        return object("strokes",strokes,"pss_kib",memory.getTotalPss(),"private_dirty_kib",memory.getTotalPrivateDirty(),"java_used_bytes",runtime.totalMemory()-runtime.freeMemory(),"native_allocated_bytes",Debug.getNativeHeapAllocatedSize(),"process_cpu_ms",android.os.Process.getElapsedCpuTime(),"io",io,"sampling_ms",(System.nanoTime()-start)/1e6);
+        return object("strokes",strokes,"pss_kib",memory.getTotalPss(),"private_dirty_kib",memory.getTotalPrivateDirty(),"memory_parts",memoryParts,"java_used_bytes",runtime.totalMemory()-runtime.freeMemory(),"native_allocated_bytes",Debug.getNativeHeapAllocatedSize(),"process_cpu_ms",android.os.Process.getElapsedCpuTime(),"io",io,"sampling_ms",(System.nanoTime()-start)/1e6);
     }
     private static Map<String,Object> tileMetrics(Instrumentation test,MainActivity app){@SuppressWarnings("unchecked") Map<String,Object>[] result=new Map[]{null};test.runOnMainSync(()->result[0]=app.canvas.tileCacheMetrics());return result[0];}
     private static long metricDelta(Map<String,Object> after,Map<String,Object> before,String key){return ((Number)after.get(key)).longValue()-((Number)before.get(key)).longValue();}

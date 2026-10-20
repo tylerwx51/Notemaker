@@ -73,3 +73,8 @@ draw, with 438 MiB peak sampled process PSS. The workload wraps to the actual
 canvas viewport, so its geometry differs from the earlier emulator run. See
 `docs/design/performance/tablet-strokes-baseline.md` for resource and I/O
 measurements. Physical pen sampling and E Ink scanout remain unmeasured.
+Later `Debug.MemoryInfo` sampling attributed 228 MiB of a 404 MiB process PSS
+checkpoint to Android graphics, while the tile cache held about 20 MiB of
+live pixel data at run end. The tile cache budget therefore bounds its own
+bitmaps, not total graphics memory or process PSS. See
+`docs/design/performance/memory-breakdown.md`.

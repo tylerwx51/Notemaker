@@ -39,7 +39,8 @@ def main():
                           ('strokes', 'pss_kib', 'private_dirty_kib', 'java_used_bytes',
                            'native_allocated_bytes', 'process_cpu_ms', 'sampling_ms')},
                        'read_bytes': sample['io'].get('read_bytes'),
-                       'write_bytes': sample['io'].get('write_bytes')}
+                       'write_bytes': sample['io'].get('write_bytes'),
+                       'memory_parts_kib': sample.get('memory_parts')}
                       for sample in resources],
         'io_counters_delta_before_final_drain': io_delta,
         'io_note': 'Linux per-process counters. write_bytes is charged I/O, not measured storage latency.',
