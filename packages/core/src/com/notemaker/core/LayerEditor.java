@@ -10,11 +10,23 @@ public final class LayerEditor {
     public final int page;
     public static int page(Map<String,Object> request){Object raw=request.getOrDefault("page",0);Model.require(raw instanceof Number,"Invalid page");double n=((Number)raw).doubleValue();Model.require(Double.isFinite(n)&&n==Math.rint(n)&&n>=0&&n<=10000,"Invalid page");return (int)n;}
     public LayerEditor(Model model,String layer,int page){
-        this(model,layer,page,false);
+        this(model,layer,page,false,true);
     }
     public LayerEditor(Model model,String layer,int page,boolean includeInactive){
+        this(model,layer,page,includeInactive,true);
+    }
+    static LayerEditor forErase(Model model,String layer,int page){return new LayerEditor(model,layer,page,false,false);}
+    private LayerEditor(Model model,String layer,int page,boolean includeInactive,boolean indexed){
         this.layer=layer;this.page=page;Model.require(model.layers.containsKey(layer)&&!Boolean.FALSE.equals(model.layerActive.get(layer)),"Layer is not editable");Model.require(page>=0&&page<=10000,"Invalid page");
-        for(Map<String,Object> o:model.layerItems(layer,page)){DrawItem item=new DrawItem(model,o);if(includeInactive||item.active())items.put(item.kind+":"+item.id,item);}
+        Collection<Map<String,Object>> source;
+        if(indexed)source=model.layerItems(layer,page);
+        else{
+            List<Map<String,Object>> scoped=new ArrayList<>();
+            for(Map<String,Object> o:model.strokes.values())if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page)scoped.add(o);
+            for(Map<String,Object> o:model.objects.values())if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page)scoped.add(o);
+            source=scoped;
+        }
+        for(Map<String,Object> o:source){DrawItem item=new DrawItem(model,o);if(includeInactive||item.active())items.put(item.kind+":"+item.id,item);}
     }
     public Collection<DrawItem> items(){return Collections.unmodifiableCollection(items.values());}
     public DrawItem resolve(String kind,String id){DrawItem item=items.get(kind+":"+id);Model.require(item!=null,"Item is outside the editable layer/page: "+id);return item;}
