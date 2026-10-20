@@ -1,0 +1,394 @@
+{
+  "workload": "60 pan, 40 zoom redraw, 40 tool switches; 5 warmup each; disposable note",
+  "latency_definition": "enqueue to end of Canvas draw; synthetic input, not E Ink scanout",
+  "runs": {
+    "baseline_first": {
+      "source_revision": "2e70c27870c8017027cc0aa51860757d3ca02825",
+      "source_apk_sha256": "ab8fd2e9ead3dbf505fc75b823f8c6bf111f2af3c365fdee79af95e0f64d86dc",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "modes": {
+        "pan": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.285,
+            "p95_ms": 3.198542,
+            "p99_ms": 3.619896,
+            "max_ms": 3.619896
+          },
+          "input_to_draw": {
+            "over_30_ms": 3,
+            "samples": 55,
+            "p50_ms": 24.293802,
+            "p95_ms": 30.600833,
+            "p99_ms": 37.077291,
+            "max_ms": 37.077291
+          },
+          "window_frame": {
+            "over_30_ms": 6,
+            "samples": 60,
+            "p50_ms": 25.285011,
+            "p95_ms": 39.780354,
+            "p99_ms": 39.918359,
+            "max_ms": 39.918359
+          }
+        },
+        "zoom_redraw": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.435625,
+            "p95_ms": 1.94375,
+            "p99_ms": 2.788698,
+            "max_ms": 2.788698
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 24.55052,
+            "p95_ms": 26.28802,
+            "p99_ms": 32.405625,
+            "max_ms": 32.405625
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 24.893924,
+            "p95_ms": 26.938481,
+            "p99_ms": 28.380771,
+            "max_ms": 28.380771
+          }
+        },
+        "tool_switch": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 6.451875,
+            "p95_ms": 9.883073,
+            "p99_ms": 10.324843,
+            "max_ms": 10.324843
+          },
+          "input_to_draw": {
+            "over_30_ms": 15,
+            "samples": 35,
+            "p50_ms": 28.504791,
+            "p95_ms": 50.510312,
+            "p99_ms": 51.293281,
+            "max_ms": 51.293281
+          },
+          "window_frame": {
+            "over_30_ms": 40,
+            "samples": 42,
+            "p50_ms": 40.169028,
+            "p95_ms": 45.385513,
+            "p99_ms": 46.271903,
+            "max_ms": 46.271903
+          }
+        }
+      },
+      "process_pss_kib_before_after": [
+        226249,
+        146650
+      ],
+      "process_cpu_ms_delta": 4513,
+      "process_io_delta": {
+        "read_bytes": 0,
+        "write_bytes": 135168,
+        "rchar": 2668872,
+        "wchar": 128803
+      }
+    },
+    "candidate_first": {
+      "source_revision": "2e70c27870c8017027cc0aa51860757d3ca02825",
+      "source_apk_sha256": "d5b4feef4820e6756b9f54f90809acf9c8766a34d13db54220a1d6973e8323bc",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "modes": {
+        "pan": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.470157,
+            "p95_ms": 3.219479,
+            "p99_ms": 3.369792,
+            "max_ms": 3.369792
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 55,
+            "p50_ms": 24.378698,
+            "p95_ms": 26.013021,
+            "p99_ms": 34.926719,
+            "max_ms": 34.926719
+          },
+          "window_frame": {
+            "over_30_ms": 10,
+            "samples": 60,
+            "p50_ms": 25.46959,
+            "p95_ms": 39.8057,
+            "p99_ms": 40.801491,
+            "max_ms": 40.801491
+          }
+        },
+        "zoom_redraw": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.516927,
+            "p95_ms": 1.810365,
+            "p99_ms": 3.092865,
+            "max_ms": 3.092865
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 24.107083,
+            "p95_ms": 25.862761,
+            "p99_ms": 30.600208,
+            "max_ms": 30.600208
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 24.119511,
+            "p95_ms": 26.804713,
+            "p99_ms": 27.272245,
+            "max_ms": 27.272245
+          }
+        },
+        "tool_switch": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 4.822969,
+            "p95_ms": 6.572135,
+            "p99_ms": 6.744739,
+            "max_ms": 6.744739
+          },
+          "input_to_draw": {
+            "over_30_ms": 3,
+            "samples": 35,
+            "p50_ms": 25.082969,
+            "p95_ms": 32.753906,
+            "p99_ms": 44.175625,
+            "max_ms": 44.175625
+          },
+          "window_frame": {
+            "over_30_ms": 34,
+            "samples": 42,
+            "p50_ms": 35.636265,
+            "p95_ms": 41.976031,
+            "p99_ms": 42.31793,
+            "max_ms": 42.31793
+          }
+        }
+      },
+      "process_pss_kib_before_after": [
+        226430,
+        145870
+      ],
+      "process_cpu_ms_delta": 4210,
+      "process_io_delta": {
+        "read_bytes": 0,
+        "write_bytes": 135168,
+        "rchar": 2669751,
+        "wchar": 128805
+      }
+    },
+    "candidate_repeat": {
+      "source_revision": "2e70c27870c8017027cc0aa51860757d3ca02825",
+      "source_apk_sha256": "d5b4feef4820e6756b9f54f90809acf9c8766a34d13db54220a1d6973e8323bc",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "modes": {
+        "pan": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.493073,
+            "p95_ms": 3.245938,
+            "p99_ms": 3.409635,
+            "max_ms": 3.409635
+          },
+          "input_to_draw": {
+            "over_30_ms": 2,
+            "samples": 55,
+            "p50_ms": 24.148125,
+            "p95_ms": 28.805937,
+            "p99_ms": 36.270313,
+            "max_ms": 36.270313
+          },
+          "window_frame": {
+            "over_30_ms": 5,
+            "samples": 60,
+            "p50_ms": 25.466646,
+            "p95_ms": 39.65109,
+            "p99_ms": 40.481953,
+            "max_ms": 40.481953
+          }
+        },
+        "zoom_redraw": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.09526,
+            "p95_ms": 1.651614,
+            "p99_ms": 1.945,
+            "max_ms": 1.945
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 24.389636,
+            "p95_ms": 28.855468,
+            "p99_ms": 31.718646,
+            "max_ms": 31.718646
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 24.097335,
+            "p95_ms": 25.627373,
+            "p99_ms": 25.804371,
+            "max_ms": 25.804371
+          }
+        },
+        "tool_switch": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 4.529531,
+            "p95_ms": 6.052031,
+            "p99_ms": 7.035937,
+            "max_ms": 7.035937
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 23.966146,
+            "p95_ms": 29.936718,
+            "p99_ms": 32.493125,
+            "max_ms": 32.493125
+          },
+          "window_frame": {
+            "over_30_ms": 37,
+            "samples": 42,
+            "p50_ms": 40.521499,
+            "p95_ms": 42.244588,
+            "p99_ms": 42.417063,
+            "max_ms": 42.417063
+          }
+        }
+      },
+      "process_pss_kib_before_after": [
+        225963,
+        145726
+      ],
+      "process_cpu_ms_delta": 4208,
+      "process_io_delta": {
+        "read_bytes": 0,
+        "write_bytes": 135168,
+        "rchar": 2658393,
+        "wchar": 129085
+      }
+    },
+    "baseline_repeat": {
+      "source_revision": "2e70c27870c8017027cc0aa51860757d3ca02825",
+      "source_apk_sha256": "cd025e32789e1d35f77750a4e0cd8afa77f568a0d0a0036f38308849984458d3",
+      "device_model": "NoteAir6C",
+      "android_api": "36",
+      "modes": {
+        "pan": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 55,
+            "p50_ms": 2.418385,
+            "p95_ms": 3.319687,
+            "p99_ms": 4.577136,
+            "max_ms": 4.577136
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 55,
+            "p50_ms": 23.7325,
+            "p95_ms": 26.222813,
+            "p99_ms": 32.177032,
+            "max_ms": 32.177032
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 60,
+            "p50_ms": 26.096332,
+            "p95_ms": 27.738869,
+            "p99_ms": 27.877497,
+            "max_ms": 27.877497
+          }
+        },
+        "zoom_redraw": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 1.480625,
+            "p95_ms": 1.824375,
+            "p99_ms": 3.527812,
+            "max_ms": 3.527812
+          },
+          "input_to_draw": {
+            "over_30_ms": 1,
+            "samples": 35,
+            "p50_ms": 24.607187,
+            "p95_ms": 26.703334,
+            "p99_ms": 30.026302,
+            "max_ms": 30.026302
+          },
+          "window_frame": {
+            "over_30_ms": 0,
+            "samples": 40,
+            "p50_ms": 24.968577,
+            "p95_ms": 27.171946,
+            "p99_ms": 27.247361,
+            "max_ms": 27.247361
+          }
+        },
+        "tool_switch": {
+          "handler": {
+            "over_30_ms": 0,
+            "samples": 35,
+            "p50_ms": 6.884948,
+            "p95_ms": 9.373855,
+            "p99_ms": 10.186406,
+            "max_ms": 10.186406
+          },
+          "input_to_draw": {
+            "over_30_ms": 17,
+            "samples": 35,
+            "p50_ms": 29.962761,
+            "p95_ms": 49.804271,
+            "p99_ms": 51.739375,
+            "max_ms": 51.739375
+          },
+          "window_frame": {
+            "over_30_ms": 38,
+            "samples": 42,
+            "p50_ms": 39.138587,
+            "p95_ms": 45.819151,
+            "p99_ms": 47.620112,
+            "max_ms": 47.620112
+          }
+        }
+      },
+      "process_pss_kib_before_after": [
+        226226,
+        146635
+      ],
+      "process_cpu_ms_delta": 4365,
+      "process_io_delta": {
+        "read_bytes": 0,
+        "write_bytes": 135168,
+        "rchar": 2668363,
+        "wchar": 128637
+      }
+    }
+  }
+}

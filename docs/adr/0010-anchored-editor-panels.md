@@ -26,6 +26,9 @@ A triangle on the originating tool marks the opened panel. A small black dot
 marks the selected drawing tool or visual choice, without inverting the icon.
 Tool labels remain optional and their preference persists; content descriptions
 and tooltips identify icon-only choices.
+Refreshing the toolbar invalidates icons only when their brush or accent color
+changes. Tool selection still redraws its marker, and text labels update when
+their content changes. This limits E Ink redraw work during tool switching.
 
 The panel interior follows its purpose: pen settings use grouped controls and
 a stroke sample, shapes use a six-column tablet grid (four on narrow screens),
@@ -46,4 +49,6 @@ checks actual toolbar controls, pen color, shape placement, layer visibility,
 force visibility, history, panel touch isolation, stable canvas bounds, retained
 label preferences and narrow-screen menu access. It saves review screenshots.
 The existing tool-switch regression covers selection-release behavior.
+The isolated physical interaction sweep compares repeated tool switches with
+pan and zoom redraws; its metrics are in `docs/design/performance/interaction-sweep.json`.
 Physical E Ink refresh and stylus ergonomics require hardware validation.

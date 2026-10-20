@@ -633,12 +633,21 @@ nix-shell --run 'apps/cli/build.sh && apps/android/build.sh'
 nix-shell --run 'python3 tests/tablet_erase_latency.py --synthetic-strokes --serial SERIAL --output .test-artifacts/latency/strokes-run'
 nix-shell --run 'python3 tests/summarize_performance.py .test-artifacts/latency/strokes-run docs/design/performance/strokes-candidate.json'
 nix-shell --run 'python3 tests/tablet_erase_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/ui-run'
+nix-shell --run 'python3 tests/tablet_erase_latency.py --interaction-suite --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/interaction-run'
 # Coverage retention memory or exact old/new geometry parity on a disposable replica:
 nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --android-jar apps/cli/build/notemaker-android.jar --probe CacheFootprintProbe --output .test-artifacts/latency/memory-run'
 # Replace CacheFootprintProbe with CoverageParity to compare hit-test signatures.
 # Regenerate published charts from sanitized measurements; matplotlib comes from shell.nix.
 nix-shell --run 'python3 tests/plot_drawing_latency.py'
 ```
+
+The interaction suite times 60 synthetic pans, 40 viewport zoom redraws, and
+40 tool switches on the disposable note, with five warmup actions per mode.
+It records handler, input-to-app-draw, and window-frame timing, plus process
+resource snapshots. Zoom redraw changes the viewport scale directly, so it
+does not include pinch gesture recognition. For paired note-free summaries, run
+`nix-shell --run 'python3 tests/summarize_interaction_performance.py
+BASELINE_FIRST CANDIDATE_FIRST CANDIDATE_REPEAT BASELINE_REPEAT OUTPUT.json'`.
 
 For a note-free comparison after collecting baseline and candidate runs in
 both erase modes, run `nix-shell --run 'python3

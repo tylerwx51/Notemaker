@@ -21,11 +21,13 @@ def main():
     parser.add_argument('--archive',type=Path)
     parser.add_argument('--document')
     parser.add_argument('--synthetic-strokes',action='store_true',help='Measure 1,000 synthetic strokes and process resources without a note archive')
+    parser.add_argument('--interaction-suite',action='store_true',help='Measure pan, zoom redraw, and tool switching on a disposable note archive')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--compile-speed',action='store_true',help='Measure explicit Android ahead-of-time compilation separately')
     parser.add_argument('--mode',choices=['partial','item'],default='partial')
     args=parser.parse_args()
-    if not args.synthetic_strokes and (not args.archive or not args.document): parser.error('--archive and --document are required for erasing')
+    if args.synthetic_strokes and args.interaction_suite: parser.error('Choose either --synthetic-strokes or --interaction-suite')
+    if not args.synthetic_strokes and (not args.archive or not args.document): parser.error('--archive and --document are required for erasing or interaction timing')
     if not os.environ.get('IN_NIX_SHELL'): parser.error('Run through nix-shell')
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False,mode=0o700)
     adb=['adb','-s',args.serial]
@@ -86,11 +88,16 @@ def main():
         sources=[remote+'/shared_prefs'] if args.synthetic_strokes else [remote+'/files',remote+'/shared_prefs']
         call('shell','run-as',PACKAGE,'cp','-r',*sources,'.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')
-        action='performance' if args.synthetic_strokes else 'erase-performance'
+        action='performance' if args.synthetic_strokes else 'interaction-performance' if args.interaction_suite else 'erase-performance'
         output=call('shell','am','instrument','-w','-e','action',action,'-e','mode',args.mode,PACKAGE+'/com.notemaker.Integration',timeout=600).decode()
         (out/'instrumentation.txt').write_text(output)
         assert 'PASS '+action in output,output
         (out/'metrics.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/'+action+'.json'))
+        if args.interaction_suite:
+            report=json.loads((out/'metrics.json').read_text())
+            assert all(report['modes'][name]['input_to_draw']['samples']>=35 for name in ('pan','zoom_redraw','tool_switch'))
+            print(json.dumps({name:report['modes'][name]['input_to_draw'] for name in report['modes']}))
+            return
         if args.synthetic_strokes:
             (out/'resources.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/performance-resources.json'))
             report=json.loads((out/'metrics.json').read_text())

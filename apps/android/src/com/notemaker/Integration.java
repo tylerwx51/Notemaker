@@ -38,6 +38,11 @@ public class Integration extends Instrumentation {
             MainActivity app=(MainActivity)startActivitySync(intent);android.util.Log.i("NoteMakerPerformance","Activity started");waitForIdleSync();
             String action=arguments.getString("action","state");
             if(action.equals("erase-performance")){result.putString("stream","PASS erase-performance\n"+com.notemaker.core.Json.write(ErasePerformance.run(this,app))+"\n");finish(Activity.RESULT_OK,result);return;}
+            if(action.equals("interaction-performance")){
+                String metrics=com.notemaker.core.Json.write(InteractionPerformance.run(this,app));
+                try(java.io.FileOutputStream out=app.openFileOutput("interaction-performance.json",0)){out.write(metrics.getBytes("UTF-8"));}
+                result.putString("stream","PASS interaction-performance\n");finish(Activity.RESULT_OK,result);return;
+            }
             if(action.equals("stroke-pixels")){StrokeCheck.run(this,app);result.putString("stream","PASS stroke-pixels\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("viewport")){ViewportCheck.run(this,app);result.putString("stream","PASS viewport\n");finish(Activity.RESULT_OK,result);return;}
             if(action.equals("coverage")){CoverageCheck.run(this,app);result.putString("stream","PASS coverage\n");finish(Activity.RESULT_OK,result);return;}

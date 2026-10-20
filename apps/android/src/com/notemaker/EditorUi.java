@@ -203,16 +203,20 @@ final class EditorUi {
         if(!app.conflicts.isEmpty())setText(connection,connection.getText()+"  ·  "+app.conflicts.size()+" conflict(s)");
         String mode = app.erase ? "eraser" : app.pan ? "move" : app.drawingShape!=null ? (app.drawingShape.equals("text")?"text":"shapes") : selectedTool;
         for (Map.Entry<String, Tool> entry : tools.entrySet()) {
-            entry.getValue().active(entry.getKey().equals(mode));
-            entry.getValue().icon.accentColor = app.color;
+            Tool tool=entry.getValue();
+            tool.active(entry.getKey().equals(mode));
+            boolean iconChanged=tool.icon.accentColor!=app.color;
+            tool.icon.accentColor=app.color;
             if (entry.getKey().equals("pen")) {
-                entry.getValue().icon.kind = app.brush;
-                entry.getValue().setContentDescription("Pen tool, " + app.brush + " brush");
+                iconChanged|=!tool.icon.kind.equals(app.brush);
+                tool.icon.kind=app.brush;
+                String description="Pen tool, "+app.brush+" brush";
+                if(!description.contentEquals(tool.getContentDescription()))tool.setContentDescription(description);
             }
-            entry.getValue().icon.invalidate();
+            if(iconChanged)tool.icon.invalidate();
         }
         if (sample != null) sample.invalidate();
-        if (materialLabel != null) materialLabel.setText(materialDescription());
+        if (materialLabel != null) setText(materialLabel,materialDescription());
         if (materialPanel != null) materialPanel.setVisibility("pen".equals(app.brush)?View.GONE:View.VISIBLE);
         boolean ready=!app.model.deleted&&!app.objectHistoryPending();
         undoButton.setEnabled(ready&&!app.undo.isEmpty());undoButton.setAlpha(undoButton.isEnabled()?1f:.3f);

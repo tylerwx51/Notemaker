@@ -101,7 +101,7 @@ final class Performance {
         for(int b=0;b<3;b++)windows.add(object("strokes",names[b],"handler",stats(samples[b][0]),"dispatch",stats(samples[b][1]),"input_to_draw",stats(samples[b][2]),"frame",stats(samples[b][3])));
         return object("dispatch_stalls",dispatchStalls,"slow_events",slowEvents,"latency_definition","UI enqueue to end of canvas draw; every event after 10 warmup strokes, including coalesced events", "stroke_latency",stats(strokeLatency),"figure_eight_latency",stats(figureEightLatency),"down_latency",stats(phaseLatency[0]),"move_latency",stats(phaseLatency[1]),"up_latency",stats(phaseLatency[2]),"document",app.document,"strokes",1000,"short_strokes",990,"short_stroke_points",50,"figure_eight_strokes",10,"figure_eight_points",500,"elapsed_seconds",(System.nanoTime()-start)/1e9,"drain_ms",(System.nanoTime()-drainStart)/1e6,"max_save_queue",maxSaving,"tile_cache",tileCache,"incremental_matches_replay",true,"windows",windows);
     }
-    private static Map<String,Object> resources(int strokes) {
+    static Map<String,Object> resources(int strokes) {
         long start=System.nanoTime();
         Debug.MemoryInfo memory=new Debug.MemoryInfo();Debug.getMemoryInfo(memory);
         Map<String,Object> memoryParts=new LinkedHashMap<>();
