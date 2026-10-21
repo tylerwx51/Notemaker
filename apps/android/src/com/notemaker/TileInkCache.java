@@ -14,7 +14,7 @@ final class TileInkCache {
     static final int MAX_PICTURE_POINTS=100000;
     private static final int MAX_PICTURES=512;
     static long tileRenders,reusedTileRepaints,itemRenders,geometryRenders,pictureReuses,transientPictureReuses,pictureMisses,pictureEvictions,culledItems,allocatedTiles,reusedTiles,evictedTiles;
-    private long currentBytes,peakBytes;
+    private long currentBytes,peakBytes,cacheClears;
     private long pictureBytes,picturePoints;
     private final LinkedHashSet<String> renderedItemIds=new LinkedHashSet<>();
     private final LinkedHashSet<String> geometryItemIds=new LinkedHashSet<>();
@@ -26,10 +26,10 @@ final class TileInkCache {
         Item(String id,Map<String,Object> value,boolean cachePicture){this.id=id;this.value=value;this.bounds=bounds(value);this.cachePicture=cachePicture;}
     }
     private static final class Key {
-        final String layer;final int x,y,tier;final boolean culling;
-        Key(String layer,int x,int y,int tier,boolean culling){this.layer=layer;this.x=x;this.y=y;this.tier=tier;this.culling=culling;}
-        public int hashCode(){return Objects.hash(layer,x,y,tier,culling);}
-        public boolean equals(Object other){if(!(other instanceof Key))return false;Key k=(Key)other;return x==k.x&&y==k.y&&tier==k.tier&&culling==k.culling&&layer.equals(k.layer);}
+        final String layer;final int page,x,y,tier;final boolean culling;
+        Key(int page,String layer,int x,int y,int tier,boolean culling){this.page=page;this.layer=layer;this.x=x;this.y=y;this.tier=tier;this.culling=culling;}
+        public int hashCode(){return Objects.hash(page,layer,x,y,tier,culling);}
+        public boolean equals(Object other){if(!(other instanceof Key))return false;Key k=(Key)other;return page==k.page&&x==k.x&&y==k.y&&tier==k.tier&&culling==k.culling&&layer.equals(k.layer);}
     }
     private static final class Tile {final Bitmap bitmap;final BitmapShader shader;final Matrix bitmapMatrix;List<Item> items;final long bytes;
         Tile(Bitmap bitmap,List<Item> items,int tx,int ty,int tier,int tileSize){this.bitmap=bitmap;this.items=items;bytes=(long)bitmap.getRowBytes()*bitmap.getHeight();shader=shader(bitmap,tx*tileSize,ty*tileSize,tier);
@@ -50,7 +50,7 @@ final class TileInkCache {
 
     static int densityTier(float effectiveScale){if(!(effectiveScale>0))return 1;int tier=1;while(tier<8&&effectiveScale>tier*1.41421356f)tier*=2;while(tier>1&&effectiveScale<tier/1.41421356f)tier/=2;return Math.max(1,tier);}
 
-    void draw(Canvas destination,String layer,List<Item> items,RectF viewport,int tier,boolean cullItems,BiConsumer<Canvas,Map<String,Object>> renderer){
+    void draw(Canvas destination,int page,String layer,List<Item> items,RectF viewport,int tier,boolean cullItems,BiConsumer<Canvas,Map<String,Object>> renderer){
         int tileSize=tileSize(tier);
         int firstX=(int)Math.floor(viewport.left/tileSize),lastX=(int)Math.floor(Math.nextDown(viewport.right)/tileSize);
         int firstY=(int)Math.floor(viewport.top/tileSize),lastY=(int)Math.floor(Math.nextDown(viewport.bottom)/tileSize);
@@ -58,7 +58,7 @@ final class TileInkCache {
         try{for(int ty=firstY;ty<=lastY;ty++)for(int tx=firstX;tx<=lastX;tx++){
             float left=tx*tileSize,top=ty*tileSize,gutter=GUTTER/(float)tier;RectF core=new RectF(left-gutter,top-gutter,left+tileSize+gutter,top+tileSize+gutter);
             ArrayList<Item> contributors=new ArrayList<>();if(cullItems){for(Item item:items)if(RectF.intersects(core,item.bounds))contributors.add(item);}else contributors.addAll(items);
-            Key key=new Key(layer,tx,ty,tier,true);Tile tile=cullItems?tiles.get(key):null;
+            Key key=new Key(page,layer,tx,ty,tier,true);Tile tile=cullItems?tiles.get(key):null;
             if(contributors.isEmpty()){if(tile!=null)remove(key,tile);continue;}
             if(tile!=null&&same(tile.items,contributors)){reusedTiles++;drawTileBitmap(destination,tile,tx,ty,tileSize);continue;}
             // Full tile repaint preserves Skia's exact anti-aliasing at changed
@@ -107,7 +107,9 @@ final class TileInkCache {
     private void trimPaths(long incoming,long points){Iterator<Map.Entry<String,PathEntry>> it=strokePaths.entrySet().iterator();while((pictureBytes+incoming>MAX_PICTURE_BYTES||picturePoints+points>MAX_PICTURE_POINTS||strokePaths.size()>=MAX_PICTURES)&&it.hasNext()){Map.Entry<String,PathEntry> e=it.next();pictureBytes-=e.getValue().bytes;picturePoints-=e.getValue().points;it.remove();pictureEvictions++;}}
     private void removePath(String id,PathEntry entry){strokePaths.remove(id);pictureBytes-=entry.bytes;picturePoints-=entry.points;}
     private static long pathPointEstimate(Map<String,Object> item){List<Object> raw=list(item.getOrDefault("points",Collections.emptyList()));if(raw.isEmpty())return 0;double length=0,px=0,py=0;for(int i=0;i<raw.size();i++){List<Object> p=list(raw.get(i));double x=((Number)p.get(0)).doubleValue(),y=((Number)p.get(1)).doubleValue();if(i>0)length+=Math.hypot(x-px,y-py);px=x;py=y;}double width=((Number)item.get("width")).doubleValue();String brush=String.valueOf(item.getOrDefault("brush","pen"));double factor="marker".equals(brush)?1.8:"neoBrush".equals(brush)?1.4:Arrays.asList("brush","charcoal").contains(brush)?1.35:Arrays.asList("pencil","oily").contains(brush)?.82:Arrays.asList("latinCalligraphy","asiaCalligraphy").contains(brush)?1.5:1;double step=Math.max(.75,Math.min(2.0,width*factor*.2));long estimate=Math.max(1,Math.min(8192,(long)Math.ceil(length/step)+1));for(Object erase:list(item.getOrDefault("erasures",Collections.emptyList())))estimate+=list(erase).size();return estimate;}
-    void clear(){for(Tile tile:tiles.values())tile.bitmap.recycle();currentBytes=0;tiles.clear();strokePaths.clear();transientStrokePaths.clear();pictureBytes=picturePoints=0;renderedItemIds.clear();geometryItemIds.clear();}
+    void clear(){cacheClears++;for(Tile tile:tiles.values())tile.bitmap.recycle();currentBytes=0;tiles.clear();strokePaths.clear();transientStrokePaths.clear();pictureBytes=picturePoints=0;renderedItemIds.clear();geometryItemIds.clear();}
+    long cacheClears(){return cacheClears;}
+    int residentPageCount(){Set<Integer> pages=new HashSet<>();for(Key key:tiles.keySet())pages.add(key.page);return pages.size();}
     Map<String,Object> metrics(){ArrayList<String> rendered=new ArrayList<>(renderedItemIds),geometry=new ArrayList<>(geometryItemIds);return object("tileRenders",tileRenders,"itemRenders",itemRenders,"geometryRenders",geometryRenders,"pathCommandReuses",pictureReuses,"transientPathCommandReuses",transientPictureReuses,"pathCommandMisses",pictureMisses,"pathCommandEvictions",pictureEvictions,"pathCommandBytesEstimate",pictureBytes,"pathCommandPointsEstimate",picturePoints,"maxPathCommandBytesEstimate",MAX_PICTURE_BYTES,"maxPathCommandPointsEstimate",MAX_PICTURE_POINTS,"pictureReuses",pictureReuses,"transientPictureReuses",transientPictureReuses,"pictureMisses",pictureMisses,"pictureEvictions",pictureEvictions,"pictureBytes",pictureBytes,"picturePoints",picturePoints,"maxPictureBytes",MAX_PICTURE_BYTES,"maxPicturePoints",MAX_PICTURE_POINTS,"culledItems",culledItems,"allocatedTiles",allocatedTiles,"reusedTiles",reusedTiles,"evictedTiles",evictedTiles,"currentBytes",currentBytes,"peakBytes",peakBytes,"maxBytes",MAX_BYTES,"densityTier",0,"lastRenderedItemIds",rendered,"renderedItemIds",rendered,"lastGeometryItemIds",geometry);}
 
     private static synchronized RectF bounds(Map<String,Object> item){if("object".equals(item.get("kind")))return computeBounds(item);BoundRecord cached=BOUNDS.get(item);if(cached!=null)return new RectF(cached.bounds);RectF result=computeBounds(item);int pointCount=item.get("points") instanceof List?((List<?>)item.get("points")).size():0;if(pointCount<=10000){while((cachedBoundPoints+pointCount>100000||BOUNDS.size()>=4096)&&!BOUNDS.isEmpty()){Iterator<Map.Entry<Map<String,Object>,BoundRecord>> it=BOUNDS.entrySet().iterator();Map.Entry<Map<String,Object>,BoundRecord> e=it.next();cachedBoundPoints-=e.getValue().pointCount;it.remove();}BOUNDS.put(item,new BoundRecord(result,pointCount));cachedBoundPoints+=pointCount;}return new RectF(result);}

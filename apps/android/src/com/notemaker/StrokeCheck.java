@@ -69,7 +69,7 @@ final class StrokeCheck {
                 Model.require(app.saveError==null,"Stroke save failed: "+app.saveError);
                 Bitmap saved=snapshot(app);equal(app,before[0],saved,brush+" persisted");saved.recycle();
                 // Rebuilding the raster cache must preserve the complete canvas too.
-                app.canvas.inkTransform="";Bitmap rebuilt=snapshot(app);equal(app,before[0],rebuilt,brush+" cache rebuild");rebuilt.recycle();before[0].recycle();
+                app.canvas.inkDocument="";Bitmap rebuilt=snapshot(app);equal(app,before[0],rebuilt,brush+" cache rebuild");rebuilt.recycle();before[0].recycle();
             });
             Model.require(Store.model(app.replica.read()).strokes.containsKey(id[0]),"Finished stroke missing from local replica");
         }

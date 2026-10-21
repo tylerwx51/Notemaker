@@ -17,7 +17,10 @@ tier 4, and 64 units at tier 8. The main canvas draws those tiles under its
 current document transform. Panning reuses tile pixels; zoom selects the
 nearest power-of-two raster density, so a tile is refined only when the
 effective display scale crosses a density tier. Tiles are shared across
-visible layers and density tiers in a 96 MiB per-canvas LRU budget.
+visible layers, pages, and density tiers in a 96 MiB per-canvas LRU budget.
+The tile key includes page number. Switching pages retains resident tiles;
+changing document or canvas type clears them. Current contributors are
+compared on every return, so edits to an inactive page invalidate stale tiles.
 Changed, added, removed, or reordered content rebuilds only tiles touched by the
 edit. A changed tile replays all of its intersecting contributors; partial-tile
 damage repaint changed Skia anti-aliasing at clipped item edges and failed the
@@ -54,6 +57,10 @@ renderer. Performance instrumentation reports tile rerender/reuse and
 item-render counters alongside input latency; it does not use the retired
 layer-bitmap rebuild counter as evidence of tile reuse. Performance metrics
 also report native path-command reuse and estimated cache bounds.
+Physical page switching reduced tile repaints from 80 to 2 over 40 switches
+and window-frame p95 by about 10 ms, while first updated-window p95 rose by
+roughly 2–5 ms. CPU and net native allocated-heap growth fell; see
+`docs/design/performance/cross-page-cache-current.md`.
 
 ## Limits
 

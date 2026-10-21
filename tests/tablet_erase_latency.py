@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure real eraser input to updated Canvas draw in an isolated Android package."""
+"""Build the current Android source, then measure it in an isolated tablet package."""
 import argparse
 import hashlib
 import json
@@ -37,6 +37,7 @@ def main():
     if args.background_checkpoint and not args.cold_start: parser.error('--background-checkpoint requires --cold-start')
     if not args.synthetic_strokes and (not args.archive or not args.document): parser.error('--archive and --document are required for erasing or interaction timing')
     if not os.environ.get('IN_NIX_SHELL'): parser.error('Run through nix-shell')
+    subprocess.run([str(ROOT/'apps/android/build.sh')],cwd=ROOT,check=True)
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=False,mode=0o700)
     adb=['adb','-s',args.serial]
     def call(*cmd,**kw): return subprocess.check_output(adb+list(cmd),timeout=kw.get('timeout',60))

@@ -17,7 +17,7 @@ final class ViewportCheck {
         });return image[0];
     }
     private static Frame captureCold(Integration test,MainActivity app){
-        Frame[] frame={null};test.runOnMainSync(()->{app.canvas.inkTransform="";Bitmap image=Bitmap.createBitmap(app.canvas.getWidth(),app.canvas.getHeight(),Bitmap.Config.ARGB_8888);app.canvas.draw(new Canvas(image));frame[0]=new Frame(image,app.canvas.tileCacheMetrics());});return frame[0];
+        Frame[] frame={null};test.runOnMainSync(()->{app.canvas.inkDocument="";Bitmap image=Bitmap.createBitmap(app.canvas.getWidth(),app.canvas.getHeight(),Bitmap.Config.ARGB_8888);app.canvas.draw(new Canvas(image));frame[0]=new Frame(image,app.canvas.tileCacheMetrics());});return frame[0];
     }
     private static int[] differences(Bitmap a,Bitmap b){
         require(a.getWidth()==b.getWidth()&&a.getHeight()==b.getHeight(),"Reference dimensions changed");
@@ -205,5 +205,32 @@ final class ViewportCheck {
         require(n(bounded,"currentBytes")<=n(bounded,"maxBytes")&&n(bounded,"peakBytes")<=n(bounded,"maxBytes"),"Panning grew tile cache beyond the memory budget");
         require(n(bounded,"evictedTiles")>evictionsBefore,"Populated high-density panning did not exercise bounded-cache eviction");
         phase("LRU passed");
+
+        resetDocument(test,app,"pages",1f,0,0);phase("begin page cache");
+        for(int page=0;page<2;page++)app.replica.command(Arrays.asList("object","put","-"),
+                object("object","page-box-"+page,"layer","base","page",page,"shape","rect",
+                        "x",120+page*280,"y",180,"w",180,"h",120,
+                        "fill",page==0?0xff000000:0xff0055aa,"color",Color.BLACK,"width",3));
+        Map<String,Object> pages=app.replica.read();
+        test.runOnMainSync(()->{try{app.refreshShared(pages);}catch(Exception e){throw new RuntimeException(e);}});
+        Bitmap pageZero=snapshot(test,app);compare(test,app,"page 0 before flip");
+        test.runOnMainSync(()->app.page=1);
+        Bitmap pageOne=snapshot(test,app);compare(test,app,"page 1 first draw");
+        require(differences(pageZero,pageOne)[0]>0,"Page fixture rendered identical pixels on both pages");
+        pageZero.recycle();pageOne.recycle();
+        long pageOneRenders=n(metrics(test,app),"tileRenders");
+        test.runOnMainSync(()->app.page=0);snapshot(test,app).recycle();
+        require(n(metrics(test,app),"tileRenders")==pageOneRenders,"Returning to page 0 repainted resident tiles");
+        compare(test,app,"page 0 retained tile");
+        app.replica.command(Arrays.asList("object","put","-"),
+                object("object","page-box-1","layer","base","page",1,"shape","rect",
+                        "x",500,"y",330,"w",180,"h",120,"fill",0xff0055aa,
+                        "color",Color.BLACK,"width",3));
+        Map<String,Object> changedPage=app.replica.read();
+        test.runOnMainSync(()->{try{app.refreshShared(changedPage);app.page=1;}catch(Exception e){throw new RuntimeException(e);}});
+        snapshot(test,app).recycle();
+        require(n(metrics(test,app),"tileRenders")>pageOneRenders,"Edited page reused stale tiles");
+        compare(test,app,"page 1 after edit");
+        phase("page cache passed");
     }
 }

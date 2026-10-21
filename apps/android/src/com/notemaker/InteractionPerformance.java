@@ -196,6 +196,8 @@ final class InteractionPerformance {
                             "allocated_tiles",delta(tileStart,tileEnd,"allocatedTiles"),
                             "reused_tiles",delta(tileStart,tileEnd,"reusedTiles"),
                             "evicted_tiles",delta(tileStart,tileEnd,"evictedTiles"),
+                            "cache_clears",delta(tileStart,tileEnd,"cacheClears"),
+                            "resident_pages",tileEnd.get("residentPages"),
                             "current_bytes",tileEnd.get("currentBytes"),"peak_bytes",tileEnd.get("peakBytes"));}
             }
             test.runOnMainSync(()->{app.canvas.afterDraw=null;app.pan=false;app.setDrawingTool(null);});

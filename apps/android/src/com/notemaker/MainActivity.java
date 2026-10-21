@@ -621,14 +621,14 @@ public class MainActivity extends Activity {
         final Map<String,TileInkCache.Item> strokeTileItems=new HashMap<>();
         final Map<String,Map<String,Object>> objectTileSources=new HashMap<>();
         final Map<String,TileInkCache.Item> objectTileItems=new HashMap<>();
-        String inkTransform="";int rasterTier=1;
+        String inkDocument="",inkType="";int inkPage=-1,rasterTier=1;
         long inputStarted;
         java.util.function.LongConsumer drawLatency;
         Runnable afterDraw;
         boolean useInkCache=true;
         boolean cullTileItems=true;
         RectF monolithicTileProbe;
-        Map<String,Object> tileCacheMetrics(){Map<String,Object> m=new LinkedHashMap<>(tileInk.metrics());m.put("densityTier",rasterTier);m.put("reusedTileRepaints",TileInkCache.reusedTileRepaints);return m;}
+        Map<String,Object> tileCacheMetrics(){Map<String,Object> m=new LinkedHashMap<>(tileInk.metrics());m.put("densityTier",rasterTier);m.put("reusedTileRepaints",TileInkCache.reusedTileRepaints);m.put("cacheClears",tileInk.cacheClears());m.put("residentPages",tileInk.residentPageCount());return m;}
         float shapeStartX,shapeStartY,shapeEndX,shapeEndY;boolean shapeDragging;
         boolean transforming;float transformStartX,transformStartY,transformDeltaX,transformDeltaY;long lastPreviewAt;
         boolean lassoing;float lassoStartX,lassoStartY,lassoEndX,lassoEndY;final ArrayList<float[]> lassoPath=new ArrayList<>();
@@ -646,7 +646,7 @@ public class MainActivity extends Activity {
             RectF viewport=documentViewport();if(viewport.isEmpty())return;
             c.save();transform(c);
             if(monolithicTileProbe!=null)tileInk.drawMonolithic(c,visible,monolithicTileProbe,rasterTier,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
-            else tileInk.draw(c,layer,visible,viewport,rasterTier,cullTileItems,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
+            else tileInk.draw(c,page,layer,visible,viewport,rasterTier,cullTileItems,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
             c.restore();
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
@@ -654,8 +654,8 @@ public class MainActivity extends Activity {
             if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
             if(getWidth()==0||getHeight()==0)return;
             tileInk.beginFrame();
-            String key=document+"/"+page+"/"+type;
-            if(!key.equals(inkTransform)){tileInk.clear();inkTransform=key;strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();}
+            if(!document.equals(inkDocument)||!type.equals(inkType)){tileInk.clear();strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();inkDocument=document;inkType=type;}
+            if(page!=inkPage){strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();inkPage=page;}
             rasterTier=TileInkCache.densityTier(scale()*zoom);
             c.save();transform(c);if(!type.equals("infinite")){paint.setColor(0xffaaaaaa);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);c.drawRect(0,0,1000,1400,paint);paint.setStyle(Paint.Style.FILL);}c.restore();
             boolean previewing=false;for(Object raw:transformPreviews.values())try{if(((Number)Json.map(raw).getOrDefault("expires",0)).longValue()>System.currentTimeMillis()){previewing=true;break;}}catch(Exception ignored){}
