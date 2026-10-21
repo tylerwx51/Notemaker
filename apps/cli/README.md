@@ -167,11 +167,20 @@ the tablet does not need access to those paths. A direct proxy request uses
 SVG export embeds an isolated SVG image; PNG, Android canvas/layer previews, and
 the browser render the vector asset in its viewport.
 
+For a Matplotlib gallery, run `python3 apps/cli/examples/matplotlib_charts.py
+/tmp/notemaker-charts` inside `nix-shell`, then place a file with `svg add` as
+above. The generator uses path outlines for labels and removes Matplotlib's XML
+DTD and RDF metadata wrapper. Do the same normalization when generating your own
+figures; raw `savefig(..., format="svg")` output contains a DTD that NoteMaker
+rejects. Use vector artists such as `pcolormesh` for heatmaps; `imshow` emits an
+embedded raster image outside the supported profile.
+
 Supported imports are static, self-contained SVGs up to 256 KiB with an SVG
 namespace and positive viewBox or pixel dimensions. Paths (including curves),
 basic shapes, groups/transforms, text/tspans, gradients, clipping, markers, and
-basic CSS are supported. Scripts, animation, external resources, XML DTDs,
-`foreignObject`, embedded images, `use`, filters, and masks are rejected.
+basic CSS are supported. Local `use` references to paths and static patterns
+support Matplotlib glyphs, markers, and hatches. Scripts, animation, external
+resources, XML DTDs, `foreignObject`, embedded images, filters, and masks are rejected.
 CSS imports and escapes are rejected; resource references must be local `#id`
 fragments. Unsupported elements/attributes fail before an edit is committed.
 Fonts and some CSS/text details differ across renderers; convert text to paths

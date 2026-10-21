@@ -135,6 +135,78 @@ class CliChecks(server_checks.ServerChecks):
         self.assertEqual(raw.returncode,0,raw.stderr)
         self.assertEqual(self.cli('inspect',replica='stdin')['objects'][0]['w'],200)
 
+    def test_matplotlib_chart_gallery_offline_render_and_sync(self):
+        import sys
+        import numpy as np
+        from matplotlib import image as mpimage
+        sys.path.insert(0, str(ROOT / 'apps/cli/examples'))
+        try:
+            from matplotlib_charts import generate
+        finally:
+            sys.path.pop(0)
+        charts = generate(self.directory / 'charts')
+        self.assertEqual(len(charts), 10)
+        self.assertIn('<pattern ', charts['bar'].read_text())
+        self.assertIn('<use ', charts['line'].read_text())
+        self.cli('document', 'create', 'pages')
+        for page, (name, path) in enumerate(charts.items()):
+            placement = self.directory / (name + '.json')
+            placement.write_text(json.dumps({'object':'chart-' + name, 'page':page,
+                                             'x':30, 'y':40, 'w':600, 'h':400}))
+            self.cli('svg', 'add', str(path), str(placement))
+            png = self.directory / (name + '.png')
+            self.cli('export', str(png), str(page))
+            pixels = mpimage.imread(png)[..., :3]
+            self.assertGreater(np.count_nonzero(np.any(pixels < .8, axis=2)), 100,
+                               name + ' rendered blank')
+        objects = self.cli('inspect')['objects']
+        self.assertEqual({o['object'] for o in objects}, {'chart-' + n for n in charts})
+        self.assertEqual(len(self.cli('log')['pending']), 11)
+        self.cli('sync', self.url)
+        self.cli('sync', self.url, replica='b')
+        self.assertEqual(self.cli('inspect'), self.cli('inspect', replica='b'))
+
+    def test_matplotlib_grid_is_one_atomic_note_diagram(self):
+        import sys
+        import numpy as np
+        from matplotlib import image as mpimage
+        sys.path.insert(0, str(ROOT / 'apps/cli/examples'))
+        try:
+            from matplotlib_charts import generate
+        finally:
+            sys.path.pop(0)
+        charts = generate(self.directory / 'grid-charts')
+        objects = []
+        for index, (name, path) in enumerate(charts.items()):
+            objects.append({'object':'chart-' + name, 'shape':'svg', 'svg':path.read_text(),
+                            'x':20 + (index % 2) * 490, 'y':40 + (index // 2) * 260,
+                            'w':470, 'h':230})
+        self.cli('document', 'create')
+        self.cli('diagram', 'add', '-', value={'name':'Matplotlib charts',
+                                                'layer':'matplotlib-grid', 'objects':objects})
+        self.assertEqual(len(self.cli('inspect')['objects']), 10)
+        self.assertEqual(len(self.cli('log')['pending']), 2)
+        png = self.directory / 'grid.png'
+        self.cli('export', str(png))
+        pixels = mpimage.imread(png)[..., :3]
+        for index, name in enumerate(charts):
+            x = 20 + (index % 2) * 490
+            y = 40 + (index // 2) * 260
+            tile = pixels[y:y + 230, x:x + 470]
+            self.assertGreater(np.count_nonzero(np.any(tile < .8, axis=2)), 100, name)
+        self.cli('sync', self.url)
+        self.cli('sync', self.url, replica='b')
+        self.assertEqual(self.cli('inspect'), self.cli('inspect', replica='b'))
+
+    def test_svg_use_requires_local_path(self):
+        for source in (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><use href="#missing"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><g id="loop"><use href="#loop"/></g></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><use href="https://example.com/x.svg#p"/></svg>',
+        ):
+            self.cli('object', 'put', '-', value={'shape':'svg', 'svg':source}, ok=False)
+        self.assertEqual(self.cli('log')['pending'], [])
+
     def test_svg_rejections_are_atomic(self):
         self.diagram();before=self.cli('log')
         for source in [

@@ -1246,3 +1246,27 @@ and thresholds, the focused performance rerun passed every input (p95
 1,000 strokes after restart. Its artifacts are in
 `.test-artifacts/performance-commit-recheck/`. The hook was disabled for the
 final commit invocation to avoid repeating the already completed suites.
+
+## Matplotlib SVG chart deployment (2026-10-21)
+
+The Matplotlib SVG generator produced ten vector chart types. The CLI integration
+suite passed all 25 tests, including offline placement, PNG rendering, a single
+atomic two-column grid, synchronization to a second replica, and rejection of
+invalid `use` references. The Android APK and Android CLI build passed.
+
+The existing primary server and desktop proxy were restarted on this development
+computer with the same server database and identity. An online SQLite backup
+passed `integrity_check` before the restart. The physical Note Air6 C
+(`eac89823`) received the new APK through the backed-up upgrade check; all 61
+app files/preferences and 266 prior actions were preserved, and its proxy
+reconnected with no pending edits.
+
+The tablet's selected proxy received a single fixed note, `Matplotlib chart
+grid`, containing ten SVG chart objects on page zero. The grid was added as one
+diagram action, followed by a line-chart spacing correction. Both actions
+reached the primary server; the desktop replica downloaded them and reports ten
+objects. A CLI PNG export and a physical-tablet screenshot show the complete
+grid, including hatches, path-outlined labels, and colors. The tablet remains
+open to this note. Backups, action input, export, and screenshot are in
+`.test-artifacts/matplotlib-deploy-20261021-112546/`; the APK upgrade report is
+in `.test-artifacts/tablet/20261021-112623-402849/`.

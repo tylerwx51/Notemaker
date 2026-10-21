@@ -285,7 +285,8 @@ Generated SVGs can be placed with `svg add FILE.svg [PLACEMENT.json]`. Optional
 placement JSON specifies `x`, `y`, `w`, `h`, `layer`, `page`, and `object` ID.
 Each SVG remains a vector asset embedded in one movable, resizable, undoable
 object, available offline on both CLI runtimes. See the [SVG import profile and
-examples](apps/cli/README.md#place-a-generated-svg). Nix fetches the hash-pinned
+examples](apps/cli/README.md#place-a-generated-svg), including the Matplotlib
+chart generator. Nix fetches the hash-pinned
 JSVG and AndroidSVG libraries, which are bundled into the CLI/APK. Rebuild and
 upgrade the app, CLI, and server together before synchronizing SVG objects.
 

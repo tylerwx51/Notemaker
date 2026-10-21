@@ -16,8 +16,8 @@ import static com.notemaker.core.Model.require;
 public final class SvgAsset {
     private SvgAsset() {}
     public static final int MAX_BYTES=262144;
-    private static final Set<String> TAGS=words("svg g defs title desc path rect circle ellipse line polyline polygon text tspan linearGradient radialGradient stop clipPath marker style");
-    private static final Set<String> ATTRS=words("id class style version x y x1 y1 x2 y2 dx dy width height viewBox preserveAspectRatio transform d points rx ry r cx cy fx fy fr fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-miterlimit stroke-dasharray stroke-dashoffset opacity color font-family font-size font-style font-weight text-anchor dominant-baseline alignment-baseline baseline-shift textLength lengthAdjust display visibility clip-path clip-rule gradientUnits gradientTransform spreadMethod offset stop-color stop-opacity href marker-start marker-mid marker-end markerWidth markerHeight markerUnits refX refY orient type space");
+    private static final Set<String> TAGS=words("svg g defs title desc path rect circle ellipse line polyline polygon text tspan linearGradient radialGradient stop clipPath marker style use pattern");
+    private static final Set<String> ATTRS=words("id class style version x y x1 y1 x2 y2 dx dy width height viewBox preserveAspectRatio transform d points rx ry r cx cy fx fy fr fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-miterlimit stroke-dasharray stroke-dashoffset opacity color font-family font-size font-style font-weight text-anchor dominant-baseline alignment-baseline baseline-shift textLength lengthAdjust display visibility clip-path clip-rule gradientUnits gradientTransform spreadMethod offset stop-color stop-opacity href marker-start marker-mid marker-end markerWidth markerHeight markerUnits refX refY orient type space patternUnits patternContentUnits patternTransform");
     private static Set<String> words(String s){return new HashSet<>(Arrays.asList(s.split(" ")));}
     public static final class DotGrid {
         public final double width,height,strokeWidth,strokeOpacity;
@@ -85,6 +85,7 @@ public final class SvgAsset {
             Document document=b.parse(new InputSource(new StringReader(source)));
             Element root=document.getDocumentElement();require("svg".equals(root.getLocalName()),"Expected SVG root");
             visit(document,0,new int[]{0});
+            validateUses(root);
             double[] size;
             if(root.hasAttribute("viewBox")){
                 String[] values=root.getAttribute("viewBox").trim().split("[\\s,]+");require(values.length==4,"SVG viewBox needs four numbers");
@@ -100,6 +101,20 @@ public final class SvgAsset {
         }catch(Exception e){throw new IllegalArgumentException("Invalid SVG: "+e.getMessage(),e);}
     }
     private static double length(String s){return Double.parseDouble(s.trim().replaceFirst("px$",""));}
+    /** Matplotlib reuses glyph and marker paths. Restrict targets to paths so use cannot recurse. */
+    private static void validateUses(Element root){
+        Set<String> paths=new HashSet<>();
+        NodeList all=root.getElementsByTagNameNS("http://www.w3.org/2000/svg","path");
+        for(int i=0;i<all.getLength();i++){
+            Element path=(Element)all.item(i);if(path.hasAttribute("id"))paths.add(path.getAttribute("id"));
+        }
+        NodeList uses=root.getElementsByTagNameNS("http://www.w3.org/2000/svg","use");
+        for(int i=0;i<uses.getLength();i++){
+            Element use=(Element)uses.item(i);
+            String href=use.hasAttribute("href")?use.getAttribute("href"):use.getAttributeNS("http://www.w3.org/1999/xlink","href");
+            require(href.startsWith("#")&&paths.contains(href.substring(1)),"SVG use must reference a local path");
+        }
+    }
     private static void visit(Node node,int depth,int[] count){
         require(node.getNodeType()!=Node.PROCESSING_INSTRUCTION_NODE&&node.getNodeType()!=Node.ENTITY_REFERENCE_NODE,"SVG processing instructions/entities are unsupported");
         if(node instanceof Element){

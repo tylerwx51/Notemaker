@@ -50,3 +50,14 @@ The October 13 physical-device follow-up confirmed that an older client rejects
 SVG events with `Unknown shape` and cannot advance its sync cursor past them.
 An in-place APK upgrade preserves pending edits/history and restores catch-up;
 see [verification](../verification.md#physical-boox-follow-up--2026-10-13).
+
+## Matplotlib chart profile extension
+
+Matplotlib SVG exports use local `use` references for outlined glyphs and plot
+markers, and `pattern` for hatched bars. The static profile accepts these tags;
+`use` targets must be existing local paths, which prevents recursive references.
+The server and Java validators enforce the same constraint. Matplotlib's default
+DTD and RDF metadata are removed by the chart generator before import; arbitrary
+DTDs and external resources remain rejected. Raster image artists such as
+`imshow` remain outside this vector profile. A CLI integration gallery covers ten
+chart types, PNG rendering, offline placement, and synchronization.

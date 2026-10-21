@@ -3,8 +3,8 @@ import math
 import re
 import xml.etree.ElementTree as ET
 
-TAGS = set('svg g defs title desc path rect circle ellipse line polyline polygon text tspan linearGradient radialGradient stop clipPath marker style'.split())
-ATTRS = set('id class style version x y x1 y1 x2 y2 dx dy width height viewBox preserveAspectRatio transform d points rx ry r cx cy fx fy fr fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-miterlimit stroke-dasharray stroke-dashoffset opacity color font-family font-size font-style font-weight text-anchor dominant-baseline alignment-baseline baseline-shift textLength lengthAdjust display visibility clip-path clip-rule gradientUnits gradientTransform spreadMethod offset stop-color stop-opacity href marker-start marker-mid marker-end markerWidth markerHeight markerUnits refX refY orient type space'.split())
+TAGS = set('svg g defs title desc path rect circle ellipse line polyline polygon text tspan linearGradient radialGradient stop clipPath marker style use pattern'.split())
+ATTRS = set('id class style version x y x1 y1 x2 y2 dx dy width height viewBox preserveAspectRatio transform d points rx ry r cx cy fx fy fr fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-miterlimit stroke-dasharray stroke-dashoffset opacity color font-family font-size font-style font-weight text-anchor dominant-baseline alignment-baseline baseline-shift textLength lengthAdjust display visibility clip-path clip-rule gradientUnits gradientTransform spreadMethod offset stop-color stop-opacity href marker-start marker-mid marker-end markerWidth markerHeight markerUnits refX refY orient type space patternUnits patternContentUnits patternTransform'.split())
 SVG = '{http://www.w3.org/2000/svg}'
 
 def css(value):
@@ -53,6 +53,11 @@ def validate_svg(source):
         for child in node:
             visit(child, depth + 1)
     visit(root, 1)
+    paths = {node.get('id') for node in root.iter(SVG + 'path') if node.get('id')}
+    for node in root.iter(SVG + 'use'):
+        href = node.get('href') or node.get('{http://www.w3.org/1999/xlink}href', '')
+        if not href.startswith('#') or href[1:] not in paths:
+            raise ValueError('SVG use must reference a local path')
     try:
         if 'viewBox' in root.attrib:
             box = [float(v) for v in re.split(r'[\s,]+', root.attrib['viewBox'].strip())]
