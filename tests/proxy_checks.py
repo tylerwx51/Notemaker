@@ -69,6 +69,44 @@ class ProxyChecks(server_checks.ServerChecks):
             try:self.assertEqual(proxy.cli('log'),expected)
             finally:proxy.stop()
 
+    def test_checkpoint_reconstructs_stroke_point_prefixes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp);proxy=Proxy(directory,'stroke-prefixes')
+            try:
+                proxy.cli('document','create','pages')
+                points=[[i,i*2,0.5] for i in range(30)]
+                def stroke(rows):
+                    return {'kind':'stroke','stroke':'prefix-stroke','layer':'base',
+                            'page':0,'color':-16777216,'width':3,'points':rows}
+                proxy.cli('append','-',value=stroke(points[:20]))
+                proxy.cli('append','-',value=stroke(points[:25]))
+                proxy.cli('append','-',value={'kind':'batch','actions':[stroke(points)]})
+                expected=proxy.cli('log')
+                proxy.cli('checkpoint')
+                base=next(directory.glob('document-*.json'))
+                packed=json.loads(base.read_text())
+                self.assertEqual(packed['checkpointPointFormat'],'stroke-prefix-v1')
+                self.assertEqual(packed['checkpointPointPrefixes'],[0,20,25])
+                self.assertLess(base.stat().st_size,len(json.dumps(expected).encode()))
+                self.assertEqual(proxy.cli('log'),expected)
+            finally:proxy.stop()
+            proxy=Proxy(directory,'stroke-prefixes')
+            try:
+                self.assertEqual(proxy.cli('log'),expected)
+                self.assertEqual(proxy.cli('inspect')['strokes'][0]['points'],points)
+                proxy.cli('append','-',value=stroke(points+[[30,60,0.5]]))
+                expected=proxy.cli('log')
+            finally:proxy.stop()
+            proxy=Proxy(directory,'stroke-prefixes')
+            try:self.assertEqual(proxy.cli('log'),expected)
+            finally:proxy.stop()
+            packed['checkpointPointPrefixes'][1]=999
+            base.write_text(json.dumps(packed))
+            invalid=subprocess.run([str(CLI),'--state',str(directory),'--document',
+                                    'stroke-prefixes','log'],text=True,capture_output=True,timeout=40)
+            self.assertNotEqual(invalid.returncode,0)
+            self.assertIn('Invalid checkpoint point prefix reference',invalid.stderr)
+
     def test_json_string_fast_path_and_escapes_round_trip(self):
         with tempfile.TemporaryDirectory() as temp:
             proxy=Proxy(Path(temp),'json-strings');self.addCleanup(proxy.stop)

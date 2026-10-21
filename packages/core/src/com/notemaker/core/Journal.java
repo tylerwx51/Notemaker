@@ -49,6 +49,7 @@ final class Journal {
                         if(same)persisted.put("relay",Collections.emptyList());
                         else{List<Object> order=relayIds(relay,events,pending);if(order!=null){persisted.put("relay",order);persisted.put("relayFormat","ids");}}
                     }
+                    CheckpointPointPrefixes.encode(persisted);
                     try(FileOutputStream out=new FileOutputStream(temporary.toFile())){
                         out.write(write(persisted).getBytes(StandardCharsets.UTF_8));out.getFD().sync();
                     }
@@ -68,6 +69,8 @@ final class Journal {
         if(state==null||stamp!=file.lastModified()||size!=file.length()||wal.length()<offset){
             state=file.exists()?map(parse(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8))):object("events",new ArrayList<>(),"pending",new ArrayList<>(),"cursor",0);
             Timing.mark("journal_base_parsed");
+            CheckpointPointPrefixes.decode(state);
+            Timing.mark("journal_points_expanded");
             state.putIfAbsent("relay",new ArrayList<>());
             Object relayFormat=state.remove("relayFormat");
             if("ids".equals(relayFormat))state.put("relay",expandRelayIds(list(state.get("relay")),list(state.get("events")),list(state.get("pending"))));

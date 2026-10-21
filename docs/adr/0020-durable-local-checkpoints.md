@@ -31,6 +31,15 @@ The reader expands and validates these IDs before replay. A relay with extra
 or different entries still stays in full. This schema addition requires
 updated app and CLI readers for ID-order checkpoints; older readers reject
 them rather than silently changing relay order.
+A checkpoint with repeated snapshots of one stroke stores each snapshot's
+exact shared point prefix as a count, followed by only its remaining points.
+`checkpointPointFormat: "stroke-prefix-v1"` identifies this checkpoint-only
+encoding. `checkpointPointPrefixes` contains one count per stroke action in
+`events` then `pending`, including strokes nested in batches. The reader
+validates and expands the prefixes before relay reconstruction and model
+replay. The in-memory actions, WAL, and CLI output keep complete point lists.
+Older app and CLI readers cannot open a checkpoint using this format, so a
+replica must be read with matching versions when sharing or rolling back.
 During WAL replay, committed operations and metadata still apply in revision
 order, but the reader rebuilds the effective model once after the last record.
 Live transactions continue to update the cached model as each edit commits.
@@ -75,3 +84,9 @@ order, ID-order storage reduced its checkpointed base from 5,114,942 to
 Physical checkpoint writes fell from about 5.15 to 2.76 MB and wall time
 from 524/531 to 334/359 ms. See
 `docs/design/performance/checkpoint-relay-id-order.md`.
+On that same copied note, point-prefix storage reduced the base from
+2,738,803 to 1,215,466 bytes. Two physical process-cold launch medians were
+1,592 and 1,587 ms, versus 1,730 ms on the preceding version; sampled PSS
+fell by about 21 MiB. Physical checkpoint writes fell from 2,764,800 to
+1,236,992 charged bytes, and checkpoint wall time from 334/359 to 183/193 ms.
+See `docs/design/performance/checkpoint-point-prefixes.md`.
