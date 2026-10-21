@@ -28,6 +28,10 @@ drawn items in the layer. The proxy repeats this narrow check inside its atomic
 coordination update so a concurrent edit cannot grant a lease to an item that
 has left the editable layer or page. Geometric hit testing still uses DrawItem
 coverage to decide which IDs the editor requests.
+For a topmost hit, traverse the layer's established item order from the front
+of the stack and construct DrawItem geometry only as each candidate is tested.
+The first exact coverage hit wins; area and multi-item selection continue
+collecting all exact hits in the same order.
 
 Coverage is the support of the item's own rendered alpha after clipping and
 erasure: alpha > 0, before compositing with the page or other items. White opaque

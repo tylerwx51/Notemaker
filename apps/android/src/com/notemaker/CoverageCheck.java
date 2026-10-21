@@ -21,6 +21,12 @@ final class CoverageCheck {
         app.replica.command(Arrays.asList("erase","-"),object("layer","base","page",0,"mode","partial","radius",10,"points",Arrays.asList(Arrays.asList(50,0),Arrays.asList(50,100))));
         require(query(app,50,50).isEmpty(),"Erased area still selects");require(query(app,20,50).size()==2,"Remaining coverage lost");
         Map<String,Object> snapshot=app.replica.read();Model model=Store.model(snapshot);
+        for(String layer:Arrays.asList("base","under"))for(boolean topmost:new boolean[]{true,false})
+            for(double[][] region:new double[][][]{Geometry.rect(0,0,110,110),Geometry.rect(115,115,120,120),Geometry.rect(300,100,40,40)}){
+                List<Object> expected=new LayerEditor(model,layer,0).select(region,topmost,com.notemaker.cli.ItemCoverage::create);
+                List<Object> actual=LayerEditor.select(model,layer,0,region,topmost,com.notemaker.cli.ItemCoverage::create);
+                require(expected.equals(actual),"Lazy selection changed ordered coverage hits");
+            }
         Bitmap rendered=Bitmap.createBitmap(400,250,Bitmap.Config.ARGB_8888);Canvas c=new Canvas(rendered);c.drawColor(Color.WHITE);Render.draw(model,0,Collections.emptySet(),new com.notemaker.cli.Png(c));
         require(rendered.getPixel(50,50)==Color.RED,"Partial erase damaged or hid underlying layer");require(rendered.getPixel(20,50)==Color.BLACK,"Partial erase lost untouched pixels");rendered.recycle();
         test.runOnMainSync(()->{try{app.refreshShared(snapshot);}catch(Exception e){throw new RuntimeException(e);}});

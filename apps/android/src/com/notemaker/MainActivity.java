@@ -444,7 +444,7 @@ public class MainActivity extends Activity {
         });}catch(Exception error){runOnUiThread(()->{selectionError=error.toString();Toast.makeText(this,"Could not select entities: "+error.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     com.notemaker.core.LayerEditor layerEditor(){return new com.notemaker.core.LayerEditor(model,selected,page);}
-    void selectRegion(double[][] region,boolean topmost){synchronized(lock){if(canvas==null||!canvas.visible(selected))return;List<Object> hits=layerEditor().select(region,topmost,com.notemaker.cli.ItemCoverage::create);ArrayList<Map<String,Object>> refs=new ArrayList<>();for(Object hit:hits)refs.add(Json.map(hit));startSelection(refs);}}
+    void selectRegion(double[][] region,boolean topmost){synchronized(lock){if(canvas==null||!canvas.visible(selected))return;List<Object> hits=com.notemaker.core.LayerEditor.select(model,selected,page,region,topmost,com.notemaker.cli.ItemCoverage::create);ArrayList<Map<String,Object>> refs=new ArrayList<>();for(Object hit:hits)refs.add(Json.map(hit));startSelection(refs);}}
     void selectAt(float x,float y){double radius=canvas==null?1:6/Math.max(.01,canvas.scale()*canvas.zoom);selectRegion(com.notemaker.core.Geometry.capsule(new double[]{x,y},new double[]{x,y},radius),true);}
     void selectAllVisible(){selectRegion(null,false);}
     void selectWithin(float x0,float y0,float x1,float y1){selectRegion(com.notemaker.core.Geometry.rect(Math.min(x0,x1),Math.min(y0,y1),Math.abs(x1-x0),Math.abs(y1-y0)),false);}

@@ -43,4 +43,16 @@ public final class LayerEditor {
         }
     }
     public List<Object> select(double[][] region,boolean topmost,Coverage.Factory factory){List<DrawItem> ordered=new ArrayList<>(items.values());Collections.reverse(ordered);List<Object> out=new ArrayList<>();for(DrawItem item:ordered)if(region==null?item.hasCoverage(factory):item.intersects(region,factory)){out.add(item.ref());if(topmost)break;}return out;}
+    /** Test topmost items first without preparing DrawItems that cannot be reached. */
+    public static List<Object> select(Model model,String layer,int page,double[][] region,boolean topmost,Coverage.Factory factory){
+        Model.require(model.layers.containsKey(layer)&&!Boolean.FALSE.equals(model.layerActive.get(layer)),"Layer is not editable");
+        Model.require(page>=0&&page<=10000,"Invalid page");
+        List<Map<String,Object>> ordered=model.layerItems(layer,page);List<Object> out=new ArrayList<>();
+        for(int i=ordered.size()-1;i>=0;i--){Map<String,Object> source=ordered.get(i);String kind=string(source,"kind"),id=string(source,kind);
+            if(Boolean.FALSE.equals(("stroke".equals(kind)?model.active:model.objectActive).get(id)))continue;
+            DrawItem item=new DrawItem(model,source);
+            if(region==null?item.hasCoverage(factory):item.intersects(region,factory)){out.add(item.ref());if(topmost)break;}
+        }
+        return out;
+    }
 }

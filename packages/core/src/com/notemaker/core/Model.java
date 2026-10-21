@@ -18,7 +18,7 @@ public final class Model {
     private final Map<String,Integer> itemOrder=new HashMap<>();
     private String itemScope(Map<String,Object> o){return o.get("layer")+":"+((Number)o.get("page")).intValue();}
     private void indexItem(Map<String,Object> o){String kind=string(o,"kind"),key=kind+":"+string(o,kind);if(!itemOrder.containsKey(key))itemOrder.put(key,itemOrder.size());itemIndex.computeIfAbsent(itemScope(o),k->new LinkedHashMap<>()).put(key,o);}
-    public Collection<Map<String,Object>> layerItems(String layer,int page){
+    public List<Map<String,Object>> layerItems(String layer,int page){
         if(itemIndex==null){itemIndex=new HashMap<>();for(Map<String,Object> o:strokes.values())indexItem(o);for(Map<String,Object> o:objects.values())indexItem(o);}
         Collection<Map<String,Object>> source=itemIndex.getOrDefault(layer+":"+page,new LinkedHashMap<>()).values();
         List<Map<String,Object>> ordered=new ArrayList<>(source);ordered.sort(Comparator.<Map<String,Object>>comparingInt(o->"stroke".equals(o.get("kind"))?0:1).thenComparingInt(o->itemOrder.get(o.get("kind")+":"+o.get(string(o,"kind")))));return Collections.unmodifiableList(ordered);
