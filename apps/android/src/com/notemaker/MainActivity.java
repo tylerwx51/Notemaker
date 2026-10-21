@@ -186,7 +186,7 @@ public class MainActivity extends Activity {
     }
     void persistObject(JSONObject object){
         final AppReplica target=replica;final PendingObjectHistory pending;
-        synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;update();}
+        synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;}
         ReplicaService.writes.execute(()->{try{
             target.command(Arrays.asList("object","put","-"),Json.map(Json.parse(object.toString())));Map<String,Object> snapshot=null;try{snapshot=target.read();}catch(Exception readError){android.util.Log.w("NoteMaker","Object saved but snapshot refresh failed",readError);}final Map<String,Object> savedSnapshot=snapshot;runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;redo.clear();if(savedSnapshot!=null)try{refreshShared(savedSnapshot);}catch(Exception e){saveError=e.toString();}save();update();if(savedSnapshot==null)ReplicaService.writes.execute(()->refreshFrom(target));});
         }catch(Exception e){android.util.Log.e("NoteMaker","Object save failed",e);runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=e.toString();update();Toast.makeText(this,"Could not save object: "+e.getMessage(),Toast.LENGTH_LONG).show();});}});
