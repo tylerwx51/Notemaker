@@ -18,7 +18,7 @@ final class InteractionPerformance {
         Map<String,List<Double>> queue=new LinkedHashMap<>(),action=new LinkedHashMap<>(),drawWait=new LinkedHashMap<>(),uiDraw=new LinkedHashMap<>();
         Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
         List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
-        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle","stroke_history_toggle","page_switch")){
+        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle","stroke_history_toggle","object_create","page_switch")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
             queue.put(name,new ArrayList<>());action.put(name,new ArrayList<>());drawWait.put(name,new ArrayList<>());uiDraw.put(name,new ArrayList<>());
@@ -45,7 +45,7 @@ final class InteractionPerformance {
         Map<String,Object> modeResources=new LinkedHashMap<>();
         Map<String,Object> pageTiles=object();
         String originalLayer=app.selected,extraLayer="performance-"+UUID.randomUUID();
-        String historyId="performance-history-"+UUID.randomUUID(),strokeHistoryId="performance-stroke-history-"+UUID.randomUUID();
+        String historyId="performance-history-"+UUID.randomUUID(),strokeHistoryId="performance-stroke-history-"+UUID.randomUUID(),createPrefix="performance-create-"+UUID.randomUUID()+"-";
         String pageDocument="performance-pages-"+UUID.randomUUID();
         try {
             for(String name:draw.keySet()){
@@ -71,6 +71,12 @@ final class InteractionPerformance {
                     Map<String,Object> state=app.replica.read();
                     test.runOnMainSync(()->{try{app.refreshShared(state);app.undo.clear();app.redo.clear();
                         app.undo.add(strokeHistoryId);app.save();app.update();}catch(Exception error){throw new RuntimeException(error);}});
+                    test.waitForIdleSync();
+                }
+                if(name.equals("object_create")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    test.runOnMainSync(()->{app.undo.clear();app.redo.clear();app.save();app.update();});
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
                     test.waitForIdleSync();
                 }
                 if(name.equals("page_switch")){
@@ -102,8 +108,9 @@ final class InteractionPerformance {
                     long queued=System.nanoTime();
                     input.post(()->{
                         started.set(System.nanoTime());
-                        boolean history=historyMode,strokeHistory=name.equals("stroke_history_toggle"),forward=index%2==1;
-                        BooleanSupplier ready=()->!history||(!app.historyPending&&
+                        boolean history=historyMode,strokeHistory=name.equals("stroke_history_toggle"),objectCreate=name.equals("object_create"),forward=index%2==1;
+                        String createId=createPrefix+index;
+                        BooleanSupplier ready=()->objectCreate?app.model.objects.containsKey(createId)&&!app.objectHistoryPending():!history||(!app.historyPending&&
                                 (forward?!Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId)):
                                         Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId))));
                         uiDrawReady.set(ready);
@@ -126,6 +133,10 @@ final class InteractionPerformance {
                             app.deselect();app.resetDrawingGesture();app.page=index%2==0?1:0;app.save();app.update();
                         }else if(history){
                             app.history(forward);
+                        }else if(objectCreate){
+                            app.persistObject(MainActivity.obj("kind","object","object",createId,"shape","rect",
+                                    "layer",app.selected,"page",app.page,"x",100+(index%10)*55,"y",300+(index/10)*55,
+                                    "w",42,"h",36,"color",android.graphics.Color.BLACK,"width",3,"fontSize",24,"text",""));
                         }else{
                             app.load(app.type);app.configureProxy();app.update();
                         }
@@ -164,6 +175,13 @@ final class InteractionPerformance {
                     test.runOnMainSync(()->com.notemaker.core.Model.require(app.undo.size()==1&&
                             strokeHistoryId.equals(app.undo.get(0))&&app.redo.isEmpty(),
                             "Stroke history toggle did not restore editor history"));
+                }
+                if(name.equals("object_create")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    Map<String,Object> durable=app.replica.read();com.notemaker.core.Model saved=com.notemaker.core.Store.model(durable);
+                    for(int index=0;index<40;index++)com.notemaker.core.Model.require(saved.objects.containsKey(createPrefix+index),"Object creation did not persist #"+index);
+                    test.runOnMainSync(()->com.notemaker.core.Model.require(app.undo.size()==40&&app.redo.isEmpty(),
+                            "Object creation did not persist editor history"));
                 }
                 if(name.equals("page_switch")){
                     ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
