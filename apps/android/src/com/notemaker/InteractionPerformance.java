@@ -18,7 +18,7 @@ final class InteractionPerformance {
         Map<String,List<Double>> queue=new LinkedHashMap<>(),action=new LinkedHashMap<>(),drawWait=new LinkedHashMap<>(),uiDraw=new LinkedHashMap<>();
         Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
         List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
-        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle","stroke_history_toggle","object_create","page_switch")){
+        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","selection_tap","document_reopen","history_toggle","stroke_history_toggle","object_create","page_switch")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
             queue.put(name,new ArrayList<>());action.put(name,new ArrayList<>());drawWait.put(name,new ArrayList<>());uiDraw.put(name,new ArrayList<>());
@@ -46,6 +46,7 @@ final class InteractionPerformance {
         Map<String,Object> pageTiles=object();
         String originalLayer=app.selected,extraLayer="performance-"+UUID.randomUUID();
         String historyId="performance-history-"+UUID.randomUUID(),strokeHistoryId="performance-stroke-history-"+UUID.randomUUID(),createPrefix="performance-create-"+UUID.randomUUID()+"-";
+        String selectionId="performance-selection-"+UUID.randomUUID();
         String pageDocument="performance-pages-"+UUID.randomUUID();
         try {
             for(String name:draw.keySet()){
@@ -53,6 +54,17 @@ final class InteractionPerformance {
                     app.replica.command(Arrays.asList("layer","put","-"),object("layer",extraLayer,"name","Benchmark layer","force",false));
                     Map<String,Object> state=app.replica.read();
                     test.runOnMainSync(()->{try{app.refreshShared(state);app.update();}catch(Exception error){throw new RuntimeException(error);}});
+                    test.waitForIdleSync();
+                }
+                if(name.equals("selection_tap")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    app.replica.command(Arrays.asList("object","put","-"),object("object",selectionId,"shape","rect",
+                            "layer",originalLayer,"page",app.page,"x",440,"y",260,"w",80,"h",80,
+                            "color",android.graphics.Color.BLACK,"fill",android.graphics.Color.BLACK,
+                            "width",4,"fontSize",24,"text",""));
+                    Map<String,Object> state=app.replica.read();
+                    test.runOnMainSync(()->{try{app.refreshShared(state);app.selecting=true;app.update();}
+                        catch(Exception error){throw new RuntimeException(error);}});
                     test.waitForIdleSync();
                 }
                 if(name.equals("history_toggle")){
@@ -110,7 +122,9 @@ final class InteractionPerformance {
                         started.set(System.nanoTime());
                         boolean history=historyMode,strokeHistory=name.equals("stroke_history_toggle"),objectCreate=name.equals("object_create"),forward=index%2==1;
                         String createId=createPrefix+index;
-                        BooleanSupplier ready=()->objectCreate?app.model.objects.containsKey(createId)&&!app.objectHistoryPending():!history||(!app.historyPending&&
+                        BooleanSupplier ready=()->name.equals("selection_tap")?app.selectionSession!=null&&
+                                app.selectedEntities.stream().anyMatch(entity->selectionId.equals(entity.get("id"))):
+                                objectCreate?app.model.objects.containsKey(createId)&&!app.objectHistoryPending():!history||(!app.historyPending&&
                                 (forward?!Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId)):
                                         Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId))));
                         uiDrawReady.set(ready);
@@ -131,6 +145,8 @@ final class InteractionPerformance {
                             app.selectLayer(index%2==0?extraLayer:originalLayer);
                         }else if(name.equals("page_switch")){
                             app.deselect();app.resetDrawingGesture();app.page=index%2==0?1:0;app.save();app.update();
+                        }else if(name.equals("selection_tap")){
+                            app.selecting=true;app.selectAt(480,300);
                         }else if(history){
                             app.history(forward);
                         }else if(objectCreate){
@@ -154,6 +170,13 @@ final class InteractionPerformance {
                             (index%2==0?undoUiDraw:redoUiDraw).add((uiDrawn.get()-queued)/1e6);
                             (index%2==0?undoCanvasDraw:redoCanvasDraw).add((drawn.get()-queued)/1e6);
                         }
+                    }
+                    if(name.equals("selection_tap")){
+                        test.runOnMainSync(app::deselect);
+                        ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                        test.waitForIdleSync();
+                        com.notemaker.core.Model.require(app.selectionSession==null&&app.selectedEntities.isEmpty(),
+                                "Selection benchmark left a lease active");
                     }
                     Thread.sleep(25);
                 }
@@ -224,7 +247,7 @@ final class InteractionPerformance {
         return object("modes",modes,"mode_resources",modeResources,"page_tile_cache",pageTiles,
                 "start_resources",start,"end_resources",end,"post_gc_resources",postGc,
                 "history_directions",historyDirections,
-                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, and direct page switching; history modes alternate object or stroke undo and redo",
+                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, direct page switching, and selection tap with lease acquisition; history modes alternate object or stroke undo and redo",
                 "document",app.document,"state_revision",app.replica.read().get("revision"));
     }
     private static Map<String,Object> tileMetrics(Instrumentation test,MainActivity app){

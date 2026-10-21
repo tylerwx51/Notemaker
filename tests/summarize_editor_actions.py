@@ -24,7 +24,7 @@ def main():
     suite_versions = []
     for run in args.runs:
         names = json.loads((run / 'metrics.json').read_text())['modes']
-        suite_versions.append(tuple(name in names for name in ('history_toggle', 'page_switch')))
+        suite_versions.append(tuple(name in names for name in ('history_toggle', 'page_switch', 'selection_tap')))
     if len(set(suite_versions)) != 1:
         parser.error('All runs must use the same interaction suite version')
     workload = ('60 synthetic pans, 40 zoom redraws, 40 tool switches, '
@@ -34,6 +34,8 @@ def main():
         workload += '; 60 alternating object undo/redo actions with 6 warmups'
     if suite_versions[0][1]:
         workload += '; 40 direct switches between two populated pages on a disposable pages document'
+    if suite_versions[0][2]:
+        workload += '; 40 selection taps with lease acquisition and 5 warmups'
     summary = {'workload': workload,
                'timing': 'enqueue to app Canvas draw or first window UI draw as named by each metric; not E Ink scanout or physical finger sampling',
                'runs': []}
