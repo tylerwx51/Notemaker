@@ -346,11 +346,14 @@ public final class LocalProxy implements Closeable {
                     scope.page==((Number)lease.getOrDefault("page",0)).intValue(),"Selection session belongs to another layer/page");
         }
     }
-    private static SelectionScope selectionScope(Store store,Map<String,Object> request) throws Exception {
+    private static SelectionScope requestedSelectionScope(Map<String,Object> request) {
         String layer=(String)request.getOrDefault("layer","base");int page=LayerEditor.page(request);
         List<Object> refs=list(request.get("entities"));Model.require(!refs.isEmpty()&&refs.size()<=200,"Selection needs 1–200 entities");
-        LayerEditor.requireReferences(store.model(),layer,page,refs);
-        SelectionScope scope=new SelectionScope(layer,page);
+        return new SelectionScope(layer,page);
+    }
+    private static SelectionScope selectionScope(Store store,Map<String,Object> request) throws Exception {
+        SelectionScope scope=requestedSelectionScope(request);
+        LayerEditor.requireReferences(store.model(),scope.layer,scope.page,list(request.get("entities")));
         if(request.containsKey("session"))requireSessionScope(store.read(),(String)request.get("session"),scope);
         return scope;
     }
@@ -364,7 +367,7 @@ public final class LocalProxy implements Closeable {
         return object("session",session,"selected",selected,"skipped",skipped,"expires",now+Collaboration.LEASE_MILLIS);
     }
     private Object acquireSelection(Store store,String document,String actor,Map<String,Object> request) throws Exception {
-        SelectionScope scope=selectionScope(store,request);
+        SelectionScope scope=upstream==null?requestedSelectionScope(request):selectionScope(store,request);
         String session=String.valueOf(request.getOrDefault("session",UUID.randomUUID().toString()));Object page=request.getOrDefault("page",0);List<Object> entities=list(request.get("entities"));Map<String,Object> candidates=object();long expires=System.currentTimeMillis()+Collaboration.LEASE_MILLIS;
         for(Object value:entities){Map<String,Object> e=map(value);String kind=string(e,"kind"),id=string(e,"id");String key=Collaboration.key(kind,id,page);candidates.put(key,object("layer",scope.layer,"session",session,"actor",actor,"owner",this.id,"page",page,"expires",expires,"created",System.currentTimeMillis()));}
         Map<String,Object> decision=null;Endpoint peer=upstream;if(peer!=null)try{decision=peer.request("/api/locks",object("document",document,"session",session,"actor",actor,"leases",candidates,"remove",Collections.emptyList()));}catch(Exception unavailable){/* Offline selection remains local until the next sync attempt. */}
