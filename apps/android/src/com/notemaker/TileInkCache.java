@@ -23,7 +23,7 @@ final class TileInkCache {
     private static int cachedBoundPoints;
     static final class Item {final String id;final Map<String,Object> value;final RectF bounds;final boolean cachePicture;
         Item(String id,Map<String,Object> value){this(id,value,true);}
-        Item(String id,Map<String,Object> value,boolean cachePicture){this.id=id;this.value=value;this.bounds=bounds(value);this.cachePicture=cachePicture;}
+        Item(String id,Map<String,Object> value,boolean cachePicture){this.id=id;this.value=value;this.bounds=cachePicture?bounds(value):computeBounds(value);this.cachePicture=cachePicture;}
     }
     private static final class Key {
         final String layer;final int page,x,y,tier;final boolean culling;
