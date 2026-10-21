@@ -286,6 +286,16 @@ public final class LocalProxy implements Closeable {
             Map<String,Object> snapshot=Main.snapshot(state);snapshot.put("leases",copy(state.getOrDefault("leases",object())));snapshot.put("previews",previewSnapshot(doc,state));
             result.put("snapshot",snapshot);changed(true);return result;
         }
+        if(cmd.equals("object")&&args.size()==4&&args.get(1).equals("put")&&args.get(2).equals("snapshot")&&args.get(3).equals("-")){
+            Map<String,Object> drawing=Actions.drawing(map(body.get("input")),"base");drawing.put("kind","object");drawing.remove("id");
+            Map<String,Object> result=local.commitWithState(actor,model->{
+                if(model.objects.containsKey(drawing.get("object")))new LayerEditor(model,string(drawing,"layer"),((Number)drawing.get("page")).intValue(),true).resolve("object",string(drawing,"object"));
+                return Arrays.asList(drawing);
+            });
+            Map<String,Object> state=map(result.remove("state"));Collaboration.expire(state,System.currentTimeMillis());
+            Map<String,Object> snapshot=Main.snapshot(state);snapshot.put("leases",copy(state.getOrDefault("leases",object())));snapshot.put("previews",previewSnapshot(doc,state));
+            result.put("snapshot",snapshot);changed(true);return result;
+        }
         if(cmd.equals("configure")){require(args.size()==2,"configure UPSTREAM_URL_OR_DESCRIPTOR (empty to disconnect)");configure(doc,args.get(1));return object("configured",true);}
         if(cmd.equals("sync")){require(args.size()<=2,"sync [UPSTREAM_URL_OR_DESCRIPTOR]");return syncCommand(doc,args.size()==2?args.get(1):null);}
         if(cmd.equals("selection")&&args.size()==3&&args.get(1).equals("select"))return acquireSelection(local,doc,actor,map(body.get("input")));
@@ -303,10 +313,6 @@ public final class LocalProxy implements Closeable {
             if(cmd.equals("selection"))try{String session=args.size()>1?args.get(args.size()-1):"";Set<String> cleared=new HashSet<>();if(args.size()>1&&args.get(1).equals("disconnect")){session="";for(Object raw:previousLeases.values()){Map<String,Object> lease=map(raw);if(actor.equals(lease.get("actor")))cleared.add(String.valueOf(lease.get("session")));}for(Map.Entry<String,Object> entry:ephemeralPreviews.entrySet())if(entry.getKey().startsWith(doc+":")){Map<String,Object> preview=map(entry.getValue());if(actor.equals(preview.get("actor")))cleared.add(String.valueOf(preview.get("session")));}}else if(args.size()>1&&args.get(1).equals("deselect"))cleared.add(session);for(String oldSession:cleared)clearPreview(doc,oldSession,actor);Map<String,Object> current=map(local.read().getOrDefault("leases",object()));List<Object> removed=new ArrayList<>();for(Map.Entry<String,Object> entry:previousLeases.entrySet())if((session.isEmpty()||session.equals(map(entry.getValue()).get("session")))&&actor.equals(map(entry.getValue()).get("actor"))&&!current.containsKey(entry.getKey()))removed.add(entry.getKey());Map<String,Object> changedLeases=object();for(Map.Entry<String,Object> entry:current.entrySet())if(!Objects.equals(previousLeases.get(entry.getKey()),entry.getValue()))changedLeases.put(entry.getKey(),entry.getValue());forwardLocks(doc,changedLeases,removed,session,actor);if(!previousLeases.equals(current))changed(false);}catch(Exception ignored){}
             boolean action=uploadsChanges(cmd,args);
             Map<String,Object> afterState=local.read();
-            if(result!=null&&cmd.equals("object")&&args.size()==4&&args.get(1).equals("put")&&args.get(2).equals("snapshot")){
-                Collaboration.expire(afterState,System.currentTimeMillis());Map<String,Object> returned=map(map(result).get("snapshot"));
-                returned.put("leases",copy(afterState.getOrDefault("leases",object())));returned.put("previews",previewSnapshot(doc,afterState));
-            }
             if(((Number)afterState.get("revision")).longValue()!=before)changed(action);
         }
     }

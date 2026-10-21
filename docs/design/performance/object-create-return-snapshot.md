@@ -18,7 +18,8 @@ and after proxy restart.
 | Process CPU | 3.70 / 3.63 s | 3.32 / 3.55 s |
 
 The CPU difference is small and variable, and there is no display-latency
-gain. This branch is kept as an experiment, not promoted. A direct proxy path
-can be measured separately. Timings end at Android app/window draw before
+gain. This generic-route branch is kept as an experiment. The
+[direct proxy path](object-create-direct-snapshot.md) was measured separately.
+Timings end at Android app/window draw before
 E Ink scanout. Raw data and APK hashes are under
 `.test-artifacts/hillclimb/tablet-object-create-return-snapshot-{1,2}/`.
