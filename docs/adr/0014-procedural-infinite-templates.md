@@ -21,6 +21,12 @@ and paged template SVG behavior unchanged. The main server validates and
 replicates the compact template object like other object snapshots. Network
 viewers draw it within their current infinite-canvas viewport.
 
+For fixed and paged dot-grid templates, recognize the exact SVG grammar emitted
+by the template action during SVG validation. Check every circle and the
+complete document, then normalize its viewport without building an XML DOM.
+All other SVG input keeps the general validator. This changes parsing cost,
+not the stored template action or its rendered pixels.
+
 ## Consequences
 
 Panning and zooming require only a viewport redraw; the document does not gain
@@ -34,3 +40,8 @@ The Android and Android CLI builds succeed. A CLI operation on an infinite
 document stores one compact template object. Server validation and proxy
 replication preserve its `template` and `spacing` fields. E Ink refresh and
 stylus behavior still require validation on BOOX hardware.
+On a copied NoteAir6C note with a 1,333-circle fixed-page template, this
+validation fast path reduced process-cold launch median from 1,614 ms to
+1,466/1,473 ms in two runs. Android pixel comparison against the general DOM
+path matched exactly for a 1,333-circle template. See
+`docs/design/performance/svg-dot-grid-fast-validation.md`.

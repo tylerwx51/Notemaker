@@ -3,6 +3,7 @@ package com.notemaker.core;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.*;
 import javax.xml.parsers.*;
 import javax.xml.transform.*;
 import javax.xml.transform.dom.DOMSource;
@@ -20,10 +21,33 @@ public final class SvgAsset {
     private static Set<String> words(String s){return new HashSet<>(Arrays.asList(s.split(" ")));}
     private static final class Asset {double[] size;String normalized;Asset(double[] size,String normalized){this.size=size;this.normalized=normalized;}}
     private static final Map<String,Asset> CACHE=new LinkedHashMap<String,Asset>(16,.75f,true){protected boolean removeEldestEntry(Map.Entry<String,Asset> e){return size()>16;}};
+    private static final String DECIMAL="-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?";
+    private static final Pattern DOT_ROOT=Pattern.compile("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ("+DECIMAL+") ("+DECIMAL+")\" width=\"("+DECIMAL+")\" height=\"("+DECIMAL+")\"><g stroke=\"(#[0-9a-f]{6})\" stroke-opacity=\"("+DECIMAL+")\" stroke-width=\"("+DECIMAL+")\">");
+    private static final Pattern DOT_CIRCLE=Pattern.compile("<circle cx=\"("+DECIMAL+")\" cy=\"("+DECIMAL+")\" r=\"("+DECIMAL+")\" fill=\"(#[0-9a-f]{6})\"/>");
+
+    /** Recognize only the exact, self-contained SVG emitted by the dot-grid action. */
+    private static Asset generatedDots(String source){
+        if(source.length()>MAX_BYTES)return null;
+        Matcher root=DOT_ROOT.matcher(source);
+        if(!root.lookingAt()||!root.group(1).equals(root.group(3))||!root.group(2).equals(root.group(4)))return null;
+        double width=Double.parseDouble(root.group(1)),height=Double.parseDouble(root.group(2));
+        double alpha=Double.parseDouble(root.group(6)),stroke=Double.parseDouble(root.group(7));
+        if(!Double.isFinite(width)||!Double.isFinite(height)||width<=0||height<=0||width>1000000||height>1000000||alpha<0||alpha>1||!Double.isFinite(stroke)||stroke<=0||stroke>1000000)return null;
+        Matcher circle=DOT_CIRCLE.matcher(source);int offset=root.end(),count=0;
+        while(offset<source.length()&&source.startsWith("<circle ",offset)){
+            circle.region(offset,source.length());if(!circle.lookingAt()||!root.group(5).equals(circle.group(4)))return null;
+            for(int i=1;i<=3;i++){double n=Double.parseDouble(circle.group(i));if(!Double.isFinite(n)||n<0||n>1000000||i==3&&n==0)return null;}
+            offset=circle.end();if(++count>9998)return null; // Root and group also count toward the 10,000-node SVG limit.
+        }
+        if(count==0||!source.startsWith("</g></svg>",offset)||offset+10!=source.length())return null;
+        String normalized="<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 "+root.group(1)+" "+root.group(2)+"\" width=\"100%\" height=\"100%\">"+source.substring(source.indexOf("<g stroke="));
+        return new Asset(new double[]{width,height},normalized);
+    }
 
     /** Returns intrinsic viewBox dimensions. No external resources or XML entities. */
     public static synchronized double[] validate(String source){
         Asset cached=CACHE.get(source);if(cached!=null)return cached.size.clone();
+        Asset dots=generatedDots(source);if(dots!=null){CACHE.put(source,dots);return dots.size.clone();}
         require(source.getBytes(StandardCharsets.UTF_8).length<=MAX_BYTES,"SVG exceeds 256 KiB");
         require(!source.toUpperCase(Locale.ROOT).contains("<!DOCTYPE")&&!source.toUpperCase(Locale.ROOT).contains("<!ENTITY"),"SVG DTDs and entities are unsupported");
         try{

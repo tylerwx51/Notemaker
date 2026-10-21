@@ -72,6 +72,13 @@ final class CoverageCheck {
         com.notemaker.cli.Png.useSvgPictures=false;new com.notemaker.cli.Png(new Canvas(direct)).svg(5.25,10.5,150.5,160.25,svg);
         com.notemaker.cli.Png.useSvgPictures=true;new com.notemaker.cli.Png(new Canvas(recorded)).svg(5.25,10.5,150.5,160.25,svg);
         require(direct.sameAs(recorded),"SVG display-list pixels differ");direct.recycle();recorded.recycle();
+        StringBuilder dots=new StringBuilder("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 714.2857142857143 1000.0000000000001\" width=\"714.2857142857143\" height=\"1000.0000000000001\"><g stroke=\"#999999\" stroke-opacity=\"1.0\" stroke-width=\"0.7142857142857143\">");
+        for(int y=1;y<=43;y++)for(int x=1;x<=31;x++)dots.append("<circle cx=\"").append(x*22.857142857142858).append("\" cy=\"").append(y*22.857142857142858).append("\" r=\"1.4285714285714286\" fill=\"#999999\"/>");
+        dots.append("</g></svg>");
+        Bitmap fastDots=Bitmap.createBitmap(240,240,Bitmap.Config.ARGB_8888),domDots=Bitmap.createBitmap(240,240,Bitmap.Config.ARGB_8888);
+        new com.notemaker.cli.Png(new Canvas(fastDots)).svg(5.25,10.5,210,210,dots.toString());
+        new com.notemaker.cli.Png(new Canvas(domDots)).svg(5.25,10.5,210,210," "+dots);
+        require(fastDots.sameAs(domDots),"Generated dot SVG fast path changed pixels");fastDots.recycle();domDots.recycle();
         LinkedHashMap<String,Map<String,Object>> visible=new LinkedHashMap<>();
         for(int i=0;i<3;i++){
             ArrayList<Object> points=new ArrayList<>();for(int p=0;p<40;p++)points.add(Arrays.asList(20+p*4,70+i*12+20*Math.sin(p*.3),.4+(p%5)*.1));

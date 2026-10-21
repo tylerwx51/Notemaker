@@ -17,6 +17,7 @@ public final class Png implements Render.Surface {
     private static long imageCacheBytes,imageCacheKeyChars;
     private static final java.util.LinkedHashMap<String,Bitmap> IMAGES=new java.util.LinkedHashMap<>(8,.75f,true);
     public static boolean useSvgPictures=true;
+    public static boolean traceSvg;
     private final Canvas canvas;
     private final java.util.List<StrokeCommands.Command> strokeCommands;
     private final java.util.Deque<Integer> clips=new java.util.ArrayDeque<>();
@@ -80,12 +81,12 @@ public final class Png implements Render.Surface {
     public void svg(double x,double y,double w,double h,String source){
         synchronized(SVGS){
             com.caverock.androidsvg.SVG svg=SVGS.get(source);
-            if(svg==null){try{svg=com.caverock.androidsvg.SVG.getFromString(SvgAsset.viewport(source));}catch(com.caverock.androidsvg.SVGParseException e){throw new IllegalArgumentException("Could not render SVG",e);}SVGS.put(source,svg);}
+            if(svg==null){long started=traceSvg?System.nanoTime():0;String normalized=SvgAsset.viewport(source);long validated=traceSvg?System.nanoTime():0;try{svg=com.caverock.androidsvg.SVG.getFromString(normalized);}catch(com.caverock.androidsvg.SVGParseException e){throw new IllegalArgumentException("Could not render SVG",e);}SVGS.put(source,svg);if(traceSvg)android.util.Log.i("NoteMakerStartup","svg_source_bytes="+source.length()+" svg_validate_ms="+(validated-started)/1e6+" svg_parse_ms="+(System.nanoTime()-validated)/1e6);}
             canvas.save();try{
                 canvas.translate((float)x,(float)y);canvas.clipRect(0,0,(float)w,(float)h);
                 if(useSvgPictures){
                     java.util.List<Object> key=java.util.Arrays.asList(source,(float)w,(float)h);Picture picture=PICTURES.get(key);
-                    if(picture==null){picture=new Picture();Canvas recording=picture.beginRecording(Math.max(1,(int)Math.ceil(w)),Math.max(1,(int)Math.ceil(h)));try{svg.renderToCanvas(recording,new RectF(0,0,(float)w,(float)h));}finally{picture.endRecording();}PICTURES.put(key,picture);}
+                    if(picture==null){long started=traceSvg?System.nanoTime():0;picture=new Picture();Canvas recording=picture.beginRecording(Math.max(1,(int)Math.ceil(w)),Math.max(1,(int)Math.ceil(h)));try{svg.renderToCanvas(recording,new RectF(0,0,(float)w,(float)h));}finally{picture.endRecording();}PICTURES.put(key,picture);if(traceSvg)android.util.Log.i("NoteMakerStartup","svg_picture_ms="+(System.nanoTime()-started)/1e6+" svg_source_bytes="+source.length());}
                     canvas.drawPicture(picture);
                 }else svg.renderToCanvas(canvas,new RectF(0,0,(float)w,(float)h));
             }finally{canvas.restore();}
