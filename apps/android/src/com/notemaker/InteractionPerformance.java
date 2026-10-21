@@ -143,12 +143,12 @@ final class InteractionPerformance {
                         completed.set(System.nanoTime());handled.countDown();
                     });
                     if(!handled.await(5,TimeUnit.SECONDS)||!uiPainted.await(5,TimeUnit.SECONDS)||
-                            (!name.equals("layer_switch")&&!painted.await(5,TimeUnit.SECONDS)))
+                            (!name.equals("layer_switch")&&!name.equals("tool_switch")&&!painted.await(5,TimeUnit.SECONDS)))
                         throw new IllegalStateException("Interaction draw timed out: "+name+" #"+index);
                     if(index>=warmup){
                         handler.get(name).add((completed.get()-queued)/1e6);uiDraw.get(name).add((uiDrawn.get()-queued)/1e6);
                         queue.get(name).add((started.get()-queued)/1e6);action.get(name).add((completed.get()-started.get())/1e6);
-                        if(!name.equals("layer_switch")){draw.get(name).add((drawn.get()-queued)/1e6);
+                        if(!name.equals("layer_switch")&&!name.equals("tool_switch")){draw.get(name).add((drawn.get()-queued)/1e6);
                             drawWait.get(name).add((drawn.get()-completed.get())/1e6);}
                         if(name.equals("history_toggle")){
                             (index%2==0?undoUiDraw:redoUiDraw).add((uiDrawn.get()-queued)/1e6);

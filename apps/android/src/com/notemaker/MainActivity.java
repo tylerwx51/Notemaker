@@ -173,7 +173,7 @@ public class MainActivity extends Activity {
             });}catch(Exception e){android.util.Log.e("NoteMaker","Local save failed",e);runOnUiThread(()->{if(!localSettings)saving--;saveError=e.toString();update();Toast.makeText(this,"Could not save changes: "+e.getMessage(),Toast.LENGTH_LONG).show();});}
         });
     }
-    void setDrawingTool(String shape){if(shape!=null&&(selecting||selectionSession!=null||!selectedEntities.isEmpty()))deselect();synchronized(lock){drawingShape=shape;erase=false;pan=false;fillTapMode=false;if(!"text".equals(shape))pendingText=null;if(canvas!=null){canvas.shapeDragging=false;canvas.invalidate();}update();}}
+    void setDrawingTool(String shape){if(shape!=null&&(selecting||selectionSession!=null||!selectedEntities.isEmpty()))deselect();synchronized(lock){boolean preview=canvas!=null&&canvas.shapeDragging;drawingShape=shape;erase=false;pan=false;fillTapMode=false;if(!"text".equals(shape))pendingText=null;if(canvas!=null)canvas.shapeDragging=false;if(preview)update();else updateChrome();}}
     void placeText(String text,float fontSize,float x,float y){
         if(text==null||text.trim().isEmpty()||Float.isNaN(fontSize)||Float.isInfinite(fontSize)||fontSize<1||fontSize>500||Float.isNaN(x)||Float.isInfinite(x)||Float.isNaN(y)||Float.isInfinite(y))return;
         float w=Math.max(100,text.length()*fontSize*.65f),h=Math.max(48,fontSize*1.6f);if(!type.equals("infinite")){x=Math.max(0,Math.min(999,x));y=Math.max(0,Math.min(1399,y));w=Math.max(1,Math.min(w,1000-x));h=Math.max(1,Math.min(h,1400-y));}
@@ -268,6 +268,11 @@ public class MainActivity extends Activity {
         displayedConnected=connected;
         editor.refresh();
         canvas.invalidate();
+    }}
+    void updateChrome(){synchronized(lock){
+        if(editor==null)return;
+        displayedConnected=connected;
+        editor.refresh();
     }}
     void documentDialog(){
         LinearLayout fields=new LinearLayout(this);fields.setOrientation(1);fields.setPadding(editor.dp(24),editor.dp(8),editor.dp(24),editor.dp(8));

@@ -169,8 +169,8 @@ def main():
         (out/'metrics.json').write_bytes(call('shell','run-as',PACKAGE,'cat','files/'+action+'.json'))
         if args.interaction_suite:
             report=json.loads((out/'metrics.json').read_text())
-            assert all(report['modes'][name]['input_to_draw']['samples']>=35 for name in ('pan','zoom_redraw','tool_switch'))
-            assert report['modes']['layer_switch']['input_to_ui_draw']['samples']>=35
+            assert all(report['modes'][name]['input_to_draw']['samples']>=35 for name in ('pan','zoom_redraw'))
+            assert all(report['modes'][name]['input_to_ui_draw']['samples']>=35 for name in ('layer_switch','tool_switch'))
             assert report['modes']['document_reopen']['input_to_draw']['samples']>=10
             assert report['modes']['history_toggle']['input_to_draw']['samples']>=54
             assert report['modes']['stroke_history_toggle']['input_to_draw']['samples']>=54

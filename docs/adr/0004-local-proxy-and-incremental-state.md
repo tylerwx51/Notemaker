@@ -48,6 +48,8 @@ the transient queued state does not justify an extra full E Ink frame. Failure
 still redraws the editor and reports the error.
 Object creation likewise waits for the durable result before its first redraw;
 the pending guard remains active so history cannot run ahead of the new object.
+Idle drawing-tool switches refresh the toolbar without invalidating the
+unchanged canvas. Cancelling a visible shape preview still redraws the canvas.
 The proxy handles `object put snapshot -` directly: it commits through the
 shared Store, returns a snapshot from that same durable edit, and broadcasts
 the change without separate pre/post command reads.
