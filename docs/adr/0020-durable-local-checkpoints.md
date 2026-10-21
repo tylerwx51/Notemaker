@@ -25,6 +25,9 @@ When the current `relay` is exactly the committed `events` followed by
 `pending`, the checkpoint stores it as an empty list. The reader already
 reconstructs that exact list, avoiding a second copy of operation geometry.
 Any other relay order or retained ingress entry is persisted in full.
+During WAL replay, committed operations and metadata still apply in revision
+order, but the reader rebuilds the effective model once after the last record.
+Live transactions continue to update the cached model as each edit commits.
 
 ## Consequences
 
@@ -55,3 +58,7 @@ process-cold launch medians were 1,094 and 1,067 ms, versus 1,171 and
 1,165 ms with the full relay and same parser. The Android background workflow
 produced the compact base and launched in 1,120 ms median. See
 `docs/design/performance/checkpoint-relay-dedup.md`.
+On a later copied note with a 6.0 MiB WAL, the single post-replay rebuild
+reduced process-cold launch median by about 24–54 ms across two runs per
+branch, with unchanged logical reads and sampled PSS. See
+`docs/design/performance/journal-replay-batch-effective.md`.
