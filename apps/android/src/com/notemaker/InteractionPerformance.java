@@ -20,7 +20,7 @@ final class InteractionPerformance {
         List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
         List<Double> selectedHitTest=new ArrayList<>();
         List<Double> objectCommitAckLatency=new ArrayList<>();
-        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","selection_tap","document_reopen","history_toggle","stroke_history_toggle","object_create","page_switch")){
+        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","selection_tap","document_reopen","history_toggle","stroke_history_toggle","object_create","page_switch","fill_region")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
             queue.put(name,new ArrayList<>());action.put(name,new ArrayList<>());drawWait.put(name,new ArrayList<>());uiDraw.put(name,new ArrayList<>());
@@ -51,6 +51,7 @@ final class InteractionPerformance {
         String historyId="performance-history-"+UUID.randomUUID(),strokeHistoryId="performance-stroke-history-"+UUID.randomUUID(),createPrefix="performance-create-"+UUID.randomUUID()+"-";
         String selectionId="performance-selection-"+UUID.randomUUID();
         String pageDocument="performance-pages-"+UUID.randomUUID();
+        String fillDocument="performance-fill-"+UUID.randomUUID();
         try {
             for(String name:draw.keySet()){
                 if(name.equals("layer_switch")){
@@ -111,28 +112,42 @@ final class InteractionPerformance {
                     }catch(Exception error){throw new RuntimeException(error);}});
                     test.waitForIdleSync();
                 }
+                if(name.equals("fill_region")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    test.runOnMainSync(()->app.openDocument(fillDocument,"fixed"));
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    app.replica.command(Arrays.asList("object","put","-"),object("object","performance-fill-boundary","shape","rect",
+                            "layer","base","page",0,"x",400,"y",400,"w",200,"h",160,
+                            "color",android.graphics.Color.BLACK,"width",4,"fontSize",24,"text",""));
+                    Map<String,Object> state=app.replica.read();
+                    test.runOnMainSync(()->{try{app.refreshShared(state);app.update();}catch(Exception error){throw new RuntimeException(error);}});
+                    test.waitForIdleSync();
+                }
                 Map<String,Object> modeStart=Performance.resources(0);
                 Map<String,Object> tileStart=name.equals("page_switch")?tileMetrics(test,app):null;
                 current.set(name);
                 boolean historyMode=name.equals("history_toggle")||name.equals("stroke_history_toggle");
-                int count=name.equals("pan")||historyMode?60:name.equals("document_reopen")?12:40;
-                int warmup=name.equals("document_reopen")?2:historyMode?6:5;
+                int count=name.equals("pan")||historyMode?60:name.equals("document_reopen")?12:name.equals("fill_region")?20:40;
+                int warmup=name.equals("document_reopen")?2:historyMode?6:name.equals("fill_region")?4:5;
                 for(int i=0;i<count;i++){
                     int index=i;CountDownLatch painted=new CountDownLatch(1),handled=new CountDownLatch(1),uiPainted=new CountDownLatch(1),committed=new CountDownLatch(1);
                     AtomicLong drawn=new AtomicLong(),uiDrawn=new AtomicLong(),started=new AtomicLong(),completed=new AtomicLong(),committedAt=new AtomicLong();
                     long queued=System.nanoTime();
                     input.post(()->{
                         started.set(System.nanoTime());
-                        boolean history=historyMode,strokeHistory=name.equals("stroke_history_toggle"),objectCreate=name.equals("object_create"),forward=index%2==1;
+                        boolean history=historyMode,strokeHistory=name.equals("stroke_history_toggle"),objectCreate=name.equals("object_create"),fillRegion=name.equals("fill_region"),forward=index%2==1;
                         String createId=createPrefix+index;
+                        int expectedFillObjects=app.model.objects.size()+1;
                         BooleanSupplier ready=()->name.equals("selection_tap")?app.selectionSession!=null&&
                                 app.selectedEntities.stream().anyMatch(entity->selectionId.equals(entity.get("id"))):
                                 objectCreate?app.model.objects.containsKey(createId)&&!app.objectHistoryPending():!history||(!app.historyPending&&
                                 (forward?!Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId)):
                                         Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId))));
-                        uiDrawReady.set(objectCreate?()->app.pendingObjectPreviews.containsKey(createId)||ready.getAsBoolean():ready);
+                        if(fillRegion)ready=()->app.model.objects.size()>=expectedFillObjects&&!app.objectHistoryPending();
+                        final BooleanSupplier drawReady=ready;
+                        uiDrawReady.set(objectCreate?()->app.pendingObjectPreviews.containsKey(createId)||drawReady.getAsBoolean():drawReady);
                         uiDrawAck.set(()->{uiDrawn.set(System.nanoTime());uiPainted.countDown();});
-                        app.canvas.afterDraw=()->{if(drawn.get()==0&&(objectCreate?app.drawnObjectPreviews.contains(createId)||ready.getAsBoolean():ready.getAsBoolean())){drawn.set(System.nanoTime());painted.countDown();}};
+                        app.canvas.afterDraw=()->{if(drawn.get()==0&&(objectCreate?app.drawnObjectPreviews.contains(createId)||drawReady.getAsBoolean():drawReady.getAsBoolean())){drawn.set(System.nanoTime());painted.countDown();}};
                         if(name.equals("pan")){
                             app.pan=true;float x=app.canvas.getWidth()/2f,y=app.canvas.getHeight()/2f;
                             long when=SystemClock.uptimeMillis();
@@ -157,6 +172,8 @@ final class InteractionPerformance {
                             app.persistObject(MainActivity.obj("kind","object","object",createId,"shape","rect",
                                     "layer",app.selected,"page",app.page,"x",100+(index%10)*55,"y",300+(index/10)*55,
                                     "w",42,"h",36,"color",android.graphics.Color.BLACK,"width",3,"fontSize",24,"text",""));
+                        }else if(fillRegion){
+                            app.fillAt(500,480);
                         }else{
                             app.load(app.type);app.configureProxy();app.update();
                         }
@@ -222,6 +239,13 @@ final class InteractionPerformance {
                     Map<String,Object> durable=app.replica.read();
                     com.notemaker.core.Model.require(((Number)durable.get("page")).intValue()==0,
                             "Page switch did not persist final page");
+                }
+                if(name.equals("fill_region")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    com.notemaker.core.Model saved=com.notemaker.core.Store.model(app.replica.read());
+                    com.notemaker.core.Model.require(saved.objects.size()==21,"Fill benchmark lost a region object");
+                    test.runOnMainSync(()->com.notemaker.core.Model.require(app.undo.size()==20&&app.redo.isEmpty(),
+                            "Fill benchmark did not persist editor history"));
                 }
                 test.waitForIdleSync();modeResources.put(name,object("before",modeStart,"after",Performance.resources(0)));
                 if(tileStart!=null){Map<String,Object> tileEnd=tileMetrics(test,app);

@@ -178,6 +178,7 @@ def main():
             assert report['modes']['object_create']['input_to_draw']['samples']>=35
             assert report['modes']['selection_tap']['input_to_draw']['samples']>=35
             assert report['modes']['page_switch']['input_to_draw']['samples']>=35
+            assert report['modes']['fill_region']['input_to_draw']['samples']==16
             assert all(report['history_directions'][direction]['input_to_ui_draw']['samples']==27 for direction in ('undo','redo'))
             print(json.dumps({name:report['modes'][name]['input_to_ui_draw'] for name in report['modes']}))
             return
