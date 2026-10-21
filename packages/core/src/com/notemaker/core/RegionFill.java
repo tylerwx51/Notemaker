@@ -37,7 +37,11 @@ public final class RegionFill {
             for(int yy=y0;yy<=y1;yy++)for(int xx=x0;xx<=x1;xx++){double t=q==0?0:Math.max(0,Math.min(1,((xx-ax)*dx+(yy-ay)*dy)/q));if(Math.hypot(xx-ax-t*dx,yy-ay-t*dy)<=r){DrawItem owner=owners.get(l);boolean erased=false;List<double[][]> holes=masks.get(owner);if(!holes.isEmpty()){double[] local=owner.local(left+xx*scale,top+yy*scale);for(double[][] hole:holes)if(Geometry.contains(hole,local[0],local[1])){erased=true;break;}}if(!erased)mask[yy*width+xx]=1;}}}
         int sx=(int)Math.round((x-left)/scale),sy=(int)Math.round((y-top)/scale);require(mask[sy*width+sx]==0,"Tap inside the outline, away from its edge");
         int[] queue=new int[mask.length];int head=0,tail=0;queue[tail++]=sy*width+sx;mask[sy*width+sx]=2;
-        while(head<tail){int p=queue[head++],xx=p%width,yy=p/width;require(xx>0&&xx<width-1&&yy>0&&yy<height-1,"Area is open; fill requires a closed boundary");for(int next:new int[]{p-1,p+1,p-width,p+width})if(mask[next]==0){mask[next]=2;queue[tail++]=next;}}
+        while(head<tail){int p=queue[head++],xx=p%width,yy=p/width;require(xx>0&&xx<width-1&&yy>0&&yy<height-1,"Area is open; fill requires a closed boundary");
+            int next=p-1;if(mask[next]==0){mask[next]=2;queue[tail++]=next;}
+            next=p+1;if(mask[next]==0){mask[next]=2;queue[tail++]=next;}
+            next=p-width;if(mask[next]==0){mask[next]=2;queue[tail++]=next;}
+            next=p+width;if(mask[next]==0){mask[next]=2;queue[tail++]=next;}}
         StringBuilder path=new StringBuilder();for(int yy=1;yy<height-1;yy++)for(int xx=1;xx<width-1;xx++)if(mask[yy*width+xx]==2){int start=xx;while(xx+1<width&&mask[yy*width+xx+1]==2)xx++;path.append('M').append(start-.5).append(' ').append(yy-.5).append('h').append(xx-start+1).append("v1h-").append(xx-start+1).append('Z');}
         int color=((Number)input.get("color")).intValue();String svg="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""+width+"\" height=\""+height+"\" viewBox=\"0 0 "+width+" "+height+"\"><path d=\""+path+"\" fill=\""+String.format(Locale.ROOT,"#%06x",color&0xffffff)+"\" fill-opacity=\""+(color>>>24)/255.0+"\"/></svg>";
         return Arrays.asList(Actions.drawing(object("shape","svg","svg",svg,"x",left,"y",top,"w",width*scale,"h",height*scale,"page",page),layer));
