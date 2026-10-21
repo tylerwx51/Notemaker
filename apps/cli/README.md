@@ -96,6 +96,7 @@ The current trusted-LAN server has no authentication.
 | `svg add FILE.svg\|- [PLACEMENT.json]` | Place a static SVG as one object; `-` reads raw SVG from stdin. |
 | `layer put FILE\|-` | Create/update `{layer,name,force}`. |
 | `object put FILE\|-` | Create/replace a complete object (defaults below). |
+| `object put snapshot FILE\|-` | Create/replace an object and return `{ "operation": "...", "actions": [...], "snapshot": {...} }` from the same durable edit. |
 | `object update ID FILE\|-` | Patch geometry, label, style or attachments within `scope:{layer,page}` (default base/0). |
 | `object hide ID [LAYER [PAGE]]` / `object show ID [LAYER [PAGE]]` | Erase/restore independently of geometry within the named scope (default base/0). |
 | `layer hide ID` / `layer show ID` | Shared layer active state; base cannot be deactivated. |

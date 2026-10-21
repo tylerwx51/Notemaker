@@ -70,6 +70,10 @@ public final class Store {
     public Map<String,Object> commit(String actor,Actions.Build build) throws Exception {
         return commit(actor,build,Collections.emptyList());
     }
+    /** Return the durable post-edit state with the action result. */
+    public Map<String,Object> commitWithState(String actor,Actions.Build build) throws Exception {
+        return commit(actor,build,Collections.emptyList(),null,Collections.emptyList(),true);
+    }
     public Map<String,Object> commit(String actor,Actions.Build build,List<Object> dependencies) throws Exception {
         return commit(actor,build,dependencies,null,Collections.emptyList());
     }
@@ -77,9 +81,12 @@ public final class Store {
         return commit(actor,build,dependencies,session,entities);
     }
     private Map<String,Object> commit(String actor,Actions.Build build,List<Object> dependencies,String requiredSession,List<Object> selected) throws Exception {
+        return commit(actor,build,dependencies,requiredSession,selected,false);
+    }
+    private Map<String,Object> commit(String actor,Actions.Build build,List<Object> dependencies,String requiredSession,List<Object> selected,boolean includeState) throws Exception {
         Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         final Map<String,Object> result=object();
-        edit(state->{
+        Map<String,Object> after=edit(state->{
             Model model=Store.model(state);Model.require(!model.deleted,"Document is deleted");if(requiredSession!=null)Collaboration.requireSelection(state,model,actor,requiredSession,selected);Model baseline=new Model(model);Timing.mark("geometry_begin");List<Object> requested=build.create(model),ops=new ArrayList<>();Timing.mark("geometry_done");
             for(Object value:requested){Map<String,Object> op=map(value);ops.add(op);String kind=string(op,"kind");
                 String key=kind.equals("object")?"object":kind.equals("layer")?"layer":kind.equals("stroke")?"stroke":null;
@@ -100,7 +107,7 @@ public final class Store {
             list(state.get("pending")).add(batch);
             Map<String,Object> history=history(state,actor);list(history.get("undo")).add(object("forward",copy(ops),"inverse",inverse));history.put("redo",new ArrayList<>());
             result.put("operation",batch.get("id"));result.put("actions",ops);
-        });return result;
+        });if(includeState)result.put("state",after);return result;
     }
     private static Map<String,Object> history(Map<String,Object>state,String actor){Map<String,Object> actors=map(state.get("actors"));actors.putIfAbsent(actor,object("undo",new ArrayList<>(),"redo",new ArrayList<>()));return map(actors.get(actor));}
     public Map<String,Object> history(String actor,boolean redo) throws Exception {
