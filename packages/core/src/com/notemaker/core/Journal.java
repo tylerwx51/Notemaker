@@ -41,12 +41,13 @@ final class Journal {
                     Map<String,Object> persisted=new LinkedHashMap<>(cache.state);
                     List<Object> relay=list(cache.state.get("relay")),events=list(cache.state.get("events")),pending=list(cache.state.get("pending"));
                     // An empty stored relay is reconstructed from events and
-                    // pending on read. Omit its duplicate geometry only when
-                    // that reconstruction preserves every entry and its order.
+                    // pending on read. If the same operations have a different
+                    // relay order, keep only their IDs in that order.
                     if(relay.size()==events.size()+pending.size()){
                         boolean same=true;
                         for(int i=0;i<relay.size();i++)if(!Objects.equals(relay.get(i),i<events.size()?events.get(i):pending.get(i-events.size()))){same=false;break;}
                         if(same)persisted.put("relay",Collections.emptyList());
+                        else{List<Object> order=relayIds(relay,events,pending);if(order!=null){persisted.put("relay",order);persisted.put("relayFormat","ids");}}
                     }
                     try(FileOutputStream out=new FileOutputStream(temporary.toFile())){
                         out.write(write(persisted).getBytes(StandardCharsets.UTF_8));out.getFD().sync();
@@ -67,7 +68,10 @@ final class Journal {
         if(state==null||stamp!=file.lastModified()||size!=file.length()||wal.length()<offset){
             state=file.exists()?map(parse(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8))):object("events",new ArrayList<>(),"pending",new ArrayList<>(),"cursor",0);
             Timing.mark("journal_base_parsed");
-            state.putIfAbsent("relay",new ArrayList<>());if(list(state.get("relay")).isEmpty()){list(state.get("relay")).addAll(list(state.get("events")));list(state.get("relay")).addAll(list(state.get("pending")));}
+            state.putIfAbsent("relay",new ArrayList<>());
+            Object relayFormat=state.remove("relayFormat");
+            if("ids".equals(relayFormat))state.put("relay",expandRelayIds(list(state.get("relay")),list(state.get("events")),list(state.get("pending"))));
+            else{Model.require(relayFormat==null,"Unknown relay format");if(list(state.get("relay")).isEmpty()){list(state.get("relay")).addAll(list(state.get("events")));list(state.get("relay")).addAll(list(state.get("pending")));}}
             receivedIds=new HashSet<>();for(Object op:list(state.get("relay")))receivedIds.add(map(op).get("id"));
             state.putIfAbsent("actors",object());state.putIfAbsent("revision",0);state.putIfAbsent("document",document);
             Timing.mark("journal_relay_ready");
@@ -150,6 +154,20 @@ final class Journal {
         if(history!=null&&!history.isEmpty())delta.put("history",history);
         if(!listChanges.isEmpty())delta.put("lists",listChanges);
         return delta;
+    }
+    private static List<Object> relayIds(List<Object> relay,List<Object> events,List<Object> pending){
+        Map<Object,Object> indexed=new HashMap<>();
+        for(List<Object> source:Arrays.asList(events,pending))for(Object value:source){Map<String,Object> op=map(value);Object id=op.get("id");if(!(id instanceof String)||indexed.putIfAbsent(id,op)!=null)return null;}
+        if(relay.size()!=indexed.size())return null;
+        Set<Object> seen=new HashSet<>();List<Object> order=new ArrayList<>();
+        for(Object value:relay){Map<String,Object> op=map(value);Object id=op.get("id");if(!seen.add(id)||!Objects.equals(indexed.get(id),op))return null;order.add(id);}
+        return order;
+    }
+    private static List<Object> expandRelayIds(List<Object> ids,List<Object> events,List<Object> pending){
+        Map<Object,Object> indexed=new HashMap<>();
+        for(List<Object> source:Arrays.asList(events,pending))for(Object value:source){Map<String,Object> op=map(value);Object id=op.get("id");Model.require(id instanceof String&&indexed.putIfAbsent(id,op)==null,"Duplicate or invalid checkpoint operation ID");}
+        List<Object> relay=new ArrayList<>();for(Object id:ids){Model.require(id instanceof String&&indexed.containsKey(id),"Invalid checkpoint relay ID");relay.add(indexed.remove(id));}
+        Model.require(indexed.isEmpty(),"Checkpoint relay order omits operations");return relay;
     }
     /** Append only the changed suffix of each actor's history; fall back for unknown metadata. */
     private static Map<String,Object> historyDifference(Map<String,Object> before,Map<String,Object> after){

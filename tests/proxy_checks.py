@@ -40,6 +40,35 @@ class ProxyChecks(server_checks.ServerChecks):
                 self.assertEqual(proxy.cli('log'),expected)
             finally:proxy.stop()
 
+    def test_checkpoint_preserves_reordered_relay_with_id_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory=Path(temp);proxy=Proxy(directory,'relay-order')
+            try:
+                proxy.cli('document','create','pages')
+                proxy.cli('object','put','-',value={'object':'one','shape':'rect','x':10})
+                proxy.cli('object','put','-',value={'object':'two','shape':'rect','x':20})
+                initial=proxy.cli('log');proxy.cli('checkpoint')
+                base=next(directory.glob('document-*.json'))
+            finally:proxy.stop()
+            reordered=list(reversed(initial['events']+initial['pending']))
+            self.assertGreater(len(reordered),1)
+            persisted=json.loads(base.read_text());persisted['relay']=reordered;base.write_text(json.dumps(persisted))
+            proxy=Proxy(directory,'relay-order')
+            try:
+                self.assertEqual(proxy.cli('log')['relay'],reordered)
+                proxy.cli('settings','-',value={'selected':'base'})
+                expected=proxy.cli('log');before=base.stat().st_size
+                proxy.cli('checkpoint')
+                compact=json.loads(base.read_text())
+                self.assertEqual(compact['relayFormat'],'ids')
+                self.assertEqual(compact['relay'],[op['id'] for op in reordered])
+                self.assertLess(base.stat().st_size,before)
+                self.assertEqual(proxy.cli('log'),expected)
+            finally:proxy.stop()
+            proxy=Proxy(directory,'relay-order')
+            try:self.assertEqual(proxy.cli('log'),expected)
+            finally:proxy.stop()
+
     def test_json_string_fast_path_and_escapes_round_trip(self):
         with tempfile.TemporaryDirectory() as temp:
             proxy=Proxy(Path(temp),'json-strings');self.addCleanup(proxy.stop)
