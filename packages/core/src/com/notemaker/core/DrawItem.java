@@ -51,7 +51,14 @@ public final class DrawItem {
     public boolean intersects(double[][] region,Coverage.Factory factory){
         double[] coarse=coarseBounds();
         if(kind.equals("stroke")){double[] q=Geometry.bounds(region),origin=local(0,0);q[0]+=origin[0];q[2]+=origin[0];q[1]+=origin[1];q[3]+=origin[1];if(!overlaps(coarse,q))return false;}
-        double[][] p=new double[region.length][];for(int i=0;i<p.length;i++)p[i]=local(region[i][0],region[i][1]);double[] q=Geometry.bounds(p);if(coarse!=null&&!overlaps(coarse,q))return false;Coverage area=coverage(factory);return overlaps(area.bounds(),q)&&area.intersects(p);
+        double[][] p=new double[region.length][];
+        if(kind.equals("object")){
+            Map<String,Object> o=geometry();double w=number(o,"w"),h=number(o,"h"),angle=Math.toRadians(((Number)o.getOrDefault("rotation",0)).doubleValue());
+            double cos=Math.cos(angle),sin=Math.sin(angle),cx=number(o,"x")+w/2,cy=number(o,"y")+h/2;
+            double flipX=Boolean.TRUE.equals(o.get("flipX"))?-1:1,flipY=Boolean.TRUE.equals(o.get("flipY"))?-1:1;
+            for(int i=0;i<p.length;i++){double dx=region[i][0]-cx,dy=region[i][1]-cy;p[i]=new double[]{(dx*cos+dy*sin)*flipX+w/2,(-dx*sin+dy*cos)*flipY+h/2};}
+        }else for(int i=0;i<p.length;i++)p[i]=local(region[i][0],region[i][1]);
+        double[] q=Geometry.bounds(p);if(coarse!=null&&!overlaps(coarse,q))return false;Coverage area=coverage(factory);return overlaps(area.bounds(),q)&&area.intersects(p);
     }
     public boolean hasCoverage(Coverage.Factory factory){Coverage coverage=coverage(factory);double[] b=coverage.bounds();return b[2]>b[0]&&b[3]>b[1]&&coverage.intersects(Geometry.rect(b[0],b[1],b[2]-b[0],b[3]-b[1]));}
     /** Conservative document-space paint bounds, including native glyph overhangs. */
