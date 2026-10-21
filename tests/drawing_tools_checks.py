@@ -29,6 +29,14 @@ class DrawingToolsChecks(unittest.TestCase):
         self.assertEqual(redone['snapshot'],self.call('snapshot'))
         self.proxy.stop();self.proxy.start()
         self.assertTrue(self.call('snapshot')['effectiveModel']['objectActive']['box'])
+    def test_append_returns_durable_post_edit_snapshot_for_stroke_history(self):
+        self.stroke('history-stroke')
+        result=self.call('append','snapshot','-',value=dict(kind='active',stroke='history-stroke',active=False))
+        self.assertIn('operation',result)
+        self.assertFalse(result['snapshot']['effectiveModel']['strokeActive']['history-stroke'])
+        self.assertEqual(result['snapshot'],self.call('snapshot'))
+        self.proxy.stop();self.proxy.start()
+        self.assertFalse(self.call('snapshot')['effectiveModel']['strokeActive']['history-stroke'])
     def test_partial_eraser_masks_and_undo_restores_as_one_action(self):
         self.stroke();before=self.call('log')
         self.call('erase','-',value=dict(mode='partial',layer='base',points=[[50,0],[50,100]],radius=9))

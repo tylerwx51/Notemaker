@@ -274,6 +274,12 @@ public final class LocalProxy implements Closeable {
             require(args.size()==1,"snapshot takes no arguments");Map<String,Object> state=local.read();Collaboration.expire(state,System.currentTimeMillis());
             Map<String,Object> result=Main.snapshot(state);result.put("leases",copy(state.getOrDefault("leases",object())));result.put("previews",previewSnapshot(doc,state));return result;
         }
+        if(cmd.equals("append")&&args.size()==3&&args.get(1).equals("snapshot")&&args.get(2).equals("-")){
+            Map<String,Object> state=local.append(map(body.get("input")),actor);List<Object> pending=list(state.get("pending"));
+            Collaboration.expire(state,System.currentTimeMillis());Map<String,Object> snapshot=Main.snapshot(state);
+            snapshot.put("leases",copy(state.getOrDefault("leases",object())));snapshot.put("previews",previewSnapshot(doc,state));
+            changed(true);return object("operation",map(pending.get(pending.size()-1)).get("id"),"snapshot",snapshot);
+        }
         if((cmd.equals("undo")||cmd.equals("redo"))&&args.size()==2&&args.get(1).equals("snapshot")){
             Map<String,Object> result=local.history(actor,cmd.equals("redo"),true);
             Map<String,Object> state=map(result.remove("state"));Collaboration.expire(state,System.currentTimeMillis());

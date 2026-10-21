@@ -332,7 +332,7 @@ public class MainActivity extends Activity {
         ReplicaService.writes.execute(()->{try{
             Map<String,Object> snapshot;
             if(entry.equals("object-action"))snapshot=Json.map(Json.map(target.command(Arrays.asList(forward?"redo":"undo","snapshot"),null)).get("snapshot"));
-            else{boolean erased=entry.startsWith("erase:");String stroke=erased?entry.substring(6):entry;target.command(Arrays.asList("append","-"),Json.object("kind","active","stroke",stroke,"active",erased?!forward:forward));snapshot=target.read();}
+            else{boolean erased=entry.startsWith("erase:");String stroke=erased?entry.substring(6):entry;snapshot=Json.map(Json.map(target.command(Arrays.asList("append","snapshot","-"),Json.object("kind","active","stroke",stroke,"active",erased?!forward:forward))).get("snapshot"));}
             runOnUiThread(()->{synchronized(lock){saving--;if(target!=replica)return;historyPending=false;if(from.isEmpty()||!entry.equals(from.get(from.size()-1))){saveError="History changed before the operation completed";update();return;}from.remove(from.size()-1);to.add(entry);saveError=null;try{refreshShared(snapshot);}catch(Exception error){saveError=error.toString();}save();update();}});
         }catch(Exception error){runOnUiThread(()->{synchronized(lock){saving--;if(target!=replica)return;historyPending=false;saveError=error.toString();update();Toast.makeText(this,"Could not "+(forward?"redo":"undo")+": "+error.getMessage(),Toast.LENGTH_LONG).show();}});}});
     }

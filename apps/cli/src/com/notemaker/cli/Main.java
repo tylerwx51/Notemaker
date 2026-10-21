@@ -39,7 +39,7 @@ public final class Main {
         + "stroke put FILE|- | stroke hide ID | stroke show ID\n"
         + "erase FILE|- | fill FILE|- | template add FILE|- | image add FILE [PLACEMENT.json]\n"
         + "apply FILE|-               Atomic JSON array of protocol actions\n"
-        + "append FILE|-              Append one raw action (editor stroke history)\n"
+        + "append [snapshot] FILE|-   Append one raw action; optionally return post-edit snapshot\n"
         + "settings FILE|-            Update local editor preferences\n"
         + "snapshot                   Materialized model and local editor metadata\n"
         + "checkpoint                 Fold the local journal into its durable base\n"
@@ -105,7 +105,10 @@ public final class Main {
                 arity(a,0);return snapshot(store.read());
             }
             case "append":{
-                arity(a,1);Map<String,Object> s=store.append(map(input(a.get(0))),actor);List<Object> pending=list(s.get("pending"));return object("operation",map(pending.get(pending.size()-1)).get("id"));
+                boolean withSnapshot=a.size()==2&&a.get(0).equals("snapshot");if(!withSnapshot)arity(a,1);
+                Map<String,Object> s=store.append(map(input(a.get(a.size()-1))),actor);List<Object> pending=list(s.get("pending"));
+                Map<String,Object> result=object("operation",map(pending.get(pending.size()-1)).get("id"));
+                if(withSnapshot)result.put("snapshot",snapshot(s));return result;
             }
             case "settings":{
                 arity(a,1);Map<String,Object> preferences=map(input(a.get(0)));

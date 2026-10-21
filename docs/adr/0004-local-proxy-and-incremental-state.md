@@ -50,6 +50,9 @@ The editor's object-history command can return a materialized snapshot from
 the same successful local edit. This removes the separate read before the
 resulting frame without weakening the journal's fsync acknowledgment or
 changing the actor-specific undo/redo action.
+Stroke undo/redo uses the same pattern with `append snapshot`: the active-state
+action and returned editor snapshot come from one durable local edit. The
+ordinary `append`, `undo`, and `redo` responses remain available to CLI clients.
 
 `ReplicaService` starts a loopback-only command proxy on port 8766 and performs
 background synchronization for configured documents. The app calls the shared
