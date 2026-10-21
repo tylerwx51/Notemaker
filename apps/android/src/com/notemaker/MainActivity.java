@@ -592,7 +592,8 @@ public class MainActivity extends Activity {
     }
     void fillAt(float x,float y){
         final AppReplica target=replica;final PendingObjectHistory pending;
-        synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;update();}
+        synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;}
+        selectionHandler.postDelayed(()->{if(target==replica&&pendingObjectHistory.contains(pending))updateChrome();},150);
         Map<String,Object> input=Json.object("x",x,"y",y,"page",page,"layer",selected,"color",objectFillColor==Color.TRANSPARENT?color:objectFillColor);
         ReplicaService.writes.execute(()->{try{
             target.command(Arrays.asList("fill","-"),input);Map<String,Object> snapshot=target.read();

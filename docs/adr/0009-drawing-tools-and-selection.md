@@ -97,8 +97,10 @@ selection coordination and preview transport without adding drawing history.
   objects. It does not flood-fill pixels inside imported pictures or arbitrary
   SVG artwork. Adjacent equal-width scanline runs are combined into taller SVG
   rectangles so repeated fills store and draw fewer path commands without
-  changing covered pixels. Templates use an editable background layer below
-  drawing layers.
+  changing covered pixels. The Android fill gesture avoids an unchanged
+  Canvas refresh while its local command is pending; fills still pending after
+  150 ms refresh the editor chrome to show progress. Templates use an editable
+  background layer below drawing layers.
 - Brush profiles are rendered from the stroke centerline as a pressure-varying
   swept ribbon, not as a sequence of overlapping point dabs. The shared renderer
   resamples by traveled distance, derives tangent/normal frames, and composites
