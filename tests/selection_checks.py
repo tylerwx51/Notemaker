@@ -80,6 +80,30 @@ class SelectionChecks(ServerChecks):
         self.call(a,'selection','deselect','page-session',actor='alice')
         self.call(a,'layer','hide','page-layer',actor='bob')
 
+    def test_selection_reference_validation_rejects_wrong_scope_and_inactive_items(self):
+        a=self.proxy('selection-validation')
+        self.call(a,'document','create','pages')
+        self.call(a,'layer','put','-',value={'layer':'other','name':'Other','force':False})
+        self.call(a,'object','put','-',value={'object':'scoped','layer':'other','page':1,
+                                              'shape':'rect','x':5,'y':5,'w':50,'h':40})
+        request={'session':'invalid-session','layer':'other','page':1,
+                 'entities':[{'kind':'object','id':'scoped'}]}
+        for change in ({'layer':'base'}, {'page':0},
+                       {'entities':[{'kind':'stroke','id':'scoped'}]},
+                       {'entities':[{'kind':'object','id':'missing'}]}):
+            self.call(a,'selection','select','-',value={**request,**change},ok=False)
+            self.assertEqual(self.call(a,'snapshot')['leases'],{})
+        self.assertEqual(len(self.call(a,'selection','select','-',value=request)['selected']),1)
+        self.call(a,'object','put','-',value={'object':'base-scope','page':0,
+                                              'shape':'rect','x':60,'y':5,'w':40,'h':40})
+        self.call(a,'selection','select','-',value={'session':'invalid-session','layer':'base','page':0,
+                  'entities':[{'kind':'object','id':'base-scope'}]},ok=False)
+        self.assertEqual(set(self.call(a,'snapshot')['leases']),{'1:object:scoped'})
+        self.call(a,'selection','deselect','invalid-session')
+        self.call(a,'layer','hide','other')
+        self.call(a,'selection','select','-',value=request,ok=False)
+        self.assertEqual(self.call(a,'snapshot')['leases'],{})
+
     def test_preview_is_ephemeral_cancellable_and_expires_with_lease(self):
         a=self.proxy('preview')
         self.call(a,'object','put','-',value={'object':'preview-object','shape':'rect','x':5,'y':5,'w':50,'h':40})

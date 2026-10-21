@@ -31,5 +31,16 @@ public final class LayerEditor {
     public Collection<DrawItem> items(){return Collections.unmodifiableCollection(items.values());}
     public DrawItem resolve(String kind,String id){DrawItem item=items.get(kind+":"+id);Model.require(item!=null,"Item is outside the editable layer/page: "+id);return item;}
     public List<Object> resolve(List<Object> refs){for(Object raw:refs){Map<String,Object> r=map(raw);resolve(string(r,"kind"),string(r,"id"));}return refs;}
+    /** Check explicit references without constructing every item in the layer. */
+    public static void requireReferences(Model model,String layer,int page,List<Object> refs){
+        Model.require(model.layers.containsKey(layer)&&!Boolean.FALSE.equals(model.layerActive.get(layer)),"Layer is not editable");
+        Model.require(page>=0&&page<=10000,"Invalid page");
+        for(Object raw:refs){Map<String,Object> ref=map(raw);String kind=string(ref,"kind"),id=string(ref,"id");
+            Map<String,Object> item="stroke".equals(kind)?model.strokes.get(id):"object".equals(kind)?model.objects.get(id):null;
+            boolean active=!Boolean.FALSE.equals(("stroke".equals(kind)?model.active:model.objectActive).get(id));
+            Model.require(item!=null&&active&&layer.equals(item.get("layer"))&&((Number)item.get("page")).intValue()==page,
+                    "Item is outside the editable layer/page: "+id);
+        }
+    }
     public List<Object> select(double[][] region,boolean topmost,Coverage.Factory factory){List<DrawItem> ordered=new ArrayList<>(items.values());Collections.reverse(ordered);List<Object> out=new ArrayList<>();for(DrawItem item:ordered)if(region==null?item.hasCoverage(factory):item.intersects(region,factory)){out.add(item.ref());if(topmost)break;}return out;}
 }

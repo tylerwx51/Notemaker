@@ -22,6 +22,12 @@ The editor session selects a layer from the stack and opens a LayerEditor bound
 to that layer and page. Candidate lookup starts in that layer's collection or
 spatial index; it never scans a document-wide item list to filter layer IDs.
 Selection and modification operate only on items resolved through this scope.
+For a selection lease request that already names item IDs, resolve each ID
+directly against the scoped model and active flags instead of constructing all
+drawn items in the layer. The proxy repeats this narrow check inside its atomic
+coordination update so a concurrent edit cannot grant a lease to an item that
+has left the editable layer or page. Geometric hit testing still uses DrawItem
+coverage to decide which IDs the editor requests.
 
 Coverage is the support of the item's own rendered alpha after clipping and
 erasure: alpha > 0, before compositing with the page or other items. White opaque
