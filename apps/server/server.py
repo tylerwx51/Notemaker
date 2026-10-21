@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from svg_asset import validate_svg
 from agent.chats import Chats, ChatError
+from ui_sessions import UiSessions
 
 LOCK = threading.Lock()
 CHANGES = threading.Condition(LOCK)
@@ -23,6 +24,7 @@ GENERATION = 0
 DB = None
 CHATS = None
 PREVIEWS = {}
+UI = UiSessions()
 
 def validate(op, nested=False):
     if not isinstance(op, dict) or not isinstance(op.get('id'), str) or len(op['id']) > 200:
@@ -259,6 +261,8 @@ class Handler(BaseHTTPRequestHandler):
                 documents = [r[0] for r in DB.execute('SELECT DISTINCT document FROM events WHERE document NOT IN (SELECT document FROM deleted_documents)')]
                 deleted = [r[0] for r in DB.execute('SELECT document FROM deleted_documents ORDER BY document')]
             return self.reply(200, {'id': identity, 'rootId': identity, 'kind': 'server', 'protocol': 3, 'lineage': [], 'documents': documents, 'deletedDocuments': deleted})
+        if url.path == '/api/ui/sessions':
+            return self.reply(200, UI.list())
         if url.path == '/api/stream':
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -338,6 +342,16 @@ class Handler(BaseHTTPRequestHandler):
         global GENERATION
         if self.chat_request():
             return
+        if urlparse(self.path).path in ('/api/ui/heartbeat', '/api/ui/command'):
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 1_000_000: raise ValueError('Invalid UI request length')
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict): raise ValueError('UI request must be an object')
+                response = UI.heartbeat(body) if urlparse(self.path).path == '/api/ui/heartbeat' else UI.command(body)
+                return self.reply(200, response)
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+                return self.reply(400, {'error': str(error)})
         if urlparse(self.path).path == '/api/locks':
             global GENERATION
             try:

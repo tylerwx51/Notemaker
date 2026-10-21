@@ -126,6 +126,9 @@ class Chats:
 
     def send(self, identity, body, documents):
         prompt = {key: string(body, key, 32000 if key == 'text' else 200) for key in ('request', 'text', 'document')}
+        # Older clients and already saved retry payloads may lack a UI session.
+        if 'session' in body:
+            prompt['session'] = string(body, 'session')
         payload = json.dumps(prompt, sort_keys=True)
         with self.cv, self.db:
             chat = self._chat(identity)
@@ -141,7 +144,7 @@ class Chats:
             if len(self.active) >= 4:
                 raise ChatError('Four chats are already running; stop one or try again', 409)
             self.db.execute('INSERT INTO chat_requests VALUES(?,?,?)', (identity, prompt['request'], payload))
-            self._event(identity, dict(kind='user', id=prompt['request'], text=prompt['text'], document=prompt['document']))
+            self._event(identity, dict(kind='user', id=prompt['request'], text=prompt['text'], document=prompt['document'], **({'session': prompt['session']} if 'session' in prompt else {})))
             self._event(identity, dict(kind='status', status='running', text='Working…'))
             self.db.execute("UPDATE chats SET status='running', updated=?, title=CASE WHEN title='New chat' THEN ? ELSE title END WHERE id=?", (time.time(), prompt['text'][:70], identity))
             cancel = threading.Event()

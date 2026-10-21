@@ -426,7 +426,7 @@ final class EditorUi {
                 break;
             default:
                 box = popupBody("Documents", "Open a note or start a new one.");
-                menuAction(box, "Browse files…", true, () -> new DocumentBrowser(app).show());
+                menuAction(box, "Browse files…", true, this::showFiles);
                 menuAction(box, "Open or create document…", true, app::documentDialog);
                 menuAction(box, "Edit diagram objects…", !app.model.objects.isEmpty(), app::objectDialog);
                 break;
@@ -607,7 +607,7 @@ final class EditorUi {
     private LinearLayout preferencesPanel(){
         LinearLayout box=popupBody("Toolbar preferences","Keep controls readable on the monochrome display.");
         CheckBox labels=new CheckBox(app);labels.setText("Show tool labels");labels.setTextColor(INK);labels.setButtonTintList(ColorStateList.valueOf(INK));labels.setChecked(showToolLabels);box.addView(labels);
-        labels.setOnCheckedChangeListener((button,checked)->{showToolLabels=checked;app.getSharedPreferences("settings",0).edit().putBoolean("showToolLabels",checked).apply();for(Tool item:tools.values())item.label.setVisibility(checked?View.VISIBLE:View.GONE);});
+        labels.setOnCheckedChangeListener((button,checked)->showToolLabels(checked));
         menuAction(box,"Save current pen as preset…",true,()->savePenPreset());
         return box;
     }
@@ -789,6 +789,23 @@ final class EditorUi {
         dismissPopup();
     }
 
+    void savePenPreset(String label){
+        if(label==null||label.trim().isEmpty())throw new IllegalArgumentException("Preset name is required");
+        android.content.SharedPreferences prefs=app.getSharedPreferences("settings",0);
+        org.json.JSONArray list;
+        try{list=new org.json.JSONArray(prefs.getString("penPresets",""));}catch(Exception error){list=new org.json.JSONArray();}
+        list.put(MainActivity.obj("name",label.trim(),"color",app.color,"width",(int)app.width,"brush",app.brush,"material",app.material));
+        prefs.edit().putString("penPresets",list.toString()).apply();
+    }
+
+    void applyPenPreset(String label){
+        String[] defaults={"Black · 2","Black · 5","Black · 9","Red · 5","Blue · 5"};
+        int[] colors={Color.BLACK,Color.BLACK,Color.BLACK,0xffbd2424,0xff245dbd},widths={2,5,9,5,5};
+        for(int i=0;i<defaults.length;i++)if(defaults[i].equals(label)){applyPenPreset(colors[i],widths[i],"pen",50);return;}
+        try{org.json.JSONArray list=new org.json.JSONArray(app.getSharedPreferences("settings",0).getString("penPresets",""));for(int i=0;i<list.length();i++){org.json.JSONObject preset=list.optJSONObject(i);if(preset!=null&&label.equals(preset.optString("name"))){applyPenPreset(preset.optInt("color",Color.BLACK),preset.optInt("width",5),preset.optString("brush","pen"),preset.optInt("material",50));return;}}}catch(Exception ignored){}
+        throw new IllegalArgumentException("Unknown pen preset: "+label);
+    }
+
     private void savePenPreset() {
         EditText name = new EditText(app);
         name.setSingleLine(true);
@@ -800,17 +817,25 @@ final class EditorUi {
                 .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
                     String label = name.getText().toString().trim();
                     if (label.isEmpty()) label = "Preset " + (app.getSharedPreferences("settings", 0).getString("penPresets", "").length() + 1);
-                    android.content.SharedPreferences prefs = app.getSharedPreferences("settings", 0);
-                    org.json.JSONArray list;
-                    try { list = new org.json.JSONArray(prefs.getString("penPresets", "")); }
-                    catch (Exception e) { list = new org.json.JSONArray(); }
-                    list.put(MainActivity.obj("name", label, "color", app.color, "width", (int) app.width, "brush", app.brush, "material", app.material));
-                    prefs.edit().putString("penPresets", list.toString()).apply();
+                    savePenPreset(label);
                     dismissPopup();
                 }).show();
     }
 
     void dismissPopup() { if (popup != null) { popup.dismiss(); popup = null; } }
+    void openPanel(String kind){
+        if(kind.equals("history")){openTool("history",tools.get("more"));return;}
+        if(kind.equals("conflicts")){showConflictPanel();return;}
+        if(kind.equals("network")){showPopup(networkSettingsPanel(),tools.get("more"),false);return;}
+        if(kind.equals("preferences")){showPopup(preferencesPanel(),tools.get("more"),false);return;}
+        if(kind.equals("presets")){showPopup(presetPanel(),tools.get("pen"),false);return;}
+        if(kind.equals("brushes")){showPopup(brushPanel(),tools.get("pen"),false);return;}
+        Tool anchor=tools.get(kind);if(anchor==null)throw new IllegalArgumentException("Unknown tool or panel: "+kind);openTool(kind,anchor);
+    }
+    String selectedTool(){return selectedTool;}
+    boolean panelShowing(){return popup!=null&&popup.isShowing();}
+    void showFiles(){dismissPopup();new DocumentBrowser(app).show();}
+    void showToolLabels(boolean show){showToolLabels=show;app.getSharedPreferences("settings",0).edit().putBoolean("showToolLabels",show).apply();for(Tool item:tools.values())item.label.setVisibility(show?View.VISIBLE:View.GONE);}
 
     void showConflictPanel() { dismissPopup(); if (connection != null && !app.conflicts.isEmpty()) showPopup(conflictsPanel(), connection, false); }
     void showSelectionPanel() { dismissPopup(); if (tools.get("select") != null) showPopup(selectionPanel(), tools.get("select"), false); }

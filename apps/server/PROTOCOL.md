@@ -190,6 +190,27 @@ direct file writers and standalone CLI sync workers are not.
 
 ## Selection coordination and causal drawing edits
 
+### Live app sessions
+
+`GET /api/ui/sessions` returns `{sessions:[...],scope:"root"}`. Each live record
+contains its Activity UUID, generated device ID and device name, current
+document/page/layer/tool, foreground state, start time, owning proxy ID, and
+server `lastSeen`/`expires` timestamps in Unix milliseconds. These records live
+in memory, expire 12 seconds after the last heartbeat, and do not enter the
+document log. Proxies forward these endpoints along their upstream path; an
+offline proxy can list only sessions reachable beneath it.
+
+`POST /api/ui/heartbeat` accepts `{proxyId,sessions:[state],results:[result]}`
+from a proxy and returns `{commands:[command],acknowledged:[requestId],serverTime}`.
+The owning proxy executes a request ID once and repeats its result until
+acknowledged. `POST /api/ui/command` accepts
+`{session,verb:"state"|"actions"|"action",action,input}` and returns `{result}`.
+Commands travel back to the tablet through its outbound heartbeat, so no
+inbound tablet connection is needed. The CLI exposes this as `ui sessions`,
+`ui state`, `ui actions`, and `ui action` through an authenticated selected proxy.
+UI requests time out after 32 seconds. Check session state before retrying an
+uncertain action. Main-server endpoints use the existing trusted-network model.
+
 The transient `/api/locks?document=NAME` endpoint returns `leases` and `previews`.
 Proxies forward acquisition, renewal, release and preview requests through
 `POST /api/locks`. Entity keys include page, kind and ID. Leases identify an

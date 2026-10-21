@@ -259,6 +259,42 @@ visibility records (a new layer plus 99 new objects is the maximum new diagram).
 
 ## Android embedding
 
+### Live app sessions
+
+Each Activity launch gets a new session UUID. The ID survives background and
+foreground transitions and expires when that Activity is destroyed. A running
+tablet publishes its live session through its configured proxy tree, so a CLI
+connected to any proxy under the same main server can discover and control it:
+
+```sh
+apps/cli/notemaker --proxy-file selected-proxy.json ui sessions
+apps/cli/notemaker --proxy-file selected-proxy.json ui actions SESSION
+apps/cli/notemaker --proxy-file selected-proxy.json ui state SESSION
+printf '{"name":"abc"}' | apps/cli/notemaker --proxy-file selected-proxy.json ui action SESSION document.open -
+printf '{"page":2}' | apps/cli/notemaker --proxy-file selected-proxy.json ui action SESSION page.open -
+```
+
+`ui actions` returns the registry of semantic action names and JSON argument
+shapes. `ui action` returns its name and screen state immediately after dispatch;
+content operations that use the replica worker may finish later. Files controls,
+document/page/layer navigation, tool and brush choices, eraser options, canvas
+view changes, selection controls, templates, history buttons, and Agent panel
+open/close are available. Use the existing document CLI commands for content
+creation and edits. The Files browser currently lists documents without folders.
+
+Each session record includes `deviceId`, `deviceName`, `document`, `page`,
+`layer`, `tool`, `foreground`, `startedAt`, `proxyId`, `lastSeen`, and `expires`.
+The root drops a session after 12 seconds without a heartbeat. When an upstream
+is unreachable, `ui sessions` reports only sessions under the reachable proxy.
+Screen commands require a running Activity and are never journaled or replayed
+after it closes. A timeout means the result is uncertain; inspect `ui state`
+before retrying an action. Keep proxy bearer tokens private. The main server's
+UI endpoints follow its existing trusted-network security model.
+
+Run `nix-shell --run 'python3 tests/ui_sessions_android.py'` for the live API 36
+session check, then `nix-shell --run 'python3 tests/ui_topology_android.py'` for
+the two-proxy, main-server route.
+
 Call `MainActivity.startCli(String... args)` off the UI thread, write input, drain
 stdout **and** stderr concurrently, wait for completion with a timeout, and check
 the exit code. The method returns a standard `java.lang.Process`; orchestration

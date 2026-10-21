@@ -1,5 +1,89 @@
 # Verification
 
+## App session ID in agent chat — 2026-10-21
+
+The Android chat send now includes the current app launch session ID. The server
+journals it with the user message and supplies it to Pi as `app_session_id` in
+the routing context. Legacy requests without a session remain accepted.
+The APK built in the root Nix shell, all 9 `tests/chat_checks.py` checks passed,
+and `tests/chat_ui.py` passed on an API 36 emulator. That Android check compared
+the stored chat request's session ID to the live server session registry.
+
+Backed up the live database and agent data under
+`.test-artifacts/chat-session-deploy-20261021/`, then restarted the existing
+`notemaker-primary` service. Installed the APK on physical BOOX `eac89823`
+with the backed-up `tests/tablet_checks.py --install` workflow. The check
+preserved 64 app files/preferences and 266 existing actions, confirmed zero
+pending edits and a connected proxy, and matched installed APK SHA-256
+`e94cfee9be55ff1bc0d1bb84c8d6d70e494b6676a4b70f92ec879187544b5779`.
+Tablet artifacts: `.test-artifacts/tablet/20261021-132001-341831/`.
+The desktop CLI listed the restarted tablet's session
+`2a27808d-5055-4b1d-bfdc-f0d9ddb1c8fb` with `abc` open. The live Pi provider
+was not invoked for this change; the server-side prompt transformation was
+checked through code review and the API/Android integration checks.
+
+## Networked live app sessions — 2026-10-21
+
+Built the JVM/Android CLI and APK in the root Nix shell. Passed
+`tests/ui_sessions_android.py` and `tests/ui_topology_android.py` with real API
+36 emulator processes and actual CLI calls. The topology check ran a main
+server plus two proxy hops, discovered the Android session with device and
+last-seen metadata at the root, changed the app's open document to `abc` from a
+different proxy, and observed the session expire after the app closed.
+Passed the server (6), proxy (17), and CLI (25) regression checks and
+`git diff --check`.
+
+Backed up the live desktop server database and proxy configuration to
+`.test-artifacts/ui-network-deploy-20261021/`, then restarted the existing
+`notemaker-primary` and `notemaker-desktop` tmux services with the updated
+server and CLI. The main server served `/api/ui/sessions`, its document list
+still contained `abc`, and the desktop CLI returned
+`{"sessions":[],"scope":"root"}` through its authenticated proxy. There
+were no live sessions at the time of that first check.
+
+### Physical Note Air6 C deployment
+
+Later, the tablet appeared as ADB serial `eac89823`. Installed the new APK with
+`tests/tablet_checks.py --serial eac89823 --install --timeout 90` in the Nix
+shell. The backed-up upgrade check passed: 64 app files/preferences and both
+existing document actions were preserved, the proxy reconnected with zero
+pending edits, and the installed APK SHA-256 was
+`1b25f4bc19fd923448c3436497ba48975f421c9b22a0b15e0f57b73873dcee3c`.
+Artifacts are in `.test-artifacts/tablet/20261021-131122-843023/`.
+
+The main server and desktop CLI both listed session
+`c3d3f3ed-fab9-43ad-9ce8-6c1c420f21c6` on `ONYX NoteAir6C`, including its
+device ID, proxy ID, open document, foreground flag, and last-seen/expiry
+times. Through the desktop proxy, `ui action` opened `abc` on the physical
+tablet; a separate `ui state` call confirmed `document: abc`. BOOX E Ink
+refresh and stylus behavior were outside this control check.
+
+## Live app sessions and CLI controls — 2026-10-21
+
+Built the JVM/Android CLI and signed APK inside the root Nix shell. The focused
+`tests/ui_sessions_android.py` check uses actual CLI processes through an ADB
+forward to the tablet's authenticated local proxy. It checks session discovery,
+the action registry, Files browser state, document and page navigation, tool and
+paint controls, background/foreground continuity, and a fresh session ID after
+app restart. The regular CLI suite was also run for regression coverage.
+BOOX E Ink refresh and stylus behavior remain untested.
+
+### Physical tablet deployment — 2026-10-21
+
+Installed the session-control APK on the USB-connected Note Air6 C
+(`eac89823`) using `tests/tablet_checks.py --install --timeout 90` inside the
+Nix shell. The backed-up upgrade check passed: 64 private files/preferences
+were preserved, the installed APK matched SHA-256
+`a65766d9de9b12ba52e4592259ebdd5613665491a1851dea0f93c9a99116b5d7`,
+and the two existing actions in the open `Matplotlib chart grid` note remained
+intact. Its embedded proxy reconnected with zero pending edits. Backups and the
+report are in `.test-artifacts/tablet/20261021-125651-740809/`.
+
+Through an ephemeral ADB forward, the JVM CLI discovered the live session and
+all 35 registered UI actions. A `panel.open` command opened Notes on the tablet,
+and `panel.close` closed it; the open document remained `Matplotlib chart grid`.
+The USB forward was removed afterward. No home-server deployment was needed.
+
 ## File browser — 2026-10-14
 
 The grid/list follow-up also passes the APK build and isolated offline browser

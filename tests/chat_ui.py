@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from chat_checks import ChatChecks, ROOT
 
@@ -124,6 +125,13 @@ try:
         config = check.get('/api/chats/' + chat)
         assert config['model'] == 'gpt-5.6-luna' and config['effort'] == 'high', config
         assert check.wait_done(chat)['status'] == 'done'
+        with sqlite3.connect(check.data / 'chat.sqlite3') as db:
+            sent = json.loads(db.execute('SELECT payload FROM chat_requests WHERE chat=?', (chat,)).fetchone()[0])
+        app_session = sent['session']
+        assert str(uuid.UUID(app_session)) == app_session, sent
+        assert sent['document'] == 'chat-ui' and sent['text'] == 'Hello-agent', sent
+        sessions = check.get('/api/ui/sessions')['sessions']
+        assert any(row['session'] == app_session for row in sessions), sessions
         wait(lambda: any('Mock response: Hello-agent' in n.attrib.get('text', '') for n in tree().iter('node')))
         tap('Expand tool activity'); capture('conversation')
         assert any('no document was read or changed' in n.attrib.get('text', '') for n in tree().iter('node'))

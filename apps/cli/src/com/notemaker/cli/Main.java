@@ -21,6 +21,8 @@ public final class Main {
         + "--actor ID                 Stable editing identity; default NOTEMAKER_ACTOR, otherwise cli\n"
         + "--proxy-file FILE          Selected proxy; default NOTEMAKER_PROXY_FILE\n"
         + "--help                     Show this help without contacting a server\n\n"
+        + "ui sessions | ui state SESSION | ui actions SESSION\n"
+        + "ui action SESSION NAME FILE|-   Control one running app session with JSON arguments\n"
         + "serve [PORT [UPSTREAM]]     Start replica proxy; upstream URL or descriptor\n"
         + "document create [fixed|pages|infinite] | document delete | document list\ninspect | status | log\n"
         + "diagram add FILE|-         Atomic new layer and editable diagram objects\n"
@@ -74,13 +76,15 @@ public final class Main {
             if(cmd.equals("svg")){value=svgInput(a.subList(1,a.size()));a=new ArrayList<>(Arrays.asList("svg","add","-"));}
             else if(cmd.equals("image")){Map<String,Object> placement=imagePlacement(a);placement.put("shape","image");placement.put("image",ImageAsset.fromBytes(imageBytes(a.get(2))));value=placement;a=new ArrayList<>(Arrays.asList("image","add","-"));}
             else if((cmd.equals("selection")&&a.size()==3&&Arrays.asList("select","paste","query").contains(a.get(1)))||(cmd.equals("transform")&&a.size()==3&&Arrays.asList("preview","commit").contains(a.get(1)))){int last=a.size()-1;value=input(a.get(last));a.set(last,"-");}
+            else if(cmd.equals("ui")&&a.size()==5&&a.get(1).equals("action")){value=input(a.get(4));a.set(4,"-");}
             else if(cmd.equals("append")||cmd.equals("settings")||cmd.equals("apply")||cmd.equals("diagram")||cmd.equals("erase")||cmd.equals("fill")||cmd.equals("template")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke")||cmd.equals("image"))&&(a.contains("put")||a.contains("update")||a.contains("add")))){
                 int last=a.size()-1;value=input(a.get(last));a.set(last,"-");
             }
             if(cmd.equals("export"))remoteModel=Model.fromJson(map(LocalProxy.request(descriptor,doc,actor,Arrays.asList("inspect"),null)));
             else return LocalProxy.request(descriptor,doc,actor,a,value);
         }
-        String command=a.remove(0);File directory=new File(state);Store store=remoteModel==null?(Boolean.TRUE.equals(inProxy.get())?Store.writer(directory,doc):new Store(directory,doc)):null;
+        String command=a.remove(0);if(command.equals("ui"))throw new IllegalArgumentException("UI commands require the running tablet's local --proxy-file");
+        File directory=new File(state);Store store=remoteModel==null?(Boolean.TRUE.equals(inProxy.get())?Store.writer(directory,doc):new Store(directory,doc)):null;
         boolean readOnly=Arrays.asList("inspect","snapshot","status","log","export","serve").contains(command)||(command.equals("document")&&a.equals(Arrays.asList("list")))||(command.equals("shape")&&a.equals(Arrays.asList("list")));
         require(readOnly||Boolean.TRUE.equals(inProxy.get()),"Writes and synchronization require --proxy-file (or NOTEMAKER_PROXY_FILE); start the selected proxy with serve");
         final String actionActor=actor;

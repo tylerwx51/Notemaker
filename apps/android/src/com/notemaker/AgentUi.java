@@ -65,6 +65,7 @@ final class AgentUi {
         }
     }
     void dismiss() { if (dialog != null) dialog.dismiss(); }
+    boolean showing() { return dialog != null && dialog.isShowing(); }
     void destroy() { dismiss(); requests.shutdownNow(); }
     void show() {
         if (dialog != null && dialog.isShowing()) return;
@@ -249,7 +250,7 @@ final class AgentUi {
     private void send() {
         if (pending == null) {
             String value = input.getText().toString().trim(); if(value.isEmpty())return;
-            pending=MainActivity.obj("request",UUID.randomUUID().toString(),"text",value,"document",app.document);
+            pending=MainActivity.obj("request",UUID.randomUUID().toString(),"text",value,"document",app.document,"session",app.appSessionId);
             app.getSharedPreferences("settings",0).edit().putString(pendingKey(),pending.toString()).apply();
         }
         final JSONObject message = pending; final String key=pendingKey(), draft=draftKey(), url=base+"/api/chats/"+chat+"/messages";

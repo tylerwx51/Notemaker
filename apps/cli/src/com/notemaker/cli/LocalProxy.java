@@ -22,6 +22,18 @@ public final class LocalProxy implements Closeable {
     private final Set<Socket> sockets=ConcurrentHashMap.newKeySet();
     private final Map<String,Store> documents=new ConcurrentHashMap<>();
     private final Map<String,Object> ephemeralPreviews=new ConcurrentHashMap<>();
+    /** Live tablet screens are process-local and never enter the replica journal. */
+    public interface UiSession { Object request(String verb,String action,Map<String,Object> input) throws Exception; }
+    private final Map<String,UiSession> uiSessions=new ConcurrentHashMap<>();
+    private final UiHub uiHub=new UiHub();
+    private final Map<String,Map<String,Object>> uiResults=new ConcurrentHashMap<>();
+    private final Set<String> uiInFlight=ConcurrentHashMap.newKeySet();
+    private volatile Endpoint uiUpstream;
+    public void registerUiSession(String session,UiSession handler){require(session!=null&&!session.isEmpty(),"Session ID is required");uiSessions.put(session,handler);wakeUi();}
+    public void unregisterUiSession(String session){uiSessions.remove(session);wakeUi();}
+    public void setUiUpstream(Map<String,Object> descriptor){uiUpstream=descriptor==null?null:new Endpoint(descriptor);wakeUi();}
+    private Endpoint uiPeer(){Endpoint chosen=uiUpstream;return chosen==null?upstream:chosen;}
+    private void wakeUi(){synchronized(changes){changes.notifyAll();}}
     private final Object changes=new Object();
     private final Map<String,Object> settings;
     private final String id,token;
@@ -40,7 +52,7 @@ public final class LocalProxy implements Closeable {
     private final List<CompletableFuture<Map<String,Object>>> requests=new ArrayList<>();
     public final Map<String,Boolean> connected=new ConcurrentHashMap<>();
     public final Map<String,String> errors=new ConcurrentHashMap<>();
-    private final Thread acceptor,synchronizer,subscriber;
+    private final Thread acceptor,synchronizer,subscriber,uiWorker;
 
     public LocalProxy(File directory,int port) throws IOException {
         this.directory=directory;Files.createDirectories(directory.toPath());
@@ -78,10 +90,10 @@ public final class LocalProxy implements Closeable {
         } catch(Exception e){ownership.release();owner.close();listener.close();throw new IOException(e);}
         // Long-lived streams must not exhaust a fixed command-worker pool.
         acceptor=new Thread(()->{while(running)try{Socket socket=listener.accept();sockets.add(socket);clients.execute(()->handle(socket));}catch(IOException e){if(running)System.err.println("Proxy accept: "+e);}},"local-proxy");
-        synchronizer=new Thread(this::syncLoop,"proxy-sync");subscriber=new Thread(this::subscribe,"proxy-notifications");
+        synchronizer=new Thread(this::syncLoop,"proxy-sync");subscriber=new Thread(this::subscribe,"proxy-notifications");uiWorker=new Thread(this::uiLoop,"proxy-ui-sessions");
         synchronized(changes){uploadDue=hasPending()?now()+500:Long.MAX_VALUE;}
         Timing.mark("proxy_pending_checked");
-        acceptor.start();synchronizer.start();subscriber.start();Runtime.getRuntime().addShutdownHook(new Thread(()->{try{close();}catch(IOException ignored){}} ,"notemaker-proxy-shutdown"));
+        acceptor.start();synchronizer.start();subscriber.start();uiWorker.start();Runtime.getRuntime().addShutdownHook(new Thread(()->{try{close();}catch(IOException ignored){}} ,"notemaker-proxy-shutdown"));
     }
     private static long now(){return System.nanoTime()/1000000;}
     private void durable(File destination,Object value) throws IOException {
@@ -197,6 +209,37 @@ public final class LocalProxy implements Closeable {
             if(peer==upstream)throw new IOException("Notification stream ended");
         }catch(InterruptedException e){return;}catch(Exception e){try{Thread.sleep(backoff);}catch(InterruptedException stop){return;}backoff=Math.min(30000,backoff*2);}
     }
+    private Map<String,Object> uiRelay(String path,Map<String,Object> body) throws Exception {
+        Endpoint peer=uiPeer();
+        if(peer!=null)try{return peer.request(path,body);}catch(Endpoint.HttpError rejected){throw rejected;}catch(IOException unavailable){if(path.equals("/api/ui/command"))throw unavailable;/* Keep reachable child sessions usable while the ancestor is offline. */}
+        if(path.equals("/api/ui/sessions")){Map<String,Object> listing=uiHub.list();if(peer!=null){listing.put("scope","reachable");listing.put("upstreamConnected",false);}return listing;}
+        if(path.equals("/api/ui/heartbeat"))return uiHub.heartbeat(body);
+        if(path.equals("/api/ui/command"))return uiHub.command(body);
+        throw new IllegalArgumentException("Unknown UI route");
+    }
+    private void uiLoop(){boolean sentPresence=false;
+        while(running)try{
+            List<Object> states=new ArrayList<>();
+            for(Map.Entry<String,UiSession> entry:uiSessions.entrySet())try{states.add(entry.getValue().request("state","",object()));}catch(Exception unavailable){/* The Activity will unregister or recover. */}
+            if(!states.isEmpty()||sentPresence||!uiResults.isEmpty()){
+                Map<String,Object> heartbeat=object("proxyId",id,"sessions",states,"results",new ArrayList<>(uiResults.values()));
+                Map<String,Object> reply=uiRelay("/api/ui/heartbeat",heartbeat);
+                sentPresence=!states.isEmpty();
+                for(Object value:list(reply.getOrDefault("acknowledged",Collections.emptyList()))){String key=String.valueOf(value);uiResults.remove(key);uiInFlight.remove(key);}
+                for(Object value:list(reply.getOrDefault("commands",Collections.emptyList()))){Map<String,Object> command=map(value);String key=string(command,"requestId");if(!uiInFlight.add(key))continue;
+                    clients.execute(()->{
+                        Map<String,Object> result=object("requestId",key);
+                        try{UiSession handler=uiSessions.get(string(command,"session"));require(handler!=null,"App session is closed");result.put("value",handler.request(string(command,"verb"),string(command,"action"),map(command.get("input"))));}
+                        catch(Exception error){result.put("error",error.toString());}
+                        uiResults.put(key,result);wakeUi();
+                    });
+                }
+            }
+            synchronized(changes){if(running)changes.wait(1000);}
+        }catch(InterruptedException stop){return;}catch(Exception failure){
+            synchronized(changes){try{if(running)changes.wait(1000);}catch(InterruptedException stop){return;}}
+        }
+    }
     private Map<String,Object> syncCommand(String document,String target) throws Exception {
         if(target!=null)configure(document,target);require(upstream!=null,"No upstream configured");
         CompletableFuture<Map<String,Object>> result=new CompletableFuture<>();synchronized(changes){requests.add(result);uploadDue=Math.min(uploadDue,now()+500);changes.notifyAll();}
@@ -206,13 +249,14 @@ public final class LocalProxy implements Closeable {
     public void await() throws InterruptedException {acceptor.join();}
     @Override public void close() throws IOException {
         if(!closed.compareAndSet(false,true))return;
+        uiSessions.clear();
         for(Map.Entry<String,Store> entry:documents.entrySet())try{String doc=entry.getKey();releaseOwned(entry.getValue(),doc,null);for(String key:new ArrayList<>(ephemeralPreviews.keySet()))if(key.startsWith(doc+":")){Map<String,Object> preview=map(ephemeralPreviews.get(key));if(id.equals(preview.get("owner"))&&ephemeralPreviews.remove(key,preview))forwardPreviewClear(doc,String.valueOf(preview.get("session")),String.valueOf(preview.get("actor")));}}catch(Exception ignored){}
         running=false;listener.close();HttpURLConnection active=stream;if(active!=null)active.disconnect();
-        synchronizer.interrupt();subscriber.interrupt();synchronized(changes){changes.notifyAll();for(CompletableFuture<Map<String,Object>> request:requests)request.completeExceptionally(new IOException("Proxy closed"));}
+        synchronizer.interrupt();subscriber.interrupt();uiWorker.interrupt();synchronized(changes){changes.notifyAll();for(CompletableFuture<Map<String,Object>> request:requests)request.completeExceptionally(new IOException("Proxy closed"));}
         for(Socket socket:sockets)try{socket.close();}catch(IOException ignored){}clients.shutdownNow();
         // Never release ownership while an old writer can still commit.
         boolean interrupted=false;
-        while(synchronizer.isAlive()||subscriber.isAlive()||!clients.isTerminated())try{synchronizer.join();subscriber.join();clients.awaitTermination(1,TimeUnit.SECONDS);}catch(InterruptedException e){interrupted=true;}
+        while(synchronizer.isAlive()||subscriber.isAlive()||uiWorker.isAlive()||!clients.isTerminated())try{synchronizer.join();subscriber.join();uiWorker.join();clients.awaitTermination(1,TimeUnit.SECONDS);}catch(InterruptedException e){interrupted=true;}
         ownership.release();owner.close();
         if(interrupted)Thread.currentThread().interrupt();
     }
@@ -231,7 +275,9 @@ public final class LocalProxy implements Closeable {
             if(path.equals("/api/chats")||path.startsWith("/api/chats/")){
                 forwardChat(connection,parts[0],uri,requestBody);return;
             }
-            if(parts[0].equals("GET")&&path.equals("/api/info"))response=info(q.getOrDefault("trail",""),q.containsKey("validate"));
+            if(parts[0].equals("GET")&&path.equals("/api/ui/sessions"))response=uiRelay(path,null);
+            else if(parts[0].equals("POST")&&(path.equals("/api/ui/heartbeat")||path.equals("/api/ui/command")))response=uiRelay(path,body);
+            else if(parts[0].equals("GET")&&path.equals("/api/info"))response=info(q.getOrDefault("trail",""),q.containsKey("validate"));
             else if(parts[0].equals("GET")&&path.equals("/api/replica")){
                 String doc=q.getOrDefault("document","notes");activeDocument=doc;boolean fresh=!documents.containsKey(doc);response=store(doc).replica(Integer.parseInt(q.getOrDefault("after","0")),Integer.parseInt(q.getOrDefault("pendingAfter","0")));if(fresh)wakeFetch();
             }else if(parts[0].equals("GET")&&path.equals("/api/locks")){response=lockState(store(q.getOrDefault("document","notes")).read());}
@@ -269,7 +315,17 @@ public final class LocalProxy implements Closeable {
     public Object execute(Map<String,Object> body) throws Exception {
         require(running,"Proxy is closed");
         List<String> args=new ArrayList<>();for(Object value:list(body.get("args"))){require(value instanceof String&&!((String)value).startsWith("--"),"Proxy options belong in document/actor fields");args.add((String)value);}require(!args.isEmpty(),"Missing command");
-        String doc=(String)body.getOrDefault("document","notes"),actor=(String)body.getOrDefault("actor","cli");activeDocument=doc;Store local=store(doc);String cmd=args.get(0);
+        String doc=(String)body.getOrDefault("document","notes"),actor=(String)body.getOrDefault("actor","cli");String cmd=args.get(0);
+        if(cmd.equals("ui")){
+            require(args.size()>=2,"ui sessions|state SESSION|actions SESSION|action SESSION NAME -");
+            String verb=args.get(1);
+            if(verb.equals("sessions")){require(args.size()==2,"ui sessions");Map<String,Object> result=uiRelay("/api/ui/sessions",null);List<Object> sessions=list(result.get("sessions"));for(Map.Entry<String,UiSession> entry:uiSessions.entrySet())if(sessions.stream().noneMatch(item->entry.getKey().equals(map(item).get("session"))))try{sessions.add(entry.getValue().request("state","",object()));}catch(Exception unavailable){sessions.add(object("session",entry.getKey(),"error",unavailable.toString()));}return result;}
+            require(args.size()>=3,"Session ID is required");String session=args.get(2);UiSession handler=uiSessions.get(session);
+            if(verb.equals("state")||verb.equals("actions")){require(args.size()==3,"ui "+verb+" SESSION");return handler!=null?handler.request(verb,"",object()):uiRelay("/api/ui/command",object("session",session,"verb",verb,"action","","input",object())).get("result");}
+            require(verb.equals("action")&&args.size()==5&&args.get(4).equals("-"),"ui action SESSION NAME FILE|-");
+            return handler!=null?handler.request("action",args.get(3),map(body.get("input"))):uiRelay("/api/ui/command",object("session",session,"verb","action","action",args.get(3),"input",map(body.get("input")))).get("result");
+        }
+        activeDocument=doc;Store local=store(doc);
         if(cmd.equals("snapshot")){
             require(args.size()==1,"snapshot takes no arguments");Map<String,Object> state=local.read();Collaboration.expire(state,System.currentTimeMillis());
             Map<String,Object> result=Main.snapshot(state);result.put("leases",copy(state.getOrDefault("leases",object())));result.put("previews",previewSnapshot(doc,state));return result;

@@ -12,6 +12,10 @@ import static com.notemaker.core.Json.*;
 /** HTTP peer, optionally authenticated with a private proxy descriptor. */
 public final class Endpoint {
     public final Map<String,Object> descriptor;
+    public static final class HttpError extends IOException {
+        public final int status;
+        public HttpError(int status,String message){super(message);this.status=status;}
+    }
     private static final class RequestState { final AtomicBoolean cancelled=new AtomicBoolean(); volatile HttpURLConnection connection; }
     private final Map<Thread,RequestState> activeRequests=new ConcurrentHashMap<>();
     public Endpoint(Map<String,Object> descriptor) { this.descriptor=descriptor; }
@@ -24,7 +28,7 @@ public final class Endpoint {
     public HttpURLConnection open(String path) throws IOException {
         HttpURLConnection c=(HttpURLConnection)new URL(string(descriptor,"url")+path).openConnection();
         c.setConnectTimeout(3000);
-        c.setReadTimeout(path.equals("/command")?40000:path.startsWith("/api/locks")||path.startsWith("/api/replica")||path.startsWith("/api/info")?2000:path.startsWith("/api/stream")?45000:5000);
+        c.setReadTimeout(path.equals("/command")||path.equals("/api/ui/command")?40000:path.startsWith("/api/locks")||path.startsWith("/api/replica")||path.startsWith("/api/info")?2000:path.startsWith("/api/stream")?45000:5000);
         if(descriptor.containsKey("token"))c.setRequestProperty("Authorization","Bearer "+string(descriptor,"token"));
         return c;
     }
@@ -37,11 +41,11 @@ public final class Endpoint {
             if(body!=null&&path.startsWith("/api/events"))c.setReadTimeout(40000);
             if(body!=null){byte[] bytes=write(body).getBytes(StandardCharsets.UTF_8);c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");c.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=c.getOutputStream()){out.write(bytes);}}
             int status=c.getResponseCode();InputStream source=status==200?c.getInputStream():c.getErrorStream();
-            if(source==null)throw new IOException("Peer HTTP "+status);
+            if(source==null)throw new HttpError(status,"Peer HTTP "+status);
             try(InputStream in=source;ByteArrayOutputStream bytes=new ByteArrayOutputStream()){
                 byte[] buffer=new byte[8192];int n;while((n=in.read(buffer))!=-1)bytes.write(buffer,0,n);
                 Map<String,Object> result=map(parse(bytes.toString("UTF-8")));
-                if(status!=200)throw new IOException(String.valueOf(result.get("error")));return result;
+                if(status!=200)throw new HttpError(status,String.valueOf(result.get("error")));return result;
             }
         } finally {activeRequests.remove(thread,state);if(c!=null)c.disconnect();}
     }

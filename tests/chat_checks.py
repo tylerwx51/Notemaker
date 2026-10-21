@@ -79,7 +79,10 @@ class ChatChecks(unittest.TestCase):
 
     def test_streaming_reconnect_and_idempotency(self):
         chat = self.create()
-        body = self.send(chat, 'stream ' * 30)
+        session = str(uuid.uuid4())
+        body = {'request': str(uuid.uuid4()), 'text': 'stream ' * 30,
+                'document': 'chat-check', 'session': session}
+        self.post(f'/api/chats/{chat}/messages', body)
         with urllib.request.urlopen(self.url + f'/api/chats/{chat}/stream', timeout=10) as response:
             observed = []
             for line in response:
@@ -96,6 +99,8 @@ class ChatChecks(unittest.TestCase):
         self.assertEqual(self.wait_done(chat)['status'], 'done')
         tail = self.get(f'/api/chats/{chat}/events?after={observed[-1]["seq"]}')['events']
         all_events = self.get(f'/api/chats/{chat}/events')['events']
+        self.assertEqual(next(row['event']['session'] for row in all_events
+                              if row['event']['kind'] == 'user'), session)
         self.assertEqual(observed + tail, all_events)
         self.assertEqual(sum(row['event']['kind'] == 'user' for row in all_events), 1)
         self.assertIn('tool_end', [row['event']['kind'] for row in all_events])
@@ -200,6 +205,11 @@ class ChatChecks(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as origin:
             urllib.request.urlopen(req)
         self.assertEqual(origin.exception.code, 403)
+        chat = self.create()
+        with self.assertRaises(urllib.error.HTTPError):
+            self.post(f'/api/chats/{chat}/messages',
+                      {'request': str(uuid.uuid4()), 'text': 'hello',
+                       'document': 'chat-check', 'session': ''})
 
     def test_pi_stop_during_startup(self):
         chat = self.create('pi')

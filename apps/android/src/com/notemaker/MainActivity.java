@@ -15,6 +15,11 @@ import com.notemaker.core.*;
 
 public class MainActivity extends Activity {
     private static final int SVG_PICK_REQUEST = 4512, IMAGE_PICK_REQUEST = 4513;
+    String appSessionId;
+    String deviceId;
+    long appSessionStartedAt;
+    UiActions uiActions;
+    DocumentBrowser browser;
     final Object lock = new Object();
     int eventCount, pendingCount;
     final LinkedHashMap<String,JSONObject> optimistic=new LinkedHashMap<>();
@@ -94,11 +99,14 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b){
         long startupStarted=System.nanoTime();
         super.onCreate(b);
+        appSessionId=UUID.randomUUID().toString();
+        appSessionStartedAt=System.currentTimeMillis();
         boolean startupTrace=getPackageName().equals("com.notemaker.latency");
         traceColdLoad=startupTrace;startupEpoch=startupStarted;
         traceColdDraw=startupTrace;
         startupMark(startupTrace,"super_done",startupStarted);
         android.content.SharedPreferences prefs=getSharedPreferences("settings",0);
+        deviceId=prefs.getString("uiDeviceId","");if(deviceId.isEmpty()){deviceId=UUID.randomUUID().toString();prefs.edit().putString("uiDeviceId",deviceId).apply();}
         scribbleToErase=prefs.getBoolean("scribbleToErase",false);
         freeformLasso=prefs.getBoolean("freeformLasso",false);
         material=Math.max(0,Math.min(100,prefs.getInt("penMaterial",50)));
@@ -128,10 +136,12 @@ public class MainActivity extends Activity {
         update();
         startupMark(startupTrace,"update_done",startupStarted);
         configureProxy();
+        uiActions=new UiActions(this);
+        try{com.notemaker.cli.LocalProxy local=ReplicaService.ensure(this);local.setUiUpstream(replica.remote()?replica.descriptor:null);local.registerUiSession(appSessionId,uiActions);}catch(Exception error){android.util.Log.e("NoteMaker","Cannot register app session",error);}
         startupMark(startupTrace,"configure_done",startupStarted);
 
     }
-    @Override public void onDestroy(){running=false;if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);if(previewExpiryTask!=null)selectionHandler.removeCallbacks(previewExpiryTask);if(previewDispatchTask!=null)selectionHandler.removeCallbacks(previewDispatchTask);AppReplica departing=replica;if(departing!=null&&selectionSession!=null)ReplicaService.writes.execute(()->{try{departing.command(Arrays.asList("selection","disconnect"),null);}catch(Exception ignored){}});if(replica!=null)replica.close();if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
+    @Override public void onDestroy(){running=false;if(ReplicaService.proxy!=null)ReplicaService.proxy.unregisterUiSession(appSessionId);if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);if(previewExpiryTask!=null)selectionHandler.removeCallbacks(previewExpiryTask);if(previewDispatchTask!=null)selectionHandler.removeCallbacks(previewDispatchTask);AppReplica departing=replica;if(departing!=null&&selectionSession!=null)ReplicaService.writes.execute(()->{try{departing.command(Arrays.asList("selection","disconnect"),null);}catch(Exception ignored){}});if(replica!=null)replica.close();if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
     @Override protected void onStart(){super.onStart();foreground=true;}
     @Override protected void onStop(){
         foreground=false;
@@ -148,6 +158,7 @@ public class MainActivity extends Activity {
     File stateFile(){return store.file;}
     void configureProxy(){
         final AppReplica target=replica;final String targetType=type;
+        if(uiActions!=null)try{ReplicaService.ensure(this).setUiUpstream(target.remote()?target.descriptor:null);}catch(Exception error){android.util.Log.e("NoteMaker","Cannot update UI session route",error);}
         if(!target.remote())startService(new Intent(this,ReplicaService.class).putExtra("document",document).putExtra("host",host));
         else ReplicaService.writes.execute(()->{try{
             Map<String,Object> initial=target.read();
@@ -414,7 +425,9 @@ public class MainActivity extends Activity {
 
     /** Launches the compiled CLI under this app's UID, using the installed APK as classpath. */
     public java.lang.Process startCli(String... arguments) throws IOException {
-        ArrayList<String> command=new ArrayList<>(Arrays.asList("/system/bin/app_process","/system/bin","com.notemaker.cli.Main","--proxy-file",replica.descriptorFile.getAbsolutePath(),"--document",document));
+        boolean uiCommand=false;for(int i=0;i<arguments.length;i++){if(arguments[i].startsWith("--")){i++;continue;}uiCommand=arguments[i].equals("ui");break;}
+        File descriptor=uiCommand?new File(getFilesDir(),"proxy.json"):replica.descriptorFile;
+        ArrayList<String> command=new ArrayList<>(Arrays.asList("/system/bin/app_process","/system/bin","com.notemaker.cli.Main","--proxy-file",descriptor.getAbsolutePath(),"--document",document));
         command.addAll(Arrays.asList(arguments));ProcessBuilder builder=new ProcessBuilder(command);builder.environment().put("CLASSPATH",getApplicationInfo().sourceDir);return builder.start();
     }
     void objectDialog(){synchronized(lock){

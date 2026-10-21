@@ -211,7 +211,10 @@ class PiHarness:
         settled = False
         try:
             # Small routing context only, not a prebuilt dump of the user's notes.
-            message = json.dumps({'current_document': prompt['document'], 'server_documents': documents}, ensure_ascii=False)
+            context = {'current_document': prompt['document'], 'server_documents': documents}
+            if 'session' in prompt:
+                context['app_session_id'] = prompt['session']
+            message = json.dumps(context, ensure_ascii=False)
             message += '\n\n' + prompt['text']
             process.stdin.write((json.dumps(dict(id=prompt['request'], type='prompt', message=message)) + '\n').encode())
             process.stdin.flush()

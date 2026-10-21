@@ -28,11 +28,14 @@ final class DocumentBrowser {
     private final Set<String> loading=new HashSet<>(), failed=new HashSet<>();
     private TextView status;
     private EditText search;
+    private RadioGroup modeGroup;
+    private int gridButtonId,listButtonId;
     private boolean loaded;
 
     DocumentBrowser(MainActivity app){this.app=app;source=app.replica;}
 
     void show(){
+        app.browser=this;
         LinearLayout body=new LinearLayout(app);body.setOrientation(1);
         int padding=app.editor.dp(20);body.setPadding(padding,0,padding,0);
         TextView scope=new TextView(app);
@@ -42,6 +45,7 @@ final class DocumentBrowser {
         RadioGroup modes=new RadioGroup(app);modes.setOrientation(LinearLayout.HORIZONTAL);
         RadioButton grid=new RadioButton(app);grid.setId(View.generateViewId());grid.setText("Grid");modes.addView(grid);
         RadioButton list=new RadioButton(app);list.setId(View.generateViewId());list.setText("List");modes.addView(list);
+        modeGroup=modes;gridButtonId=grid.getId();listButtonId=list.getId();
         modes.check(gridMode?grid.getId():list.getId());body.addView(modes);
         status=new TextView(app);body.addView(status);
         files=new GridView(app);files.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
@@ -66,12 +70,18 @@ final class DocumentBrowser {
         });
         dialog=new AlertDialog.Builder(app).setTitle("Files").setView(body)
             .setPositiveButton("New file",null).setNeutralButton("Refresh",null).setNegativeButton("Close",null).create();
-        dialog.setOnDismissListener(d->{closed=true;previews.shutdownNow();thumbnails.evictAll();});
+        dialog.setOnDismissListener(d->{closed=true;if(app.browser==this)app.browser=null;previews.shutdownNow();thumbnails.evictAll();});
         dialog.setOnShowListener(d->{
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->create());
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->refresh());refresh();
         });dialog.show();
     }
+    void dismiss(){if(dialog!=null)dialog.dismiss();}
+    boolean showing(){return dialog!=null&&dialog.isShowing();}
+    void search(String query){search.setText(query);}
+    void mode(String value){if(!value.equals("grid")&&!value.equals("list"))throw new IllegalArgumentException("Mode must be grid or list");modeGroup.check(value.equals("grid")?gridButtonId:listButtonId);}
+    void refreshNow(){refresh();}
+    Map<String,Object> state(){return Json.object("mode",gridMode?"grid":"list","query",search.getText().toString(),"loaded",loaded,"visible",new ArrayList<>(visible));}
 
     private boolean current(){return dialog.isShowing()&&!app.isFinishing()&&app.replica==source;}
 

@@ -231,6 +231,14 @@ For file browsing, creation, deletion, search and offline restart checks on an i
 emulator, run `nix-shell --run 'apps/android/build.sh && python3 tests/files_android.py'`.
 This uses emulator port 5590 and saves artifacts in `.test-artifacts/drawing-android/`.
 
+For live CLI control of a running app session, build the JVM CLI and APK, then
+run `nix-shell --run 'python3 tests/ui_sessions_android.py'`. The isolated test
+uses emulator port 5592 and actual CLI calls through the app's local proxy.
+Run `nix-shell --run 'python3 tests/ui_topology_android.py'` to verify discovery
+and control through two proxies and a main server on emulator port 5594. See
+[live session commands](apps/cli/README.md#live-app-sessions) and
+[ADR 0023](docs/adr/0023-networked-ui-sessions.md).
+
 ### Agent CLI and editable diagrams
 
 ```sh
@@ -707,7 +715,9 @@ keeping the message field and Send button visible, and expands when it closes.
 
 Android chat requests use the selected editing proxy (the tablet's local proxy
 by default), then follow its configured upstream proxy chain to the primary
-server's Chat API. Document reads and edits use the same proxy workflow.
+server's Chat API. Each send includes the app's current launch session ID, the
+open document name, and the message text; Pi receives the session ID in its
+routing context. Document reads and edits use the same proxy workflow.
 Replies stream while the agent works. Closing the popup or disconnecting the
 tablet does not stop the agent; reopen the chat to catch up. **Stop** cancels the
 run but retains completed edits. Chats persist on the server; unsent drafts stay

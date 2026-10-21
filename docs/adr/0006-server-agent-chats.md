@@ -21,6 +21,10 @@ the model does not have to transcribe UUIDs or replica paths. Explicit `--actor`
 continues to override the environment for ordinary CLI callers.
 The prompt supplies routing context (current document, server document names,
 upstream and replica location), leaving content discovery to the CLI and skill.
+As of 2026-10-21, Android also attaches its current app launch session ID to
+each message. Pi receives it as `app_session_id`, so it can address the live
+tablet through CLI UI commands. Older clients and saved retries without an ID
+remain accepted.
 
 A harness interface has two implementations: deterministic non-editing `mock`
 and installed `pi`. Harness, provider/model and thinking effort are selected at
