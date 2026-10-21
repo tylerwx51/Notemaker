@@ -14,6 +14,11 @@ final class TileInkCache {
     static final int MAX_PICTURE_POINTS=100000;
     private static final int MAX_PICTURES=512;
     static long tileRenders,reusedTileRepaints,itemRenders,geometryRenders,pictureReuses,transientPictureReuses,pictureMisses,pictureEvictions,culledItems,allocatedTiles,reusedTiles,evictedTiles;
+    static boolean traceFirstDraw;
+    static long tracedCompileNs,tracedPlayNs,tracedOtherNs;
+    static long tracedOtherMaxNs;
+    static String tracedOtherMaxShape;
+    static int tracedCompiles,tracedPlays,tracedOtherRenders;
     private long currentBytes,peakBytes,cacheClears;
     private long pictureBytes,picturePoints;
     private final LinkedHashSet<String> renderedItemIds=new LinkedHashSet<>();
@@ -90,7 +95,7 @@ final class TileInkCache {
     private void trimFor(long incoming){Iterator<Map.Entry<Key,Tile>> it=tiles.entrySet().iterator();while(currentBytes+incoming>MAX_BYTES&&it.hasNext()){Map.Entry<Key,Tile> e=it.next();currentBytes-=e.getValue().bytes;e.getValue().bitmap.recycle();it.remove();evictedTiles++;}}
     private void remove(Key key,Tile tile){tiles.remove(key);currentBytes-=tile.bytes;tile.bitmap.recycle();}
     private void drawItem(Canvas canvas,Item item,BiConsumer<Canvas,Map<String,Object>> renderer){
-        if(!"stroke".equals(item.value.get("kind"))){geometryRenders++;recordGeometry(item.id);renderer.accept(canvas,item.value);return;}
+        if(!"stroke".equals(item.value.get("kind"))){geometryRenders++;recordGeometry(item.id);long started=traceFirstDraw?System.nanoTime():0;renderer.accept(canvas,item.value);if(traceFirstDraw){long elapsed=System.nanoTime()-started;tracedOtherNs+=elapsed;tracedOtherRenders++;if(elapsed>tracedOtherMaxNs){tracedOtherMaxNs=elapsed;tracedOtherMaxShape=String.valueOf(item.value.get("shape"));}}return;}
         PathEntry entry=item.cachePicture?strokePaths.get(item.id):transientStrokePaths.get(item.id);
         if(entry!=null&&(entry.source==item.value||entry.source.equals(item.value))){if(item.cachePicture)pictureReuses++;else transientPictureReuses++;play(canvas,entry);return;}
         if(item.cachePicture){if(entry!=null)removePath(item.id,entry);pictureMisses++;}else transientStrokePaths.remove(item.id);
@@ -98,12 +103,14 @@ final class TileInkCache {
         boolean retain=item.cachePicture&&points>0&&points<=20000&&cost<=MAX_PICTURE_BYTES;
         if(retain)trimPaths(cost,points);
         geometryRenders++;recordGeometry(item.id);
+        long started=traceFirstDraw?System.nanoTime():0;
         PathEntry recorded=new PathEntry(com.notemaker.cli.Png.compileStroke(item.value),item.value,cost,points);
+        if(traceFirstDraw){tracedCompileNs+=System.nanoTime()-started;tracedCompiles++;}
         if(retain&&pictureBytes+cost<=MAX_PICTURE_BYTES&&picturePoints+points<=MAX_PICTURE_POINTS&&strokePaths.size()<MAX_PICTURES){strokePaths.put(item.id,recorded);pictureBytes+=cost;picturePoints+=points;}
         else if(!item.cachePicture)transientStrokePaths.put(item.id,recorded);
         play(canvas,recorded);
     }
-    private void play(Canvas canvas,PathEntry entry){if(entry!=null)com.notemaker.cli.Png.replayStroke(canvas,entry.commands,strokePaint);}
+    private void play(Canvas canvas,PathEntry entry){if(entry!=null){long started=traceFirstDraw?System.nanoTime():0;com.notemaker.cli.Png.replayStroke(canvas,entry.commands,strokePaint);if(traceFirstDraw){tracedPlayNs+=System.nanoTime()-started;tracedPlays++;}}}
     private void trimPaths(long incoming,long points){Iterator<Map.Entry<String,PathEntry>> it=strokePaths.entrySet().iterator();while((pictureBytes+incoming>MAX_PICTURE_BYTES||picturePoints+points>MAX_PICTURE_POINTS||strokePaths.size()>=MAX_PICTURES)&&it.hasNext()){Map.Entry<String,PathEntry> e=it.next();pictureBytes-=e.getValue().bytes;picturePoints-=e.getValue().points;it.remove();pictureEvictions++;}}
     private void removePath(String id,PathEntry entry){strokePaths.remove(id);pictureBytes-=entry.bytes;picturePoints-=entry.points;}
     private static long pathPointEstimate(Map<String,Object> item){List<Object> raw=list(item.getOrDefault("points",Collections.emptyList()));if(raw.isEmpty())return 0;double length=0,px=0,py=0;for(int i=0;i<raw.size();i++){List<Object> p=list(raw.get(i));double x=((Number)p.get(0)).doubleValue(),y=((Number)p.get(1)).doubleValue();if(i>0)length+=Math.hypot(x-px,y-py);px=x;py=y;}double width=((Number)item.get("width")).doubleValue();String brush=String.valueOf(item.getOrDefault("brush","pen"));double factor="marker".equals(brush)?1.8:"neoBrush".equals(brush)?1.4:Arrays.asList("brush","charcoal").contains(brush)?1.35:Arrays.asList("pencil","oily").contains(brush)?.82:Arrays.asList("latinCalligraphy","asiaCalligraphy").contains(brush)?1.5:1;double step=Math.max(.75,Math.min(2.0,width*factor*.2));long estimate=Math.max(1,Math.min(8192,(long)Math.ceil(length/step)+1));for(Object erase:list(item.getOrDefault("erasures",Collections.emptyList())))estimate+=list(erase).size();return estimate;}

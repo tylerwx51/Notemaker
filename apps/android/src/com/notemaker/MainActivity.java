@@ -70,6 +70,7 @@ public class MainActivity extends Activity {
     AgentUi agent;
     boolean displayedConnected;
     boolean traceColdLoad;
+    boolean traceColdDraw;
     long startupEpoch;
     Thread syncThread, localThread;
     Store store;
@@ -89,6 +90,7 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         boolean startupTrace=getPackageName().equals("com.notemaker.latency");
         traceColdLoad=startupTrace;startupEpoch=startupStarted;
+        traceColdDraw=startupTrace;
         startupMark(startupTrace,"super_done",startupStarted);
         android.content.SharedPreferences prefs=getSharedPreferences("settings",0);
         scribbleToErase=prefs.getBoolean("scribbleToErase",false);
@@ -636,33 +638,48 @@ public class MainActivity extends Activity {
         RectF documentViewport(){RectF viewport=new RectF(Math.min(x(0),x(getWidth())),Math.min(y(0),y(getHeight())),Math.max(x(0),x(getWidth())),Math.max(y(0),y(getHeight())));if(!type.equals("infinite")&&!viewport.intersect(0,0,1000,1400))viewport.setEmpty();return viewport;}
         void settledInk(Canvas c,String layer){
             ArrayList<TileInkCache.Item> visible=new ArrayList<>();
+            startupMark(traceColdDraw,"first_strokes_start",startupEpoch);
             for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)){TileInkCache.Item cached=strokeTileItems.get(e.getKey());if(cached==null||cached.value!=stroke){cached=new TileInkCache.Item(e.getKey(),stroke);strokeTileItems.put(e.getKey(),cached);}visible.add(cached);}}
+            startupMark(traceColdDraw,"first_strokes_prepared",startupEpoch);
             strokeTileItems.keySet().retainAll(model.strokes.keySet());
             // Live ink uses the same transparent layer, item order and compositing
             // as committed ink. Switching to saved state must not change pixels.
             if(layer.equals(selected)&&points!=null&&current!=null)visible.add(new TileInkCache.Item(current,strokeValue(),false));
             for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(!"template".equals(o.get("shape"))&&layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)){TileInkCache.Item cached=objectTileItems.get(e.getKey());boolean linked=o.containsKey("from")||o.containsKey("to");if(cached==null||objectTileSources.get(e.getKey())!=o){cached=new TileInkCache.Item("object:"+e.getKey(),new DrawItem(model,o).geometry());objectTileSources.put(e.getKey(),o);objectTileItems.put(e.getKey(),cached);}else if(linked){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!cached.value.equals(geometry)){cached=new TileInkCache.Item("object:"+e.getKey(),geometry);objectTileItems.put(e.getKey(),cached);}}visible.add(cached);}}
+            startupMark(traceColdDraw,"first_objects_prepared",startupEpoch);
             objectTileSources.keySet().retainAll(model.objects.keySet());objectTileItems.keySet().retainAll(model.objects.keySet());
+            startupMark(traceColdDraw,"first_ink_prepared",startupEpoch);
             RectF viewport=documentViewport();if(viewport.isEmpty())return;
             c.save();transform(c);
             if(monolithicTileProbe!=null)tileInk.drawMonolithic(c,visible,monolithicTileProbe,rasterTier,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
             else tileInk.draw(c,page,layer,visible,viewport,rasterTier,cullTileItems,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
             c.restore();
+            startupMark(traceColdDraw,"first_ink_drawn",startupEpoch);
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
+            startupMark(traceColdDraw,"first_canvas_start",startupEpoch);
             if(model.deleted){c.drawColor(Color.WHITE);paint.setColor(Color.BLACK);paint.setTextSize(32);c.drawText("Document deleted · open another file from Notes",24,60,paint);return;}
             if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
             if(getWidth()==0||getHeight()==0)return;
+            if(traceColdDraw){TileInkCache.traceFirstDraw=true;TileInkCache.tracedCompileNs=TileInkCache.tracedPlayNs=TileInkCache.tracedOtherNs=TileInkCache.tracedOtherMaxNs=0;TileInkCache.tracedCompiles=TileInkCache.tracedPlays=TileInkCache.tracedOtherRenders=0;TileInkCache.tracedOtherMaxShape="";}
             tileInk.beginFrame();
+            startupMark(traceColdDraw,"first_tile_begin",startupEpoch);
             if(!document.equals(inkDocument)||!type.equals(inkType)){tileInk.clear();strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();inkDocument=document;inkType=type;}
             if(page!=inkPage){strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();inkPage=page;}
             rasterTier=TileInkCache.densityTier(scale()*zoom);
+            startupMark(traceColdDraw,"first_tile_config",startupEpoch);
             c.save();transform(c);if(!type.equals("infinite")){paint.setColor(0xffaaaaaa);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);c.drawRect(0,0,1000,1400,paint);paint.setStyle(Paint.Style.FILL);}c.restore();
+            startupMark(traceColdDraw,"first_page_border",startupEpoch);
             boolean previewing=false;for(Object raw:transformPreviews.values())try{if(((Number)Json.map(raw).getOrDefault("expires",0)).longValue()>System.currentTimeMillis()){previewing=true;break;}}catch(Exception ignored){}
             RectF previewViewport=previewing?documentViewport():null;
             boolean mono=monolithicTileProbe!=null&&!previewing;if(mono){c.save();Matrix before=c.getMatrix();transform(c);c.clipRect(monolithicTileProbe);c.setMatrix(before);c.drawColor(Color.WHITE);}
+            startupMark(traceColdDraw,"first_layers_start",startupEpoch);
             for(String layer:layers.keySet())if(visible(layer)){
-                c.save();Matrix before=c.getMatrix();transform(c);for(ErasePreview preview:erasePreviews.values())if(preview.layer.equals(layer)&&preview.page==page)for(Path cut:preview.paths)c.clipOutPath(cut);c.setMatrix(before);
+                startupMark(traceColdDraw,"first_layer_visible",startupEpoch);
+                c.save();
+                startupMark(traceColdDraw,"first_layer_saved",startupEpoch);
+                Matrix before=c.getMatrix();transform(c);for(ErasePreview preview:erasePreviews.values())if(preview.layer.equals(layer)&&preview.page==page)for(Path cut:preview.paths)c.clipOutPath(cut);c.setMatrix(before);
+                startupMark(traceColdDraw,"first_layer_clip_done",startupEpoch);
                 if(useInkCache&&!previewing)settledInk(c,layer);
                 else {c.save();transform(c);for(Map.Entry<String,JSONObject> e:strokes.entrySet()){JSONObject s=e.getValue();if(!e.getKey().equals(current)&&layer.equals(s.optString("layer"))&&s.optInt("page")==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)&&!(previewing&&previewed("stroke",e.getKey()))){if(previewing){Map<String,Object> item=Json.map(Json.parse(s.toString()));if(!RectF.intersects(previewViewport,new TileInkCache.Item(e.getKey(),item).bounds))continue;}drawStroke(c,s);}}c.restore();}
                 c.save();transform(c);
@@ -678,6 +695,8 @@ public class MainActivity extends Activity {
             if(inputStarted!=0){if(drawLatency!=null)drawLatency.accept(System.nanoTime()-inputStarted);inputStarted=0;}
             if(shapeDragging&&drawingShape!=null&&!drawingShape.equals("text")){float dx=shapeEndX-shapeStartX,dy=shapeEndY-shapeStartY,left=Math.min(shapeStartX,shapeEndX),top=Math.min(shapeStartY,shapeEndY),w=Math.abs(dx),h=Math.abs(dy);if(drawingShape.equals("line")||drawingShape.equals("arrow")){left=shapeStartX;top=shapeStartY;w=dx;h=dy;if(Math.abs(w)+Math.abs(h)<1){w=1;h=1;}}else{w=Math.max(12,w);h=Math.max(12,h);if(!type.equals("infinite")){left=Math.max(0,Math.min(1000-w,left));top=Math.max(0,Math.min(1400-h,top));}}JSONObject preview=objectValue(drawingShape,left,top,w,h,color,width,objectFillColor);c.save();transform(c);Render.drawObject(model,Json.map(Json.parse(preview.toString())),new com.notemaker.cli.Png(c));c.restore();}
             if(eraseTimings!=null)eraseTimings.put("draw_done",System.nanoTime());if(afterDraw!=null)afterDraw.run();
+            startupMark(traceColdDraw,"first_canvas_done",startupEpoch);traceColdDraw=false;
+            if(TileInkCache.traceFirstDraw){android.util.Log.i("NoteMakerStartup","tile_compile_ms="+TileInkCache.tracedCompileNs/1e6+" tile_play_ms="+TileInkCache.tracedPlayNs/1e6+" tile_other_ms="+TileInkCache.tracedOtherNs/1e6+" other_max_ms="+TileInkCache.tracedOtherMaxNs/1e6+" other_shape="+TileInkCache.tracedOtherMaxShape+" compiles="+TileInkCache.tracedCompiles+" plays="+TileInkCache.tracedPlays+" other_renders="+TileInkCache.tracedOtherRenders);TileInkCache.traceFirstDraw=false;}
         }}
         @Override protected void onDetachedFromWindow(){tileInk.clear();strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();super.onDetachedFromWindow();}
         JSONObject stroke(){return obj("kind","stroke","stroke",current,"layer",selected,"page",page,"color",color,"width",width,"brush",brush,"material",material,"points",points);}
