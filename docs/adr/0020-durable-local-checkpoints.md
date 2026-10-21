@@ -24,7 +24,13 @@ append transactions after the checkpoint.
 When the current `relay` is exactly the committed `events` followed by
 `pending`, the checkpoint stores it as an empty list. The reader already
 reconstructs that exact list, avoiding a second copy of operation geometry.
-Any other relay order or retained ingress entry is persisted in full.
+For a reordered relay containing exactly the same uniquely identified
+operations as `events` and `pending`, a later checkpoint format stores the
+ordered IDs with `relayFormat: "ids"` instead of duplicate operation geometry.
+The reader expands and validates these IDs before replay. A relay with extra
+or different entries still stays in full. This schema addition requires
+updated app and CLI readers for ID-order checkpoints; older readers reject
+them rather than silently changing relay order.
 During WAL replay, committed operations and metadata still apply in revision
 order, but the reader rebuilds the effective model once after the last record.
 Live transactions continue to update the cached model as each edit commits.
@@ -62,3 +68,10 @@ On a later copied note with a 6.0 MiB WAL, the single post-replay rebuild
 reduced process-cold launch median by about 24–54 ms across two runs per
 branch, with unchanged logical reads and sampled PSS. See
 `docs/design/performance/journal-replay-batch-effective.md`.
+On a copied note whose relay contained the same 548 operations in another
+order, ID-order storage reduced its checkpointed base from 5,114,942 to
+2,738,803 bytes. Two physical process-cold launch medians improved from
+1,905/1,922 to 1,737/1,755 ms, with lower sampled PSS and logical reads.
+Physical checkpoint writes fell from about 5.15 to 2.76 MB and wall time
+from 524/531 to 334/359 ms. See
+`docs/design/performance/checkpoint-relay-id-order.md`.
