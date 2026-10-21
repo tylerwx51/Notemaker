@@ -392,8 +392,8 @@ public class MainActivity extends Activity {
                 else {
                     Map<String,Object> nextLeases=Json.map(snapshot.getOrDefault("leases",Collections.emptyMap()));
                     Map<String,Object> nextPreviews=Json.map(snapshot.getOrDefault("previews",Collections.emptyMap()));
-                    boolean coordinationChanged=!leases.equals(nextLeases)||!transformPreviews.equals(nextPreviews);
-                    if(coordinationChanged){leases=nextLeases;transformPreviews=nextPreviews;schedulePreviewExpiry();if(canvas!=null)canvas.invalidate();editor.refresh();}
+                    boolean leaseChanged=!leases.equals(nextLeases),previewChanged=!transformPreviews.equals(nextPreviews);
+                    if(leaseChanged||previewChanged){leases=nextLeases;transformPreviews=nextPreviews;schedulePreviewExpiry();if(previewChanged&&canvas!=null)canvas.invalidate();editor.refresh();}
                     if(wasConnected!=connected)update();
                 }
             }catch(Exception e){android.util.Log.e("NoteMaker","Refresh failed",e);}});

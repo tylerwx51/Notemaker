@@ -37,6 +37,8 @@ responses cannot restore a selection after its tool or document context ends.
 Transforms send ephemeral previews through proxies. Only the completed
 transform becomes a durable atomic action and one undo entry. When a lock
 expires, remote previews disappear and the last committed appearance returns.
+Lease-only notifications refresh the Android editor state without redrawing
+the unchanged Canvas; preview changes still redraw it.
 Android also shows a new object in its normal document tile renderer while
 its selected proxy commits the action. This local preview does not enter the
 replica or actor history. On a successful local commit with identical painted
