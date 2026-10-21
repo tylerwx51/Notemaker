@@ -651,12 +651,12 @@ nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/late
 nix-shell --run 'python3 tests/plot_drawing_latency.py'
 ```
 
-The interaction suite times 60 synthetic pans, 40 viewport zoom redraws,
-40 tool switches, 40 switches to an empty second layer, 12 warm reopens, and
-60 alternating object undo/redo actions on the same disposable note. It also
-switches 40 times between two populated pages in a separate disposable note.
-It excludes five warmup actions per mode except two for reopens and six for
-history. It records handler, input-to-canvas-draw, first window UI-draw, and
+The interaction suite times 60 synthetic pans; 40 each of zoom redraw, tool
+switch, layer switch, selection tap, object creation, and page switch; 12 warm
+reopens; 60 each of object and stroke undo/redo; and 20 enclosed-area fills.
+Page switching and filling use separate disposable documents. It excludes five
+warmup actions per mode except two for reopens, six for history, and four for
+fills. It records handler, input-to-canvas-draw, first window UI-draw, and
 window-frame timing, plus process CPU, memory, and I/O snapshots around each
 mode and after a requested GC. Zoom redraw changes the viewport scale
 directly, so it excludes pinch recognition. Note reopens call the Activity's
