@@ -99,6 +99,7 @@ def main():
     ET.ElementTree(prefs).write(replica/'shared_prefs/settings.xml',encoding='utf-8')
     remote='/data/local/tmp/notemaker-ui-latency-'+uuid.uuid4().hex
     installed=False
+    original_screen_timeout=None
     try:
         call('install','--no-incremental',str(apk));installed=True
         if args.compile_speed: (out/'compile.txt').write_bytes(call('shell','cmd','package','compile','-m','speed','-f',PACKAGE,timeout=180))
@@ -106,6 +107,12 @@ def main():
         sources=[remote+'/shared_prefs'] if args.synthetic_strokes else [remote+'/files',remote+'/shared_prefs']
         call('shell','run-as',PACKAGE,'cp','-r',*sources,'.')
         call('shell','input','keyevent','KEYCODE_WAKEUP');call('shell','wm','dismiss-keyguard')
+        if args.synthetic_strokes:
+            original_screen_timeout=call('shell','settings','get','system','screen_off_timeout').decode().strip()
+            call('shell','settings','put','system','screen_off_timeout','1200000')
+            metadata['screen_off_timeout_original_ms']=original_screen_timeout
+            metadata['screen_off_timeout_benchmark_ms']=1200000
+            (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
         if args.cold_start:
             checkpoint_ms=None;checkpoint_base_bytes=None
             if args.background_checkpoint:
@@ -205,6 +212,12 @@ def main():
                 values=sorted(s[key] for s in samples);summary[key+'_p95']=values[int(.95*len(values))]
         print(json.dumps(summary))
     finally:
+        if original_screen_timeout is not None:
+            try:
+                action=('delete','system','screen_off_timeout') if original_screen_timeout=='null' else ('put','system','screen_off_timeout',original_screen_timeout)
+                call('shell','settings',*action)
+            except Exception as error:
+                (out/'screen-timeout-restore-error.txt').write_text(str(error)+'\n')
         if installed and args.synthetic_strokes and not (out/'metrics.json').exists():
             for name,local in [('performance.json','metrics.json'),('performance-resources.json','resources.json')]:
                 try: (out/local).write_bytes(call('shell','run-as',PACKAGE,'cat','files/'+name))
