@@ -18,7 +18,7 @@ final class InteractionPerformance {
         Map<String,List<Double>> queue=new LinkedHashMap<>(),action=new LinkedHashMap<>(),drawWait=new LinkedHashMap<>(),uiDraw=new LinkedHashMap<>();
         Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
         List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
-        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle","page_switch")){
+        for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","document_reopen","history_toggle","stroke_history_toggle","page_switch")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
             queue.put(name,new ArrayList<>());action.put(name,new ArrayList<>());drawWait.put(name,new ArrayList<>());uiDraw.put(name,new ArrayList<>());
@@ -45,7 +45,7 @@ final class InteractionPerformance {
         Map<String,Object> modeResources=new LinkedHashMap<>();
         Map<String,Object> pageTiles=object();
         String originalLayer=app.selected,extraLayer="performance-"+UUID.randomUUID();
-        String historyId="performance-history-"+UUID.randomUUID();
+        String historyId="performance-history-"+UUID.randomUUID(),strokeHistoryId="performance-stroke-history-"+UUID.randomUUID();
         String pageDocument="performance-pages-"+UUID.randomUUID();
         try {
             for(String name:draw.keySet()){
@@ -62,6 +62,15 @@ final class InteractionPerformance {
                     Map<String,Object> state=app.replica.read();
                     test.runOnMainSync(()->{try{app.refreshShared(state);app.undo.clear();app.redo.clear();
                         app.undo.add("object-action");app.save();app.update();}catch(Exception error){throw new RuntimeException(error);}});
+                    test.waitForIdleSync();
+                }
+                if(name.equals("stroke_history_toggle")){
+                    app.replica.command(Arrays.asList("append","-"),object("kind","stroke","stroke",strokeHistoryId,
+                            "layer",app.selected,"page",app.page,"width",3,"color",android.graphics.Color.BLACK,
+                            "points",Arrays.asList(Arrays.asList(160,180,1),Arrays.asList(280,220,1))));
+                    Map<String,Object> state=app.replica.read();
+                    test.runOnMainSync(()->{try{app.refreshShared(state);app.undo.clear();app.redo.clear();
+                        app.undo.add(strokeHistoryId);app.save();app.update();}catch(Exception error){throw new RuntimeException(error);}});
                     test.waitForIdleSync();
                 }
                 if(name.equals("page_switch")){
@@ -84,18 +93,19 @@ final class InteractionPerformance {
                 Map<String,Object> modeStart=Performance.resources(0);
                 Map<String,Object> tileStart=name.equals("page_switch")?tileMetrics(test,app):null;
                 current.set(name);
-                int count=name.equals("pan")||name.equals("history_toggle")?60:name.equals("document_reopen")?12:40;
-                int warmup=name.equals("document_reopen")?2:name.equals("history_toggle")?6:5;
+                boolean historyMode=name.equals("history_toggle")||name.equals("stroke_history_toggle");
+                int count=name.equals("pan")||historyMode?60:name.equals("document_reopen")?12:40;
+                int warmup=name.equals("document_reopen")?2:historyMode?6:5;
                 for(int i=0;i<count;i++){
                     int index=i;CountDownLatch painted=new CountDownLatch(1),handled=new CountDownLatch(1),uiPainted=new CountDownLatch(1);
                     AtomicLong drawn=new AtomicLong(),uiDrawn=new AtomicLong(),started=new AtomicLong(),completed=new AtomicLong();
                     long queued=System.nanoTime();
                     input.post(()->{
                         started.set(System.nanoTime());
-                        boolean history=name.equals("history_toggle"),forward=index%2==1;
+                        boolean history=historyMode,strokeHistory=name.equals("stroke_history_toggle"),forward=index%2==1;
                         BooleanSupplier ready=()->!history||(!app.historyPending&&
-                                (forward?!Boolean.FALSE.equals(app.model.objectActive.get(historyId)):
-                                        Boolean.FALSE.equals(app.model.objectActive.get(historyId))));
+                                (forward?!Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId)):
+                                        Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId))));
                         uiDrawReady.set(ready);
                         uiDrawAck.set(()->{uiDrawn.set(System.nanoTime());uiPainted.countDown();});
                         app.canvas.afterDraw=()->{if(ready.getAsBoolean()){drawn.set(System.nanoTime());painted.countDown();}};
@@ -145,6 +155,16 @@ final class InteractionPerformance {
                     test.runOnMainSync(()->com.notemaker.core.Model.require(app.undo.size()==1&&app.redo.isEmpty(),
                             "History toggle did not restore editor history"));
                 }
+                if(name.equals("stroke_history_toggle")){
+                    ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+                    Map<String,Object> durable=app.replica.read();
+                    com.notemaker.core.Model saved=com.notemaker.core.Store.model(durable);
+                    com.notemaker.core.Model.require(saved.strokes.containsKey(strokeHistoryId)&&
+                            !Boolean.FALSE.equals(saved.active.get(strokeHistoryId)),"Stroke history toggle did not persist final stroke");
+                    test.runOnMainSync(()->com.notemaker.core.Model.require(app.undo.size()==1&&
+                            strokeHistoryId.equals(app.undo.get(0))&&app.redo.isEmpty(),
+                            "Stroke history toggle did not restore editor history"));
+                }
                 if(name.equals("page_switch")){
                     ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
                     Map<String,Object> durable=app.replica.read();
@@ -184,7 +204,7 @@ final class InteractionPerformance {
         return object("modes",modes,"mode_resources",modeResources,"page_tile_cache",pageTiles,
                 "start_resources",start,"end_resources",end,"post_gc_resources",postGc,
                 "history_directions",historyDirections,
-                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, and direct page switching; history alternates object undo and redo",
+                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, and direct page switching; history modes alternate object or stroke undo and redo",
                 "document",app.document,"state_revision",app.replica.read().get("revision"));
     }
     private static Map<String,Object> tileMetrics(Instrumentation test,MainActivity app){
