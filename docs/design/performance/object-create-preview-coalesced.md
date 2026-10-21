@@ -45,3 +45,23 @@ APK metadata are under `.test-artifacts/hillclimb/tablet-object-preview-coalesce
 the earlier failed harness-definition attempt is under `...-1/`.
 These timings end at Android drawing and do not measure physical touch
 sampling or E Ink scanout.
+
+## Sustained drawing and cold-start follow-up
+
+A later 1,000-stroke run on this branch passed durable restart and incremental/
+full replay parity. Its overall input-to-app-draw p95 was 61.78 ms and process
+CPU was 285.5 s, compared with 61.13–61.21 ms and 282.5–282.9 s in two runs
+on the preceding render-prune branch. Last-window input-to-draw p95 remained
+about 32 ms, post-GC PSS about 187 MiB, and charged writes about 38.5 MB.
+This suggests a possible small sustained-drawing CPU/latency cost; the runs
+do not isolate its cause. An isolated empty-preview fast-path experiment did
+not recover that difference, so the larger repeated object-creation gain is
+retained. The raw stroke run is under
+`.test-artifacts/hillclimb/tablet-coalesced-preview-strokes-1000-1/`.
+
+Ten process-cold launches after two warmups on this branch measured 1,333 ms
+Android launch median, 2,420 ms process CPU median, 152.8 MiB sampled PSS
+median, and about 1.90 MB logical reads. The earlier same-fixture parent run
+measured 1,352 ms, 2,420 ms, 152.1 MiB, and about 1.90 MB respectively.
+That comparison does not establish a cold-start or memory change. Raw cold
+metrics are under `.test-artifacts/hillclimb/tablet-coalesced-preview-cold-1/`.
