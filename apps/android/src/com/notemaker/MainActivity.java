@@ -150,12 +150,27 @@ public class MainActivity extends Activity {
         localThread=new Thread(()->localLoop(target),"local-state");localThread.start();
     }
     void persist(List<String> args,Object input,String optimisticId){
-        final AppReplica target=replica;saving++;
+        final AppReplica target=replica;
+        final boolean localSettings=!target.remote()&&args.size()==2&&args.get(0).equals("settings")&&optimisticId==null;
+        if(!localSettings)saving++;
         ReplicaService.writes.execute(()->{
             try{target.command(args,input);Map<String,Object> snapshot=target.read();runOnUiThread(()->{
-                saving--;if(target!=replica)return;saveError=null;if(optimisticId!=null)optimistic.remove(optimisticId);
-                try{refreshShared(snapshot);update();}catch(Exception e){saveError=e.toString();update();}
-            });}catch(Exception e){android.util.Log.e("NoteMaker","Local save failed",e);runOnUiThread(()->{saving--;saveError=e.toString();update();Toast.makeText(this,"Could not save changes: "+e.getMessage(),Toast.LENGTH_LONG).show();});}
+                if(!localSettings)saving--;if(target!=replica)return;
+                boolean hadError=saveError!=null;saveError=null;if(optimisticId!=null)optimistic.remove(optimisticId);
+                int oldEvents=eventCount,oldPending=pendingCount,oldPage=page;long oldCursor=cursor;
+                String oldSelected=selected,oldType=type;boolean oldDeleted=model.deleted,oldConnected=connected;
+                Map<String,Object> oldLeases=leases,oldPreviews=transformPreviews,oldClipboard=selectionClipboard;
+                List<Object> oldConflicts=conflicts;
+                try{
+                    boolean canSkip=localSettings&&!hadError&&revision>=0&&optimistic.isEmpty();
+                    refreshShared(snapshot);
+                    if(!canSkip||oldEvents!=eventCount||oldPending!=pendingCount||oldCursor!=cursor||
+                            oldPage!=page||!Objects.equals(oldSelected,selected)||!Objects.equals(oldType,type)||
+                            oldDeleted!=model.deleted||oldConnected!=connected||!Objects.equals(oldLeases,leases)||
+                            !Objects.equals(oldPreviews,transformPreviews)||!Objects.equals(oldClipboard,selectionClipboard)||
+                            !Objects.equals(oldConflicts,conflicts))update();
+                }catch(Exception e){saveError=e.toString();update();}
+            });}catch(Exception e){android.util.Log.e("NoteMaker","Local save failed",e);runOnUiThread(()->{if(!localSettings)saving--;saveError=e.toString();update();Toast.makeText(this,"Could not save changes: "+e.getMessage(),Toast.LENGTH_LONG).show();});}
         });
     }
     void setDrawingTool(String shape){if(shape!=null&&(selecting||selectionSession!=null||!selectedEntities.isEmpty()))deselect();synchronized(lock){drawingShape=shape;erase=false;pan=false;fillTapMode=false;if(!"text".equals(shape))pendingText=null;if(canvas!=null){canvas.shapeDragging=false;canvas.invalidate();}update();}}
