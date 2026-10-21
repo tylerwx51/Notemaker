@@ -67,7 +67,11 @@ final class Journal {
     private Map<String,Object> accessLocked(File file,String document,Store.Edit edit,boolean writable) throws Exception {
         File wal=new File(file+".journal");
         if(state==null||stamp!=file.lastModified()||size!=file.length()||wal.length()<offset){
-            state=file.exists()?map(parse(new String(Files.readAllBytes(file.toPath()),StandardCharsets.UTF_8))):object("events",new ArrayList<>(),"pending",new ArrayList<>(),"cursor",0);
+            if(file.exists()){
+                byte[] bytes=Files.readAllBytes(file.toPath());Timing.mark("journal_base_read");
+                String source=new String(bytes,StandardCharsets.UTF_8);Timing.mark("journal_base_decoded");
+                state=map(parse(source));
+            }else state=object("events",new ArrayList<>(),"pending",new ArrayList<>(),"cursor",0);
             Timing.mark("journal_base_parsed");
             CheckpointPointPrefixes.decode(state);
             Timing.mark("journal_points_expanded");
