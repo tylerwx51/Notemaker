@@ -30,6 +30,11 @@ public class MainActivity extends Activity {
     HashSet<String> hidden = new HashSet<>();
     ArrayList<String> undo = new ArrayList<>(), redo = new ArrayList<>();
     final ArrayList<PendingObjectHistory> pendingObjectHistory = new ArrayList<>();
+    final LinkedHashMap<String,Map<String,Object>> pendingObjectPreviews=new LinkedHashMap<>();
+    final HashSet<String> drawnObjectPreviews=new HashSet<>();
+    final HashSet<String> tiledObjectPreviews=new HashSet<>();
+    long coalescedObjectFrames;
+    java.util.function.Consumer<String> objectCommitAck;
     String proxyUrl="",proxyToken="";
     AppReplica replica;
     String document="notes", host="", type="fixed", selected="base";
@@ -187,12 +192,46 @@ public class MainActivity extends Activity {
         JSONObject object=obj("kind","object","object",id(),"shape",shape,"layer",selected,"page",page,"x",x,"y",y,"w",w,"h",h,"color",outline,"width",outlineWidth,"fontSize",24,"text","");
         if(fill!=Color.TRANSPARENT)try{object.put("fill",fill);}catch(Exception e){throw new RuntimeException(e);}return object;
     }
+    private boolean samePaintedObject(Model before,Map<String,Object> preview,String id){
+        if(preview==null||before.objects.containsKey(id)||Boolean.FALSE.equals(model.objectActive.get(id))
+                ||!Objects.equals(before.type,model.type)||before.deleted!=model.deleted
+                ||!before.layers.equals(model.layers)||!before.strokes.equals(model.strokes)
+                ||!before.active.equals(model.active)||!before.layerActive.equals(model.layerActive))return false;
+        Map<String,Map<String,Object>> oldObjects=new LinkedHashMap<>(before.objects),newObjects=new LinkedHashMap<>(model.objects);
+        Map<String,Object> committed=newObjects.remove(id);
+        if(committed==null||!oldObjects.equals(newObjects))return false;
+        Map<String,Boolean> oldActive=new LinkedHashMap<>(before.objectActive),newActive=new LinkedHashMap<>(model.objectActive);
+        newActive.remove(id);if(!oldActive.equals(newActive))return false;
+        try{
+            Map<String,Object> expected=Actions.drawing(preview,"base"),visible=new LinkedHashMap<>(committed);
+            for(String key:Arrays.asList("id","actor","seq","at","action","session","bases","visibility"))visible.remove(key);
+            return Json.equivalent(expected,visible);
+        }catch(Exception invalid){return false;}
+    }
     void persistObject(JSONObject object){
         final AppReplica target=replica;final PendingObjectHistory pending;
-        synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;}
+        final Map<String,Object> preview=Json.map(Json.parse(object.toString()));final String previewId=String.valueOf(preview.get("object"));
+        synchronized(lock){pending=new PendingObjectHistory(undo.size());pendingObjectHistory.add(pending);saving++;if(!model.objects.containsKey(previewId)){pendingObjectPreviews.put(previewId,preview);if(canvas!=null)canvas.invalidate();}}
         ReplicaService.writes.execute(()->{try{
-            Map<String,Object> result=Json.map(target.command(Arrays.asList("object","put","snapshot","-"),Json.map(Json.parse(object.toString()))));Map<String,Object> snapshot=result.get("snapshot") instanceof Map?Json.map(result.get("snapshot")):null;final Map<String,Object> savedSnapshot=snapshot;runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;saveError=null;redo.clear();if(savedSnapshot!=null)try{refreshShared(savedSnapshot);}catch(Exception e){saveError=e.toString();}save();update();if(savedSnapshot==null)ReplicaService.writes.execute(()->refreshFrom(target));});
-        }catch(Exception e){android.util.Log.e("NoteMaker","Object save failed",e);runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectHistory.remove(pending);saveError=e.toString();update();Toast.makeText(this,"Could not save object: "+e.getMessage(),Toast.LENGTH_LONG).show();});}});
+            Map<String,Object> result=Json.map(target.command(Arrays.asList("object","put","snapshot","-"),preview));
+            Map<String,Object> snapshot=result.get("snapshot") instanceof Map?Json.map(result.get("snapshot")):null;
+            runOnUiThread(()->{
+                saving--;if(target!=replica)return;
+                Map<String,Object> displayedPreview=pendingObjectPreviews.remove(previewId);
+                boolean displayed=drawnObjectPreviews.remove(previewId);
+                displayed &= tiledObjectPreviews.remove(previewId);
+                Model before=model;
+                pendingObjectHistory.remove(pending);
+                int index=Math.max(0,Math.min(pending.index,undo.size()));undo.add(index,"object-action");
+                for(PendingObjectHistory later:pendingObjectHistory)if(later.index>=index)later.index++;
+                saveError=null;redo.clear();
+                if(snapshot!=null)try{refreshShared(snapshot);}catch(Exception e){saveError=e.toString();}
+                boolean retainPixels=displayed&&!target.remote()&&saveError==null&&samePaintedObject(before,displayedPreview,previewId);
+                save();if(retainPixels){coalescedObjectFrames++;updateChrome();}else update();
+                if(objectCommitAck!=null)objectCommitAck.accept(previewId);
+                if(snapshot==null)ReplicaService.writes.execute(()->refreshFrom(target));
+            });
+        }catch(Exception e){android.util.Log.e("NoteMaker","Object save failed",e);runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectPreviews.remove(previewId);drawnObjectPreviews.remove(previewId);tiledObjectPreviews.remove(previewId);pendingObjectHistory.remove(pending);saveError=e.toString();update();Toast.makeText(this,"Could not save object: "+e.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     boolean objectHistoryPending(){synchronized(lock){return !pendingObjectHistory.isEmpty();}}
     void save(){
@@ -228,7 +267,7 @@ public class MainActivity extends Activity {
     void load(String newType){synchronized(lock){
         resetDrawingGesture();
         if(canvas!=null)canvas.erasePreviews.clear();
-        pendingObjectHistory.clear();
+        pendingObjectHistory.clear();pendingObjectPreviews.clear();drawnObjectPreviews.clear();tiledObjectPreviews.clear();
         historyPending=false;
         // Reuse unchanged entity wrappers for a warm reopen, never across documents.
         eventCount=pendingCount=0;optimistic.clear();if(!document.equals(renderedDocument))renderedEntities.clear();cursor=0;revision=-1;hidden.clear();undo.clear();redo.clear();selected="base";page=0;type=newType;
@@ -654,6 +693,7 @@ public class MainActivity extends Activity {
         RectF documentViewport(){RectF viewport=new RectF(Math.min(x(0),x(getWidth())),Math.min(y(0),y(getHeight())),Math.max(x(0),x(getWidth())),Math.max(y(0),y(getHeight())));if(!type.equals("infinite")&&!viewport.intersect(0,0,1000,1400))viewport.setEmpty();return viewport;}
         void settledInk(Canvas c,String layer){
             ArrayList<TileInkCache.Item> visible=new ArrayList<>();
+            ArrayList<String> previewIds=new ArrayList<>();
             startupMark(traceColdDraw,"first_strokes_start",startupEpoch);
             for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)){TileInkCache.Item cached=strokeTileItems.get(e.getKey());if(cached==null||cached.value!=stroke){cached=new TileInkCache.Item(e.getKey(),stroke);strokeTileItems.put(e.getKey(),cached);}visible.add(cached);}}
             startupMark(traceColdDraw,"first_strokes_prepared",startupEpoch);
@@ -661,6 +701,12 @@ public class MainActivity extends Activity {
             // as committed ink. Switching to saved state must not change pixels.
             if(layer.equals(selected)&&points!=null&&current!=null)visible.add(new TileInkCache.Item(current,strokeValue(),false));
             for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(!"template".equals(o.get("shape"))&&layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)){TileInkCache.Item cached=objectTileItems.get(e.getKey());boolean linked=o.containsKey("from")||o.containsKey("to");if(cached==null||objectTileSources.get(e.getKey())!=o){cached=new TileInkCache.Item("object:"+e.getKey(),new DrawItem(model,o).geometry());objectTileSources.put(e.getKey(),o);objectTileItems.put(e.getKey(),cached);}else if(linked){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!cached.value.equals(geometry)){cached=new TileInkCache.Item("object:"+e.getKey(),geometry);objectTileItems.put(e.getKey(),cached);}}visible.add(cached);}}
+            for(Map.Entry<String,Map<String,Object>> entry:pendingObjectPreviews.entrySet()){
+                Map<String,Object> preview=entry.getValue();String id=entry.getKey();
+                if(layer.equals(preview.get("layer"))&&((Number)preview.get("page")).intValue()==page&&!model.objects.containsKey(id)){
+                    visible.add(new TileInkCache.Item("object:"+id,new DrawItem(model,preview).geometry(),false));previewIds.add(id);
+                }
+            }
             startupMark(traceColdDraw,"first_objects_prepared",startupEpoch);
             startupMark(traceColdDraw,"first_ink_prepared",startupEpoch);
             RectF viewport=documentViewport();if(viewport.isEmpty())return;
@@ -668,6 +714,7 @@ public class MainActivity extends Activity {
             if(monolithicTileProbe!=null)tileInk.drawMonolithic(c,visible,monolithicTileProbe,rasterTier,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
             else tileInk.draw(c,page,layer,visible,viewport,rasterTier,cullTileItems,(image,item)->Render.drawItem(model,item,new com.notemaker.cli.Png(image)));
             c.restore();
+            drawnObjectPreviews.addAll(previewIds);tiledObjectPreviews.addAll(previewIds);
             startupMark(traceColdDraw,"first_ink_drawn",startupEpoch);
         }
         @Override protected void onDraw(Canvas c){super.onDraw(c);synchronized(lock){
@@ -701,6 +748,12 @@ public class MainActivity extends Activity {
                 if(type.equals("infinite"))for(Map<String,Object> guide:model.objects.values())if(layer.equals(guide.get("layer"))&&"template".equals(guide.get("shape"))&&((Number)guide.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(guide.get("object")))&&!pendingErase("object",String.valueOf(guide.get("object")),layer))drawInfiniteTemplate(c,guide);
                 if((!useInkCache||previewing)&&layer.equals(selected)&&points!=null&&current!=null)drawStroke(c,stroke());
                 if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)&&!(previewing&&previewed("object",e.getKey()))){if(previewing){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!RectF.intersects(previewViewport,new TileInkCache.Item("object:"+e.getKey(),geometry).bounds))continue;}Render.drawObject(model,o,new com.notemaker.cli.Png(c));}}
+                if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> entry:pendingObjectPreviews.entrySet()){
+                    Map<String,Object> pending=entry.getValue();
+                    if(layer.equals(pending.get("layer"))&&((Number)pending.get("page")).intValue()==page&&!model.objects.containsKey(entry.getKey())){
+                        Render.drawObject(model,pending,new com.notemaker.cli.Png(c));drawnObjectPreviews.add(entry.getKey());
+                    }
+                }
                 c.restore();
                 c.restore();
             }

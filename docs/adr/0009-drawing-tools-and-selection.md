@@ -1,6 +1,6 @@
 # ADR 0009: Drawing tools through the shared proxy
 
-Status: accepted, 2026-10-13; expanded implementation and verification 2026-10-14.
+Status: accepted, 2026-10-13; expanded implementation and verification through 2026-10-21.
 
 ## Context
 
@@ -37,6 +37,13 @@ responses cannot restore a selection after its tool or document context ends.
 Transforms send ephemeral previews through proxies. Only the completed
 transform becomes a durable atomic action and one undo entry. When a lock
 expires, remote previews disappear and the last committed appearance returns.
+Android also shows a new object in its normal document tile renderer while
+its selected proxy commits the action. This local preview does not enter the
+replica or actor history. On a successful local commit with identical painted
+content and no other model changes, the existing tile pixels remain visible
+without a second Canvas redraw; a mismatch, remote result, or rejection
+redraws from authoritative state. The CLI and proxy still own validation,
+durability, and synchronization.
 Text scales with its selection. Offline edits remain locally durable. When
 offline edits conflict on reconnection, both versions must be retained, with a
 conflict badge and comparison panel offering either version or both. This

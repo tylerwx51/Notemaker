@@ -31,6 +31,7 @@ final class CoverageCheck {
         require(rendered.getPixel(50,50)==Color.RED,"Partial erase damaged or hid underlying layer");require(rendered.getPixel(20,50)==Color.BLACK,"Partial erase lost untouched pixels");rendered.recycle();
         test.runOnMainSync(()->{try{app.refreshShared(snapshot);}catch(Exception e){throw new RuntimeException(e);}});
         previewRollback(test,app);
+        objectPreview(test,app);
         test.runOnMainSync(()->app.selectAt(120,170));
         long until=android.os.SystemClock.uptimeMillis()+10000;while(app.selectionSession==null&&android.os.SystemClock.uptimeMillis()<until)Thread.sleep(25);
         require(app.selectionSession!=null,"Activity did not select outline");
@@ -41,6 +42,34 @@ final class CoverageCheck {
     }
     private static List<Object> query(MainActivity app,double x,double y)throws Exception{return list(map(app.replica.command(Arrays.asList("selection","query","-"),object("layer","base","region",Geometry.json(Geometry.rect(x-.1,y-.1,.2,.2))))).get("items"));}
     private static void require(boolean condition,String message){if(!condition)throw new IllegalStateException(message);}
+    private static void objectPreview(Integration test,MainActivity app)throws Exception{
+        String id="preview-created-box";
+        java.util.concurrent.CountDownLatch paused=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
+        ReplicaService.writes.execute(()->{paused.countDown();try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}});
+        require(paused.await(5,java.util.concurrent.TimeUnit.SECONDS),"Object writer did not pause");
+        long coalescedBefore=app.coalescedObjectFrames;
+        Bitmap before=Bitmap.createBitmap(800,800,Bitmap.Config.ARGB_8888),during=Bitmap.createBitmap(800,800,Bitmap.Config.ARGB_8888),after=Bitmap.createBitmap(800,800,Bitmap.Config.ARGB_8888);
+        try{
+            test.runOnMainSync(()->{
+                app.canvas.draw(new Canvas(before));
+                app.persistObject(MainActivity.obj("kind","object","object",id,"shape","rect","layer","base","page",0,
+                        "x",300,"y",300,"w",70,"h",70,"color",Color.BLACK,"fill",Color.BLACK,"width",4,"fontSize",24,"text",""));
+                require(app.pendingObjectPreviews.containsKey(id),"Missing transient object preview");
+                app.canvas.draw(new Canvas(during));
+                require(!before.sameAs(during),"Pending object did not change canvas pixels");
+                require(app.drawnObjectPreviews.contains(id),"Preview was not drawn");
+                require(!app.model.objects.containsKey(id),"Preview entered model before commit");
+            });
+            require(!Store.model(app.replica.read()).objects.containsKey(id),"Preview changed durable state");
+        }finally{release.countDown();}
+        ReplicaService.writes.submit(()->{}).get(10,java.util.concurrent.TimeUnit.SECONDS);test.waitForIdleSync();
+        require(app.pendingObjectPreviews.isEmpty(),"Committed object retained transient preview");
+        require(Store.model(app.replica.read()).objects.containsKey(id),"Previewed object was not durable");
+        require(app.coalescedObjectFrames==coalescedBefore+1,"Matching committed object still redrew the canvas");
+        test.runOnMainSync(()->app.canvas.draw(new Canvas(after)));
+        require(during.sameAs(after),"Committed object changed preview pixels");
+        before.recycle();during.recycle();after.recycle();
+    }
     private static void previewRollback(Integration test,MainActivity app)throws Exception{
         java.util.concurrent.CountDownLatch paused=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
         ReplicaService.writes.execute(()->{paused.countDown();try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}});

@@ -19,6 +19,7 @@ final class InteractionPerformance {
         Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
         List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
         List<Double> selectedHitTest=new ArrayList<>();
+        List<Double> objectCommitAckLatency=new ArrayList<>();
         for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","selection_tap","document_reopen","history_toggle","stroke_history_toggle","object_create","page_switch")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
@@ -43,6 +44,7 @@ final class InteractionPerformance {
             app.getWindow().getDecorView().getViewTreeObserver().addOnDrawListener(uiListener);app.canvas.invalidate();});
         test.waitForIdleSync();
         Map<String,Object> start=Performance.resources(0);
+        long coalescedBefore=app.coalescedObjectFrames;
         Map<String,Object> modeResources=new LinkedHashMap<>();
         Map<String,Object> pageTiles=object();
         String originalLayer=app.selected,extraLayer="performance-"+UUID.randomUUID();
@@ -116,8 +118,8 @@ final class InteractionPerformance {
                 int count=name.equals("pan")||historyMode?60:name.equals("document_reopen")?12:40;
                 int warmup=name.equals("document_reopen")?2:historyMode?6:5;
                 for(int i=0;i<count;i++){
-                    int index=i;CountDownLatch painted=new CountDownLatch(1),handled=new CountDownLatch(1),uiPainted=new CountDownLatch(1);
-                    AtomicLong drawn=new AtomicLong(),uiDrawn=new AtomicLong(),started=new AtomicLong(),completed=new AtomicLong();
+                    int index=i;CountDownLatch painted=new CountDownLatch(1),handled=new CountDownLatch(1),uiPainted=new CountDownLatch(1),committed=new CountDownLatch(1);
+                    AtomicLong drawn=new AtomicLong(),uiDrawn=new AtomicLong(),started=new AtomicLong(),completed=new AtomicLong(),committedAt=new AtomicLong();
                     long queued=System.nanoTime();
                     input.post(()->{
                         started.set(System.nanoTime());
@@ -128,9 +130,9 @@ final class InteractionPerformance {
                                 objectCreate?app.model.objects.containsKey(createId)&&!app.objectHistoryPending():!history||(!app.historyPending&&
                                 (forward?!Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId)):
                                         Boolean.FALSE.equals(strokeHistory?app.model.active.get(strokeHistoryId):app.model.objectActive.get(historyId))));
-                        uiDrawReady.set(ready);
+                        uiDrawReady.set(objectCreate?()->app.pendingObjectPreviews.containsKey(createId)||ready.getAsBoolean():ready);
                         uiDrawAck.set(()->{uiDrawn.set(System.nanoTime());uiPainted.countDown();});
-                        app.canvas.afterDraw=()->{if(ready.getAsBoolean()){drawn.set(System.nanoTime());painted.countDown();}};
+                        app.canvas.afterDraw=()->{if(drawn.get()==0&&(objectCreate?app.drawnObjectPreviews.contains(createId)||ready.getAsBoolean():ready.getAsBoolean())){drawn.set(System.nanoTime());painted.countDown();}};
                         if(name.equals("pan")){
                             app.pan=true;float x=app.canvas.getWidth()/2f,y=app.canvas.getHeight()/2f;
                             long when=SystemClock.uptimeMillis();
@@ -151,6 +153,7 @@ final class InteractionPerformance {
                         }else if(history){
                             app.history(forward);
                         }else if(objectCreate){
+                            app.objectCommitAck=id->{if(createId.equals(id)){committedAt.set(System.nanoTime());committed.countDown();}};
                             app.persistObject(MainActivity.obj("kind","object","object",createId,"shape","rect",
                                     "layer",app.selected,"page",app.page,"x",100+(index%10)*55,"y",300+(index/10)*55,
                                     "w",42,"h",36,"color",android.graphics.Color.BLACK,"width",3,"fontSize",24,"text",""));
@@ -160,9 +163,12 @@ final class InteractionPerformance {
                         completed.set(System.nanoTime());handled.countDown();
                     });
                     if(!handled.await(5,TimeUnit.SECONDS)||!uiPainted.await(5,TimeUnit.SECONDS)||
-                            (!name.equals("layer_switch")&&!name.equals("tool_switch")&&!painted.await(5,TimeUnit.SECONDS)))
+                            (!name.equals("layer_switch")&&!name.equals("tool_switch")&&!painted.await(5,TimeUnit.SECONDS))||
+                            (name.equals("object_create")&&!committed.await(5,TimeUnit.SECONDS)))
                         throw new IllegalStateException("Interaction draw timed out: "+name+" #"+index);
+                    if(name.equals("object_create"))test.runOnMainSync(()->app.objectCommitAck=null);
                     if(index>=warmup){
+                        if(name.equals("object_create"))objectCommitAckLatency.add((committedAt.get()-queued)/1e6);
                         handler.get(name).add((completed.get()-queued)/1e6);uiDraw.get(name).add((uiDrawn.get()-queued)/1e6);
                         queue.get(name).add((started.get()-queued)/1e6);action.get(name).add((completed.get()-started.get())/1e6);
                         if(!name.equals("layer_switch")&&!name.equals("tool_switch")){draw.get(name).add((drawn.get()-queued)/1e6);
@@ -232,7 +238,7 @@ final class InteractionPerformance {
             test.waitForIdleSync();Thread.sleep(250);
         }finally{
             current.set(null);
-            test.runOnMainSync(()->{app.canvas.afterDraw=null;uiDrawAck.set(null);uiDrawReady.set(null);
+            test.runOnMainSync(()->{app.canvas.afterDraw=null;app.objectCommitAck=null;uiDrawAck.set(null);uiDrawReady.set(null);
                 app.getWindow().removeOnFrameMetricsAvailableListener(listener);
                 app.getWindow().getDecorView().getViewTreeObserver().removeOnDrawListener(uiListener);});
             frames.quitSafely();
@@ -250,10 +256,12 @@ final class InteractionPerformance {
                 "undo",object("input_to_ui_draw",Performance.stats(undoUiDraw),"input_to_draw",Performance.stats(undoCanvasDraw)),
                 "redo",object("input_to_ui_draw",Performance.stats(redoUiDraw),"input_to_draw",Performance.stats(redoCanvasDraw)));
         return object("modes",modes,"mode_resources",modeResources,"page_tile_cache",pageTiles,
+                "coalesced_object_frames",app.coalescedObjectFrames-coalescedBefore,
+                "object_create_commit_ack",Performance.stats(objectCommitAckLatency),
                 "selected_hit_test",Performance.stats(selectedHitTest),
                 "start_resources",start,"end_resources",end,"post_gc_resources",postGc,
                 "history_directions",historyDirections,
-                "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, direct page switching, and selection tap with lease acquisition; history modes alternate object or stroke undo and redo",
+                "latency_definition","enqueue to first visible Canvas draw (preview or committed for object creation) and first durable updated window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, direct page switching, and selection tap with lease acquisition; history modes alternate object or stroke undo and redo",
                 "document",app.document,"state_revision",app.replica.read().get("revision"));
     }
     private static Map<String,Object> tileMetrics(Instrumentation test,MainActivity app){
