@@ -46,6 +46,10 @@ content and no other model changes, the existing tile pixels remain visible
 without a second Canvas redraw; a mismatch, remote result, or rejection
 redraws from authoritative state. The CLI and proxy still own validation,
 durability, and synchronization.
+For a local Android stroke, pen-up appends the final stroke state and saves
+the editor undo list in one selected-proxy transaction. Remote selected proxies
+keep the separate commands. This retains an atomic durable final stroke and
+undo entry while avoiding a second local journal write at pen-up.
 Text scales with its selection. Offline edits remain locally durable. When
 offline edits conflict on reconnection, both versions must be retained, with a
 conflict badge and comparison panel offering either version or both. This

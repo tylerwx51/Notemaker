@@ -1,0 +1,626 @@
+{
+  "source_revision": "500957250ec0e4f02cfa87662451b8121beae418",
+  "source_apk_sha256": "164b34f7f7ac19e49d418d576b0f74c9883dc74255afcc0bf6866912056ef988",
+  "device_model": "NoteAir6C",
+  "android_api": "36",
+  "workload": {
+    "strokes": 1000,
+    "short_stroke_points": 50,
+    "figure_eight_points": 500,
+    "viewport_wrapped": true
+  },
+  "latency_ms": {
+    "stroke_latency": {
+      "over_30_ms": 4314,
+      "samples": 7920,
+      "p50_ms": 31.849636,
+      "p95_ms": 63.085417,
+      "p99_ms": 72.581041,
+      "max_ms": 96.662709
+    },
+    "down_latency": {
+      "over_30_ms": 203,
+      "samples": 990,
+      "p50_ms": 24.061927,
+      "p95_ms": 36.243177,
+      "p99_ms": 52.319896,
+      "max_ms": 59.705104
+    },
+    "move_latency": {
+      "over_30_ms": 3536,
+      "samples": 5940,
+      "p50_ms": 37.424948,
+      "p95_ms": 63.211666,
+      "p99_ms": 73.029011,
+      "max_ms": 96.662709
+    },
+    "up_latency": {
+      "over_30_ms": 575,
+      "samples": 990,
+      "p50_ms": 40.146354,
+      "p95_ms": 67.528593,
+      "p99_ms": 74.956042,
+      "max_ms": 80.476042
+    },
+    "figure_eight_latency": {
+      "over_30_ms": 44,
+      "samples": 80,
+      "p50_ms": 35.560104,
+      "p95_ms": 63.700104,
+      "p99_ms": 89.893229,
+      "max_ms": 89.893229
+    }
+  },
+  "windows": [
+    {
+      "strokes": "1-100 (10 warmup)",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 720,
+        "p50_ms": 1.096146,
+        "p95_ms": 2.874427,
+        "p99_ms": 3.747187,
+        "max_ms": 6.869322
+      },
+      "dispatch": {
+        "over_30_ms": 90,
+        "samples": 720,
+        "p50_ms": 7.3725,
+        "p95_ms": 34.519167,
+        "p99_ms": 38.982292,
+        "max_ms": 43.699062
+      },
+      "input_to_draw": {
+        "over_30_ms": 42,
+        "samples": 641,
+        "p50_ms": 22.97349,
+        "p95_ms": 30.487657,
+        "p99_ms": 34.657084,
+        "max_ms": 37.387708
+      },
+      "frame": {
+        "over_30_ms": 641,
+        "samples": 644,
+        "p50_ms": 57.357676,
+        "p95_ms": 86.78356,
+        "p99_ms": 87.899507,
+        "max_ms": 89.124373
+      },
+      "frame_phases": {
+        "unknown_delay": {
+          "over_30_ms": 0,
+          "samples": 644,
+          "p50_ms": 1.321647,
+          "p95_ms": 2.596783,
+          "p99_ms": 4.197575,
+          "max_ms": 11.002546
+        },
+        "input": {
+          "over_30_ms": 0,
+          "samples": 644,
+          "p50_ms": 0.004792,
+          "p95_ms": 0.010937,
+          "p99_ms": 0.015208,
+          "max_ms": 0.184947
+        },
+        "animation": {
+          "over_30_ms": 0,
+          "samples": 644,
+          "p50_ms": 0.003385,
+          "p95_ms": 0.005573,
+          "p99_ms": 0.00698,
+          "max_ms": 0.987448
+        },
+        "layout": {
+          "over_30_ms": 0,
+          "samples": 644,
+          "p50_ms": 0.194062,
+          "p95_ms": 0.432865,
+          "p99_ms": 0.633177,
+          "max_ms": 1.013073
+        },
+        "draw": {
+          "over_30_ms": 0,
+          "samples": 644,
+          "p50_ms": 7.722812,
+          "p95_ms": 11.962448,
+          "p99_ms": 14.445312,
+          "max_ms": 18.420521
+        },
+        "sync": {
+          "over_30_ms": 0,
+          "samples": 644,
+          "p50_ms": 1.192187,
+          "p95_ms": 5.027292,
+          "p99_ms": 6.799948,
+          "max_ms": 9.903802
+        },
+        "command_issue": {
+          "over_30_ms": 238,
+          "samples": 644,
+          "p50_ms": 20.063594,
+          "p95_ms": 47.353125,
+          "p99_ms": 49.100313,
+          "max_ms": 50.472396
+        },
+        "swap_buffers": {
+          "over_30_ms": 0,
+          "samples": 644,
+          "p50_ms": 1.798333,
+          "p95_ms": 2.379218,
+          "p99_ms": 2.815885,
+          "max_ms": 3.938646
+        }
+      }
+    },
+    {
+      "strokes": "401-500",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 800,
+        "p50_ms": 0.809583,
+        "p95_ms": 2.826667,
+        "p99_ms": 3.660468,
+        "max_ms": 4.586771
+      },
+      "dispatch": {
+        "over_30_ms": 165,
+        "samples": 800,
+        "p50_ms": 11.065052,
+        "p95_ms": 37.355573,
+        "p99_ms": 40.601615,
+        "max_ms": 54.407969
+      },
+      "input_to_draw": {
+        "over_30_ms": 75,
+        "samples": 681,
+        "p50_ms": 22.926823,
+        "p95_ms": 32.961354,
+        "p99_ms": 37.090208,
+        "max_ms": 41.82724
+      },
+      "frame": {
+        "over_30_ms": 674,
+        "samples": 683,
+        "p50_ms": 64.869127,
+        "p95_ms": 89.715996,
+        "p99_ms": 90.248482,
+        "max_ms": 91.212456
+      },
+      "frame_phases": {
+        "unknown_delay": {
+          "over_30_ms": 0,
+          "samples": 683,
+          "p50_ms": 1.254554,
+          "p95_ms": 3.012914,
+          "p99_ms": 6.705321,
+          "max_ms": 10.522384
+        },
+        "input": {
+          "over_30_ms": 0,
+          "samples": 683,
+          "p50_ms": 0.0025,
+          "p95_ms": 0.006094,
+          "p99_ms": 0.012709,
+          "max_ms": 0.01401
+        },
+        "animation": {
+          "over_30_ms": 0,
+          "samples": 683,
+          "p50_ms": 0.001458,
+          "p95_ms": 0.00474,
+          "p99_ms": 0.005521,
+          "max_ms": 0.012448
+        },
+        "layout": {
+          "over_30_ms": 0,
+          "samples": 683,
+          "p50_ms": 0.135521,
+          "p95_ms": 0.314219,
+          "p99_ms": 0.465417,
+          "max_ms": 0.552656
+        },
+        "draw": {
+          "over_30_ms": 0,
+          "samples": 683,
+          "p50_ms": 6.668958,
+          "p95_ms": 14.552396,
+          "p99_ms": 17.244583,
+          "max_ms": 19.383594
+        },
+        "sync": {
+          "over_30_ms": 0,
+          "samples": 683,
+          "p50_ms": 1.046302,
+          "p95_ms": 3.196927,
+          "p99_ms": 7.039062,
+          "max_ms": 13.499063
+        },
+        "command_issue": {
+          "over_30_ms": 409,
+          "samples": 683,
+          "p50_ms": 41.946719,
+          "p95_ms": 49.045157,
+          "p99_ms": 50.090886,
+          "max_ms": 51.461719
+        },
+        "swap_buffers": {
+          "over_30_ms": 0,
+          "samples": 683,
+          "p50_ms": 1.482552,
+          "p95_ms": 2.21901,
+          "p99_ms": 2.4825,
+          "max_ms": 3.266094
+        }
+      }
+    },
+    {
+      "strokes": "901-1000",
+      "handler": {
+        "over_30_ms": 0,
+        "samples": 800,
+        "p50_ms": 0.638073,
+        "p95_ms": 2.402865,
+        "p99_ms": 3.594114,
+        "max_ms": 5.170312
+      },
+      "dispatch": {
+        "over_30_ms": 159,
+        "samples": 800,
+        "p50_ms": 17.561042,
+        "p95_ms": 37.700781,
+        "p99_ms": 45.018593,
+        "max_ms": 56.1075
+      },
+      "input_to_draw": {
+        "over_30_ms": 122,
+        "samples": 649,
+        "p50_ms": 26.466562,
+        "p95_ms": 38.628385,
+        "p99_ms": 43.844063,
+        "max_ms": 50.489687
+      },
+      "frame": {
+        "over_30_ms": 643,
+        "samples": 654,
+        "p50_ms": 90.160972,
+        "p95_ms": 91.4075,
+        "p99_ms": 92.00446,
+        "max_ms": 92.332233
+      },
+      "frame_phases": {
+        "unknown_delay": {
+          "over_30_ms": 0,
+          "samples": 654,
+          "p50_ms": 1.022573,
+          "p95_ms": 2.946851,
+          "p99_ms": 8.453204,
+          "max_ms": 13.317914
+        },
+        "input": {
+          "over_30_ms": 0,
+          "samples": 654,
+          "p50_ms": 0.001927,
+          "p95_ms": 0.004844,
+          "p99_ms": 0.00599,
+          "max_ms": 0.008802
+        },
+        "animation": {
+          "over_30_ms": 0,
+          "samples": 654,
+          "p50_ms": 0.001302,
+          "p95_ms": 0.003646,
+          "p99_ms": 0.004739,
+          "max_ms": 0.005573
+        },
+        "layout": {
+          "over_30_ms": 0,
+          "samples": 654,
+          "p50_ms": 0.116042,
+          "p95_ms": 0.208281,
+          "p99_ms": 0.307552,
+          "max_ms": 0.468698
+        },
+        "draw": {
+          "over_30_ms": 4,
+          "samples": 654,
+          "p50_ms": 9.578854,
+          "p95_ms": 20.972083,
+          "p99_ms": 28.155729,
+          "max_ms": 39.834531
+        },
+        "sync": {
+          "over_30_ms": 0,
+          "samples": 654,
+          "p50_ms": 0.986354,
+          "p95_ms": 2.929375,
+          "p99_ms": 5.224896,
+          "max_ms": 13.120677
+        },
+        "command_issue": {
+          "over_30_ms": 550,
+          "samples": 654,
+          "p50_ms": 46.888072,
+          "p95_ms": 49.409791,
+          "p99_ms": 50.561823,
+          "max_ms": 51.342083
+        },
+        "swap_buffers": {
+          "over_30_ms": 0,
+          "samples": 654,
+          "p50_ms": 1.323177,
+          "p95_ms": 1.89125,
+          "p99_ms": 2.26625,
+          "max_ms": 2.658125
+        }
+      }
+    }
+  ],
+  "dispatch_stalls": 1303,
+  "elapsed_seconds": 276.853955936,
+  "drain_ms": 870.500365,
+  "max_save_queue": 2,
+  "incremental_matches_replay": true,
+  "tile_cache": {
+    "tile_renders": 8038,
+    "item_renders": 248982,
+    "geometry_renders": 7863,
+    "path_command_reuses": 240336,
+    "transient_path_command_reuses": 783,
+    "path_command_misses": 2025,
+    "path_command_evictions": 488,
+    "reused_tiles": 72034,
+    "current_bytes": 21300480,
+    "peak_bytes": 21300480,
+    "max_bytes": 100663296,
+    "path_command_bytes_estimate": 5669632,
+    "path_command_points_estimate": 13955,
+    "max_path_command_bytes_estimate": 25165824,
+    "max_path_command_points_estimate": 100000,
+    "reused_tile_repaints": 8018
+  },
+  "resources": [
+    {
+      "strokes": 0,
+      "pss_kib": 106539,
+      "private_dirty_kib": 87960,
+      "java_used_bytes": 6750144,
+      "native_allocated_bytes": 15126016,
+      "process_cpu_ms": 2106,
+      "sampling_ms": 89.529114,
+      "read_bytes": 0,
+      "write_bytes": 188416,
+      "memory_parts_kib": {
+        "java-heap_kib": 12332,
+        "native-heap_kib": 12652,
+        "code_kib": 2804,
+        "stack_kib": 1140,
+        "graphics_kib": 58708,
+        "private-other_kib": 3884,
+        "system_kib": 15019,
+        "total-swap_kib": 18348
+      }
+    },
+    {
+      "strokes": 100,
+      "pss_kib": 142865,
+      "private_dirty_kib": 123060,
+      "java_used_bytes": 24854720,
+      "native_allocated_bytes": 21378048,
+      "process_cpu_ms": 25650,
+      "sampling_ms": 72.539219,
+      "read_bytes": 0,
+      "write_bytes": 3235840,
+      "memory_parts_kib": {
+        "java-heap_kib": 32172,
+        "native-heap_kib": 17472,
+        "code_kib": 3288,
+        "stack_kib": 1068,
+        "graphics_kib": 69316,
+        "private-other_kib": 3848,
+        "system_kib": 15701,
+        "total-swap_kib": 17980
+      }
+    },
+    {
+      "strokes": 200,
+      "pss_kib": 146785,
+      "private_dirty_kib": 126672,
+      "java_used_bytes": 16122048,
+      "native_allocated_bytes": 25198928,
+      "process_cpu_ms": 51100,
+      "sampling_ms": 80.517135,
+      "read_bytes": 0,
+      "write_bytes": 6144000,
+      "memory_parts_kib": {
+        "java-heap_kib": 23388,
+        "native-heap_kib": 21932,
+        "code_kib": 3428,
+        "stack_kib": 1068,
+        "graphics_kib": 77248,
+        "private-other_kib": 3844,
+        "system_kib": 15877,
+        "total-swap_kib": 17980
+      }
+    },
+    {
+      "strokes": 300,
+      "pss_kib": 171545,
+      "private_dirty_kib": 151336,
+      "java_used_bytes": 45797568,
+      "native_allocated_bytes": 25733392,
+      "process_cpu_ms": 77189,
+      "sampling_ms": 62.208386,
+      "read_bytes": 0,
+      "write_bytes": 9035776,
+      "memory_parts_kib": {
+        "java-heap_kib": 52124,
+        "native-heap_kib": 21596,
+        "code_kib": 3428,
+        "stack_kib": 1068,
+        "graphics_kib": 73448,
+        "private-other_kib": 3908,
+        "system_kib": 15973,
+        "total-swap_kib": 17980
+      }
+    },
+    {
+      "strokes": 400,
+      "pss_kib": 175549,
+      "private_dirty_kib": 155332,
+      "java_used_bytes": 47624384,
+      "native_allocated_bytes": 26714128,
+      "process_cpu_ms": 104337,
+      "sampling_ms": 82.345677,
+      "read_bytes": 0,
+      "write_bytes": 11968512,
+      "memory_parts_kib": {
+        "java-heap_kib": 53732,
+        "native-heap_kib": 22748,
+        "code_kib": 3428,
+        "stack_kib": 1068,
+        "graphics_kib": 74624,
+        "private-other_kib": 3968,
+        "system_kib": 15981,
+        "total-swap_kib": 17980
+      }
+    },
+    {
+      "strokes": 500,
+      "pss_kib": 175040,
+      "private_dirty_kib": 154816,
+      "java_used_bytes": 39030976,
+      "native_allocated_bytes": 29819520,
+      "process_cpu_ms": 131581,
+      "sampling_ms": 81.947709,
+      "read_bytes": 0,
+      "write_bytes": 14897152,
+      "memory_parts_kib": {
+        "java-heap_kib": 45836,
+        "native-heap_kib": 26068,
+        "code_kib": 3428,
+        "stack_kib": 1068,
+        "graphics_kib": 78616,
+        "private-other_kib": 4036,
+        "system_kib": 15988,
+        "total-swap_kib": 17976
+      }
+    },
+    {
+      "strokes": 600,
+      "pss_kib": 141938,
+      "private_dirty_kib": 121732,
+      "java_used_bytes": 22642880,
+      "native_allocated_bytes": 29511040,
+      "process_cpu_ms": 160578,
+      "sampling_ms": 42.136146,
+      "read_bytes": 0,
+      "write_bytes": 17846272,
+      "memory_parts_kib": {
+        "java-heap_kib": 12568,
+        "native-heap_kib": 26060,
+        "code_kib": 3428,
+        "stack_kib": 1072,
+        "graphics_kib": 78632,
+        "private-other_kib": 4168,
+        "system_kib": 16010,
+        "total-swap_kib": 17976
+      }
+    },
+    {
+      "strokes": 700,
+      "pss_kib": 202978,
+      "private_dirty_kib": 182696,
+      "java_used_bytes": 59334848,
+      "native_allocated_bytes": 34246432,
+      "process_cpu_ms": 190235,
+      "sampling_ms": 61.131303,
+      "read_bytes": 0,
+      "write_bytes": 20803584,
+      "memory_parts_kib": {
+        "java-heap_kib": 64104,
+        "native-heap_kib": 30408,
+        "code_kib": 3412,
+        "stack_kib": 1072,
+        "graphics_kib": 83784,
+        "private-other_kib": 4160,
+        "system_kib": 16038,
+        "total-swap_kib": 17976
+      }
+    },
+    {
+      "strokes": 800,
+      "pss_kib": 184534,
+      "private_dirty_kib": 164240,
+      "java_used_bytes": 39448768,
+      "native_allocated_bytes": 33983712,
+      "process_cpu_ms": 219944,
+      "sampling_ms": 67.845105,
+      "read_bytes": 0,
+      "write_bytes": 23785472,
+      "memory_parts_kib": {
+        "java-heap_kib": 45708,
+        "native-heap_kib": 30300,
+        "code_kib": 3412,
+        "stack_kib": 1072,
+        "graphics_kib": 83760,
+        "private-other_kib": 4224,
+        "system_kib": 16058,
+        "total-swap_kib": 17976
+      }
+    },
+    {
+      "strokes": 900,
+      "pss_kib": 278994,
+      "private_dirty_kib": 258580,
+      "java_used_bytes": 126038208,
+      "native_allocated_bytes": 38846416,
+      "process_cpu_ms": 250341,
+      "sampling_ms": 38.877657,
+      "read_bytes": 233472,
+      "write_bytes": 26808320,
+      "memory_parts_kib": {
+        "java-heap_kib": 128180,
+        "native-heap_kib": 34772,
+        "code_kib": 3520,
+        "stack_kib": 1072,
+        "graphics_kib": 89136,
+        "private-other_kib": 6252,
+        "system_kib": 16062,
+        "total-swap_kib": 17976
+      }
+    },
+    {
+      "strokes": 1000,
+      "pss_kib": 271830,
+      "private_dirty_kib": 251416,
+      "java_used_bytes": 120889536,
+      "native_allocated_bytes": 38755632,
+      "process_cpu_ms": 281073,
+      "sampling_ms": 49.496354,
+      "read_bytes": 233472,
+      "write_bytes": 30081024,
+      "memory_parts_kib": {
+        "java-heap_kib": 123092,
+        "native-heap_kib": 34668,
+        "code_kib": 3520,
+        "stack_kib": 1072,
+        "graphics_kib": 89088,
+        "private-other_kib": 4320,
+        "system_kib": 16070,
+        "total-swap_kib": 17976
+      }
+    }
+  ],
+  "io_counters_delta_before_final_drain": {
+    "rchar": 26715892,
+    "wchar": 4312709,
+    "syscr": 53500,
+    "syscw": 63101,
+    "read_bytes": 233472,
+    "write_bytes": 29892608,
+    "cancelled_write_bytes": 0
+  },
+  "io_note": "Linux per-process counters. write_bytes is charged I/O, not measured storage latency.",
+  "restart_verified": true
+}
