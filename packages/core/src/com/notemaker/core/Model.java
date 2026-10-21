@@ -16,14 +16,17 @@ public final class Model {
     public final Map<String,Boolean> active=new LinkedHashMap<>(), objectActive=new LinkedHashMap<>(), layerActive=new LinkedHashMap<>();
     private Map<String,LinkedHashMap<String,Map<String,Object>>> itemIndex;
     private final Map<String,Integer> itemOrder=new HashMap<>();
+    private final Map<String,List<Map<String,Object>>> orderedItems=new HashMap<>();
     private String itemScope(Map<String,Object> o){return o.get("layer")+":"+((Number)o.get("page")).intValue();}
     private void indexItem(Map<String,Object> o){String kind=string(o,"kind"),key=kind+":"+string(o,kind);if(!itemOrder.containsKey(key))itemOrder.put(key,itemOrder.size());itemIndex.computeIfAbsent(itemScope(o),k->new LinkedHashMap<>()).put(key,o);}
     public List<Map<String,Object>> layerItems(String layer,int page){
         if(itemIndex==null){itemIndex=new HashMap<>();for(Map<String,Object> o:strokes.values())indexItem(o);for(Map<String,Object> o:objects.values())indexItem(o);}
-        Collection<Map<String,Object>> source=itemIndex.getOrDefault(layer+":"+page,new LinkedHashMap<>()).values();
-        List<Map<String,Object>> ordered=new ArrayList<>(source);ordered.sort(Comparator.<Map<String,Object>>comparingInt(o->"stroke".equals(o.get("kind"))?0:1).thenComparingInt(o->itemOrder.get(o.get("kind")+":"+o.get(string(o,"kind")))));return Collections.unmodifiableList(ordered);
+        String scope=layer+":"+page;List<Map<String,Object>> cached=orderedItems.get(scope);if(cached!=null)return cached;
+        LinkedHashMap<String,Map<String,Object>> indexed=itemIndex.get(scope);Collection<Map<String,Object>> source=indexed==null?Collections.emptyList():indexed.values();
+        List<Map<String,Object>> ordered=new ArrayList<>(source);ordered.sort(Comparator.<Map<String,Object>>comparingInt(o->"stroke".equals(o.get("kind"))?0:1).thenComparingInt(o->itemOrder.get(o.get("kind")+":"+o.get(string(o,"kind")))));
+        cached=Collections.unmodifiableList(ordered);orderedItems.put(scope,cached);return cached;
     }
-    private void putItem(Map<String,Object> o,Map<String,Map<String,Object>> table,String kind){Map<String,Object> old=table.put(string(o,kind),o);if(itemIndex!=null){if(old!=null&&!itemScope(old).equals(itemScope(o)))itemIndex.get(itemScope(old)).remove(kind+":"+string(o,kind));indexItem(o);}}
+    private void putItem(Map<String,Object> o,Map<String,Map<String,Object>> table,String kind){Map<String,Object> old=table.put(string(o,kind),o);if(itemIndex!=null){if(old!=null){orderedItems.remove(itemScope(old));if(!itemScope(old).equals(itemScope(o)))itemIndex.get(itemScope(old)).remove(kind+":"+string(o,kind));}orderedItems.remove(itemScope(o));indexItem(o);}}
     public Model(){layers.put("base",object("kind","layer","layer","base","name","Layer 1","force",false));}
     /** Entity snapshots are immutable after publication; copy only the indexes. */
     public Model(Model other){type=other.type;deleted=other.deleted;documentSeen=other.documentSeen;layers.putAll(other.layers);strokes.putAll(other.strokes);objects.putAll(other.objects);active.putAll(other.active);objectActive.putAll(other.objectActive);layerActive.putAll(other.layerActive);versions.putAll(other.versions);versionActors.putAll(other.versionActors);conflicts.putAll(other.conflicts);conflictActive.putAll(other.conflictActive);}
@@ -66,7 +69,7 @@ public final class Model {
         switch(string(op,"kind")){
             case "batch":for(Object a:list(op.get("actions")))applyRaw(map(a));break;
             case "conflict-status":conflictActive.put(string(op,"conflict"),(Boolean)op.get("active"));break;
-            case "document-delete":deleted=true;strokes.clear();objects.clear();layers.clear();active.clear();objectActive.clear();layerActive.clear();conflicts.clear();itemIndex=null;break;
+            case "document-delete":deleted=true;strokes.clear();objects.clear();layers.clear();active.clear();objectActive.clear();layerActive.clear();conflicts.clear();itemIndex=null;orderedItems.clear();break;
             case "document":if(!documentSeen){type=string(op,"type");documentSeen=true;}break;
             case "layer":layers.put(string(op,"layer"),op);break;
             case "stroke":putItem(op,strokes,"stroke");break;
