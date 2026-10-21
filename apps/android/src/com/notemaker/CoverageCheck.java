@@ -8,7 +8,7 @@ import static com.notemaker.core.Json.*;
 /** Instrumented coverage checks run only on the explicitly launched test emulator. */
 final class CoverageCheck {
     static void run(Integration test,MainActivity app) throws Exception {
-        cachePixels();
+        cachePixels(true);
         app.replica.command(Arrays.asList("layer","put","-"),object("layer","under","name","Under","force",false,"order",-1));
         for(String layer:Arrays.asList("base","under"))app.replica.command(Arrays.asList("object","put","-"),object("object",layer+"-box","layer",layer,"shape","rect","x",0,"y",0,"w",100,"h",100,"fill",layer.equals("base")?Color.BLACK:Color.RED));
         app.replica.command(Arrays.asList("object","put","-"),object("object","ring","shape","ellipse","x",120,"y",120,"w",100,"h",100,"width",4));
@@ -66,7 +66,8 @@ final class CoverageCheck {
             Map<String,Object> restored=app.replica.read();test.runOnMainSync(()->{try{app.saveError=null;app.refreshShared(restored);}catch(Exception e){throw new RuntimeException(e);}});
         }
     }
-    static void cachePixels(){
+    static void cachePixels(){cachePixels(false);}
+    private static void cachePixels(boolean fullSize){
         String svg="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"><circle cx=\"50\" cy=\"50\" r=\"30\" fill=\"none\" stroke=\"black\"/><text x=\"5\" y=\"20\">Cache</text></svg>";
         Bitmap direct=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888),recorded=Bitmap.createBitmap(200,200,Bitmap.Config.ARGB_8888);
         com.notemaker.cli.Png.useSvgPictures=false;new com.notemaker.cli.Png(new Canvas(direct)).svg(5.25,10.5,150.5,160.25,svg);
@@ -78,7 +79,41 @@ final class CoverageCheck {
         Bitmap fastDots=Bitmap.createBitmap(240,240,Bitmap.Config.ARGB_8888),domDots=Bitmap.createBitmap(240,240,Bitmap.Config.ARGB_8888);
         new com.notemaker.cli.Png(new Canvas(fastDots)).svg(5.25,10.5,210,210,dots.toString());
         new com.notemaker.cli.Png(new Canvas(domDots)).svg(5.25,10.5,210,210," "+dots);
-        require(fastDots.sameAs(domDots),"Generated dot SVG fast path changed pixels");fastDots.recycle();domDots.recycle();
+        int changed=0,maxAlphaDifference=0,maxColorDifference=0;
+        for(int y=0;y<240;y++)for(int x=0;x<240;x++){
+            int fast=fastDots.getPixel(x,y),reference=domDots.getPixel(x,y);
+            if(fast==reference)continue;
+            changed++;maxAlphaDifference=Math.max(maxAlphaDifference,Math.abs(Color.alpha(fast)-Color.alpha(reference)));
+            maxColorDifference=Math.max(maxColorDifference,Math.abs(Color.red(fast)*Color.alpha(fast)-Color.red(reference)*Color.alpha(reference))/255);
+        }
+        // The direct cubic path and AndroidSVG differ only at antialiased edges.
+        require(changed<=1500&&maxAlphaDifference<=12&&maxColorDifference<=12,"Generated dot SVG fast path changed pixels: "+changed+", alpha "+maxAlphaDifference+", color "+maxColorDifference);
+        fastDots.recycle();domDots.recycle();
+        if(fullSize){Bitmap fullFast=Bitmap.createBitmap(1000,1400,Bitmap.Config.ARGB_8888),fullReference=Bitmap.createBitmap(1000,1400,Bitmap.Config.ARGB_8888);
+        new com.notemaker.cli.Png(new Canvas(fullFast)).svg(0,0,1000,1400,dots.toString());
+        new com.notemaker.cli.Png(new Canvas(fullReference)).svg(0,0,1000,1400," "+dots);
+        int[] fastPixels=new int[1400000],referencePixels=new int[1400000];
+        fullFast.getPixels(fastPixels,0,1000,0,0,1000,1400);fullReference.getPixels(referencePixels,0,1000,0,0,1000,1400);
+        changed=0;maxAlphaDifference=0;maxColorDifference=0;
+        for(int i=0;i<fastPixels.length;i++)if(fastPixels[i]!=referencePixels[i]){
+            changed++;maxAlphaDifference=Math.max(maxAlphaDifference,Math.abs(Color.alpha(fastPixels[i])-Color.alpha(referencePixels[i])));
+            maxColorDifference=Math.max(maxColorDifference,Math.abs(Color.red(fastPixels[i])*Color.alpha(fastPixels[i])-Color.red(referencePixels[i])*Color.alpha(referencePixels[i]))/255);
+        }
+        require(changed<=28000&&maxAlphaDifference<=12&&maxColorDifference<=12,"Full-size generated dot SVG changed pixels: "+changed+", alpha "+maxAlphaDifference+", color "+maxColorDifference);
+        fullFast.recycle();fullReference.recycle();}
+        String translucent=dots.toString().replace("#999999","#336699").replace("stroke-opacity=\"1.0\"","stroke-opacity=\"0.5\"");
+        Bitmap alphaFast=Bitmap.createBitmap(240,240,Bitmap.Config.ARGB_8888),alphaReference=Bitmap.createBitmap(240,240,Bitmap.Config.ARGB_8888);
+        new com.notemaker.cli.Png(new Canvas(alphaFast)).svg(5.25,10.5,210,210,translucent);
+        new com.notemaker.cli.Png(new Canvas(alphaReference)).svg(5.25,10.5,210,210," "+translucent);
+        changed=0;maxAlphaDifference=0;maxColorDifference=0;
+        for(int y=0;y<240;y++)for(int x=0;x<240;x++){
+            int fast=alphaFast.getPixel(x,y),reference=alphaReference.getPixel(x,y);
+            if(fast==reference)continue;
+            changed++;maxAlphaDifference=Math.max(maxAlphaDifference,Math.abs(Color.alpha(fast)-Color.alpha(reference)));
+            maxColorDifference=Math.max(maxColorDifference,Math.abs(Color.red(fast)*Color.alpha(fast)-Color.red(reference)*Color.alpha(reference))/255);
+        }
+        require(changed<=1500&&maxAlphaDifference<=12&&maxColorDifference<=12,"Translucent generated dot SVG changed pixels: "+changed+", alpha "+maxAlphaDifference+", color "+maxColorDifference);
+        alphaFast.recycle();alphaReference.recycle();
         LinkedHashMap<String,Map<String,Object>> visible=new LinkedHashMap<>();
         for(int i=0;i<3;i++){
             ArrayList<Object> points=new ArrayList<>();for(int p=0;p<40;p++)points.add(Arrays.asList(20+p*4,70+i*12+20*Math.sin(p*.3),.4+(p%5)*.1));

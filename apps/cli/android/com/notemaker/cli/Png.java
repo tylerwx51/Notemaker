@@ -17,6 +17,7 @@ public final class Png implements Render.Surface {
     private static long imageCacheBytes,imageCacheKeyChars;
     private static final java.util.LinkedHashMap<String,Bitmap> IMAGES=new java.util.LinkedHashMap<>(8,.75f,true);
     public static boolean useSvgPictures=true;
+    public static boolean useDirectDots=true;
     public static boolean traceSvg;
     private final Canvas canvas;
     private final java.util.List<StrokeCommands.Command> strokeCommands;
@@ -80,6 +81,21 @@ public final class Png implements Render.Surface {
     }
     public void svg(double x,double y,double w,double h,String source){
         synchronized(SVGS){
+            if(useDirectDots){
+                long begun=traceSvg?System.nanoTime():0;
+                SvgAsset.DotGrid dots=SvgAsset.dotGrid(source);
+                if(dots!=null){
+                    canvas.save();try{
+                        canvas.translate((float)x,(float)y);canvas.clipRect(0,0,(float)w,(float)h);
+                        if(useSvgPictures){
+                            java.util.List<Object> key=java.util.Arrays.asList(source,(float)w,(float)h,Boolean.TRUE);Picture picture=PICTURES.get(key);
+                            if(picture==null){picture=new Picture();Canvas recording=picture.beginRecording(Math.max(1,(int)Math.ceil(w)),Math.max(1,(int)Math.ceil(h)));try{drawDots(recording,w,h,dots);}finally{picture.endRecording();}PICTURES.put(key,picture);}
+                            canvas.drawPicture(picture);
+                        }else drawDots(canvas,w,h,dots);
+                    }finally{canvas.restore();}
+                    if(traceSvg)android.util.Log.i("NoteMakerStartup","svg_direct_dots_ms="+(System.nanoTime()-begun)/1e6+" svg_source_bytes="+source.length());return;
+                }
+            }
             com.caverock.androidsvg.SVG svg=SVGS.get(source);
             if(svg==null){long started=traceSvg?System.nanoTime():0;String normalized=SvgAsset.viewport(source);long validated=traceSvg?System.nanoTime():0;try{svg=com.caverock.androidsvg.SVG.getFromString(normalized);}catch(com.caverock.androidsvg.SVGParseException e){throw new IllegalArgumentException("Could not render SVG",e);}SVGS.put(source,svg);if(traceSvg)android.util.Log.i("NoteMakerStartup","svg_source_bytes="+source.length()+" svg_validate_ms="+(validated-started)/1e6+" svg_parse_ms="+(System.nanoTime()-validated)/1e6);}
             canvas.save();try{
@@ -91,6 +107,24 @@ public final class Png implements Render.Surface {
                 }else svg.renderToCanvas(canvas,new RectF(0,0,(float)w,(float)h));
             }finally{canvas.restore();}
         }
+    }
+    private static void drawDots(Canvas canvas,double w,double h,SvgAsset.DotGrid dots){
+        canvas.save();try{
+            double scale=Math.min(w/dots.width,h/dots.height);
+            canvas.translate((float)((w-dots.width*scale)/2),(float)((h-dots.height*scale)/2));canvas.scale((float)scale,(float)scale);
+            Paint fill=new Paint(Paint.ANTI_ALIAS_FLAG);fill.setColor(dots.color);fill.setStyle(Paint.Style.FILL);
+            Paint stroke=new Paint(Paint.ANTI_ALIAS_FLAG);stroke.setColor(dots.color);stroke.setAlpha((int)Math.round(dots.strokeOpacity*255));stroke.setStyle(Paint.Style.STROKE);stroke.setStrokeWidth((float)dots.strokeWidth);
+            double[] circles=dots.circles();
+            for(int i=0;i<circles.length;i+=3){
+                float cx=(float)circles[i],cy=(float)circles[i+1],r=(float)circles[i+2],left=cx-r,top=cy-r,right=cx+r,bottom=cy+r,k=r*0.5522848f;
+                Path circle=new Path();circle.moveTo(cx,top);
+                circle.cubicTo(cx+k,top,right,cy-k,right,cy);
+                circle.cubicTo(right,cy+k,cx+k,bottom,cx,bottom);
+                circle.cubicTo(cx-k,bottom,left,cy+k,left,cy);
+                circle.cubicTo(left,cy-k,cx-k,top,cx,top);circle.close();
+                canvas.drawPath(circle,fill);canvas.drawPath(circle,stroke);
+            }
+        }finally{canvas.restore();}
     }
     public void saveTransform(double cx,double cy,double rotation,boolean flipX,boolean flipY){transforms.push(canvas.save());canvas.translate((float)cx,(float)cy);canvas.rotate((float)rotation);canvas.scale(flipX?-1:1,flipY?-1:1);canvas.translate((float)-cx,(float)-cy);}
     public void restoreTransform(){canvas.restoreToCount(transforms.pop());}

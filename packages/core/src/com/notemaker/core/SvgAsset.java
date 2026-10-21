@@ -19,7 +19,16 @@ public final class SvgAsset {
     private static final Set<String> TAGS=words("svg g defs title desc path rect circle ellipse line polyline polygon text tspan linearGradient radialGradient stop clipPath marker style");
     private static final Set<String> ATTRS=words("id class style version x y x1 y1 x2 y2 dx dy width height viewBox preserveAspectRatio transform d points rx ry r cx cy fx fy fr fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-miterlimit stroke-dasharray stroke-dashoffset opacity color font-family font-size font-style font-weight text-anchor dominant-baseline alignment-baseline baseline-shift textLength lengthAdjust display visibility clip-path clip-rule gradientUnits gradientTransform spreadMethod offset stop-color stop-opacity href marker-start marker-mid marker-end markerWidth markerHeight markerUnits refX refY orient type space");
     private static Set<String> words(String s){return new HashSet<>(Arrays.asList(s.split(" ")));}
-    private static final class Asset {double[] size;String normalized;Asset(double[] size,String normalized){this.size=size;this.normalized=normalized;}}
+    public static final class DotGrid {
+        public final double width,height,strokeWidth,strokeOpacity;
+        public final int color;
+        private final double[] circles;
+        private DotGrid(double width,double height,double strokeWidth,double strokeOpacity,int color,double[] circles){
+            this.width=width;this.height=height;this.strokeWidth=strokeWidth;this.strokeOpacity=strokeOpacity;this.color=color;this.circles=circles;
+        }
+        public double[] circles(){return circles.clone();}
+    }
+    private static final class Asset {double[] size;String normalized;DotGrid dots;Asset(double[] size,String normalized,DotGrid dots){this.size=size;this.normalized=normalized;this.dots=dots;}}
     private static final Map<String,Asset> CACHE=new LinkedHashMap<String,Asset>(16,.75f,true){protected boolean removeEldestEntry(Map.Entry<String,Asset> e){return size()>16;}};
     private static final String DECIMAL="-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?";
     private static final Pattern DOT_ROOT=Pattern.compile("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ("+DECIMAL+") ("+DECIMAL+")\" width=\"("+DECIMAL+")\" height=\"("+DECIMAL+")\"><g stroke=\"(#[0-9a-f]{6})\" stroke-opacity=\"("+DECIMAL+")\" stroke-width=\"("+DECIMAL+")\">");
@@ -43,7 +52,7 @@ public final class SvgAsset {
         double width=Double.parseDouble(root.group(1)),height=Double.parseDouble(root.group(2));
         double alpha=Double.parseDouble(root.group(6)),stroke=Double.parseDouble(root.group(7));
         if(!Double.isFinite(width)||!Double.isFinite(height)||width<=0||height<=0||width>1000000||height>1000000||alpha<0||alpha>1||!Double.isFinite(stroke)||stroke<=0||stroke>1000000)return null;
-        int offset=root.end(),count=0;
+        int offset=root.end(),count=0;double[] circles=new double[96];
         while(offset<source.length()&&source.startsWith("<circle ",offset)){
             int position=after(source,offset,"<circle cx=\"");int end=source.indexOf('"',position);
             double x=decimal(source,position,end);position=after(source,end,"\" cy=\"");end=position<0?-1:source.indexOf('"',position);
@@ -53,10 +62,13 @@ public final class SvgAsset {
             offset=after(source,position+root.group(5).length(),"\"/>");
             if(offset<0||!Double.isFinite(x)||!Double.isFinite(y)||!Double.isFinite(radius)||x<0||y<0||radius<=0||x>1000000||y>1000000||radius>1000000)return null;
             if(++count>9998)return null; // Root and group also count toward the 10,000-node SVG limit.
+            if(count*3>circles.length)circles=Arrays.copyOf(circles,circles.length*2);
+            circles[(count-1)*3]=x;circles[(count-1)*3+1]=y;circles[(count-1)*3+2]=radius;
         }
         if(count==0||!source.startsWith("</g></svg>",offset)||offset+10!=source.length())return null;
         String normalized="<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 "+root.group(1)+" "+root.group(2)+"\" width=\"100%\" height=\"100%\">"+source.substring(source.indexOf("<g stroke="));
-        return new Asset(new double[]{width,height},normalized);
+        DotGrid grid=new DotGrid(width,height,stroke,alpha,Integer.parseInt(root.group(5).substring(1),16)|0xff000000,Arrays.copyOf(circles,count*3));
+        return new Asset(new double[]{width,height},normalized,grid);
     }
 
     /** Returns intrinsic viewBox dimensions. No external resources or XML entities. */
@@ -84,7 +96,7 @@ public final class SvgAsset {
             root.setAttribute("width","100%");root.setAttribute("height","100%");
             Transformer transformer=TransformerFactory.newInstance().newTransformer();transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION,"yes");
             StringWriter normalized=new StringWriter();transformer.transform(new DOMSource(root),new StreamResult(normalized));
-            CACHE.put(source,new Asset(size,normalized.toString()));return size.clone();
+            CACHE.put(source,new Asset(size,normalized.toString(),null));return size.clone();
         }catch(Exception e){throw new IllegalArgumentException("Invalid SVG: "+e.getMessage(),e);}
     }
     private static double length(String s){return Double.parseDouble(s.trim().replaceFirst("px$",""));}
@@ -116,5 +128,9 @@ public final class SvgAsset {
     /** A viewport wrapper gives all renderers the same meet/center placement. */
     public static synchronized String viewport(String source){
         validate(source);return CACHE.get(source).normalized;
+    }
+    /** Parsed coordinates for the exact generated dot-grid profile, or null for ordinary SVG. */
+    public static synchronized DotGrid dotGrid(String source){
+        Asset asset=CACHE.get(source);if(asset==null){validate(source);asset=CACHE.get(source);}return asset.dots;
     }
 }

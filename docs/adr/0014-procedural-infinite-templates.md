@@ -24,8 +24,16 @@ viewers draw it within their current infinite-canvas viewport.
 For fixed and paged dot-grid templates, recognize the exact SVG grammar emitted
 by the template action during SVG validation. Check every circle and the
 complete document, then normalize its viewport without building an XML DOM.
-All other SVG input keeps the general validator. This changes parsing cost,
-not the stored template action or its rendered pixels.
+All other SVG input keeps the general validator. This changes validation cost,
+not the stored template action.
+
+Android also renders that exact generated dot-grid grammar directly as a cached
+Canvas Picture. The shared validator supplies bounded, parsed circle geometry;
+Android records the same four-cubic circle paths used by AndroidSVG. Other SVG
+assets still use AndroidSVG. The source, CLI export, local journal, and network
+protocol remain unchanged. The direct picture has small edge antialiasing
+differences from AndroidSVG, bounded in instrumented comparisons at both tile
+and full-page sizes.
 
 ## Consequences
 
@@ -45,3 +53,8 @@ validation fast path reduced process-cold launch median from 1,614 ms to
 1,466/1,473 ms in two runs. Android pixel comparison against the general DOM
 path matched exactly for a 1,333-circle template. See
 `docs/design/performance/svg-dot-grid-fast-validation.md`.
+On the later checkpointed copied note, direct Canvas rendering with picture
+reuse reduced process-cold launch median from 1,428.5 ms to 1,339.5, 1,338,
+and 1,323 ms in three physical runs, and first rendering of the 122 KiB grid from
+about 196 ms of validation, SVG parsing, and picture recording to about 46 ms.
+See `docs/design/performance/svg-dot-direct-canvas.md`.
