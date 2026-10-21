@@ -31,3 +31,27 @@ not evidence of a stable memory reduction. Charged writes are cumulative kernel
 accounting, not a direct flash-wear or fsync-latency measurement. Synthetic
 MotionEvents and Android frame timing do not measure physical pen sampling or
 E Ink scanout. The isolated package leaves personal app data untouched.
+
+## Stroke-path cache capacity
+
+Branch `perf/path-cache-1024` (`e547956`) doubled the retained stroke-path
+entry limit from 512 to 1,024, leaving the 24 MiB byte and 100,000-point caps
+unchanged. An isolated 1,000-stroke NoteAir6C run passed replay and restart
+checks. The raw capture is under
+`.test-artifacts/hillclimb/tablet-path-cache-1024-1/`.
+
+| Metric | Preferred 512 entries | Alternative 1,024 entries |
+| --- | ---: | ---: |
+| Path evictions / misses | 488 / 2,011 | 0 / 2,019 |
+| Retained path estimate at end | 5.41 MiB | 10.41 MiB |
+| Input-to-app-draw p95 | 60.64 ms | 60.56 ms |
+| App-draw p95, strokes 901–1000 | 31.79 ms | 31.92 ms |
+| Process CPU | 275.24 s | 277.30 s |
+| Charged writes | 36.47 MiB | 36.31 MiB |
+| Peak sampled PSS | 278.5 MiB | 254.1 MiB |
+
+Evictions disappeared, but path misses and drawing latency did not improve.
+The evicted paths evidently were not needed again in this workload. Keep the
+512-entry limit; the larger cache retains about 5 MiB more path data without
+a measured benefit. The lower sampled PSS in the alternative is not a stable
+memory result because Java heap samples vary with garbage collection.
