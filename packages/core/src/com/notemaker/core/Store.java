@@ -49,12 +49,25 @@ public final class Store {
         coordination.leases=new LinkedHashMap<>(map(copy(state.get("leases"))));coordination.sessions=new LinkedHashMap<>(map(copy(state.get("activeSessions"))));return overlay(state);
     }}
     public Map<String,Object> append(Map<String,Object> operation,String actor) throws Exception {
+        return appendWithSettings(operation,actor,null);
+    }
+    public static void validateSettings(Map<String,Object> preferences){
+        for(String key:preferences.keySet()){
+            Model.require(Arrays.asList("hidden","undo","redo","selected","page","clipboard").contains(key),"Unknown local preference");
+            if(Arrays.asList("hidden","undo","redo").contains(key))for(Object value:list(preferences.get(key)))Model.require(value instanceof String,"Expected preference strings");
+            if(key.equals("selected"))string(preferences,key);
+            if(key.equals("page"))Model.require(number(preferences,key)>=0&&number(preferences,key)<=10000&&number(preferences,key)==Math.rint(number(preferences,key)),"Invalid page");
+            if(key.equals("clipboard")){Map<String,Object> clipboard=map(preferences.get(key));List<Object> entities=list(clipboard.get("entities"));Model.require(entities.size()<=100,"Clipboard exceeds 100 entities");for(Object entity:entities)Model.validate(map(entity));}
+        }
+    }
+    public Map<String,Object> appendWithSettings(Map<String,Object> operation,String actor,Map<String,Object> preferences) throws Exception {
         Model.require(!actor.isEmpty()&&actor.length()<=200,"Invalid actor");
         Model.validate(operation);
+        if(preferences!=null)validateSettings(preferences);
         Model.require(write(operation).getBytes(StandardCharsets.UTF_8).length<=3000000,"Action exceeds 3 MB");
         return edit(state->{
             // Lease checks leave the document model unchanged; reuse this snapshot for version bases.
-            Model current=Store.model(state);Model.require(!current.deleted,"Document is deleted");Collaboration.requireUnlocked(state,actor,Arrays.asList(operation),System.currentTimeMillis());Map<String,Object> op=map(copy(operation));op.put("id",UUID.randomUUID().toString());op.put("actor",actor);Model.withBases(op,current);Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)op.put("session",session);list(state.get("pending")).add(op);});
+            Model current=Store.model(state);Model.require(!current.deleted,"Document is deleted");Collaboration.requireUnlocked(state,actor,Arrays.asList(operation),System.currentTimeMillis());Map<String,Object> op=map(copy(operation));op.put("id",UUID.randomUUID().toString());op.put("actor",actor);Model.withBases(op,current);Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)op.put("session",session);list(state.get("pending")).add(op);if(preferences!=null)state.putAll(map(copy(preferences)));});
     }
     /** Permanent, idempotent lifecycle action; histories remain in the journal. */
     public Map<String,Object> deleteDocument(String actor) throws Exception {

@@ -112,13 +112,7 @@ public final class Main {
             }
             case "settings":{
                 arity(a,1);Map<String,Object> preferences=map(input(a.get(0)));
-                for(String key:preferences.keySet()){
-                    require(Arrays.asList("hidden","undo","redo","selected","page","clipboard").contains(key),"Unknown local preference");
-                    if(Arrays.asList("hidden","undo","redo").contains(key))for(Object value:list(preferences.get(key)))require(value instanceof String,"Expected preference strings");
-                    if(key.equals("selected"))string(preferences,key);
-                    if(key.equals("page"))require(number(preferences,key)>=0&&number(preferences,key)<=10000&&number(preferences,key)==Math.rint(number(preferences,key)),"Invalid page");
-                    if(key.equals("clipboard")){Map<String,Object> clipboard=map(preferences.get(key));List<Object> entities=list(clipboard.get("entities"));require(entities.size()<=100,"Clipboard exceeds 100 entities");for(Object entity:entities)Model.validate(map(entity));}
-                }
+                Store.validateSettings(preferences);
                 store.edit(s->s.putAll(preferences));return object("saved",true);
             }
             case "status":{arity(a,0);Map<String,Object>s=store.read();return object("document",doc,"deleted",Store.model(s).deleted,"cursor",s.get("cursor"),"pending",list(s.get("pending")).size(),"revision",s.get("revision"),"serverId",s.get("serverId"));}

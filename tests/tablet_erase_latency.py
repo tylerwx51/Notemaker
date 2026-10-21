@@ -195,6 +195,7 @@ def main():
             assert 'PASS state' in reopened,reopened
             state=json.loads(call('shell','run-as',PACKAGE,'cat','files/integration.json'))
             assert state['strokes']==1000
+            assert state['editorUndoCount']==1000 and state['storedUndoCount']==1000
             print(json.dumps({key:report[key] for key in ('stroke_latency','drain_ms','max_save_queue')}))
             return
         report=json.loads((out/'metrics.json').read_text());samples=report['samples']

@@ -37,6 +37,20 @@ class DrawingToolsChecks(unittest.TestCase):
         self.assertEqual(result['snapshot'],self.call('snapshot'))
         self.proxy.stop();self.proxy.start()
         self.assertFalse(self.call('snapshot')['effectiveModel']['strokeActive']['history-stroke'])
+    def test_append_and_editor_settings_commit_atomically(self):
+        stroke=dict(kind='stroke',stroke='combined-stroke',layer='base',page=0,width=2,color=-16777216,
+                    points=[[10,20,1],[30,40,1]])
+        result=self.call('append','settings','-',value=dict(operation=stroke,settings=dict(undo=['combined-stroke'],redo=[])))
+        self.assertIn('operation',result);self.assertTrue(result['saved'])
+        state=self.call('snapshot');self.assertEqual(state['effectiveModel']['strokes'][0]['stroke'],'combined-stroke')
+        self.assertEqual(state['undo'],['combined-stroke'])
+        before=self.call('log')
+        self.call('append','settings','-',value=dict(operation=dict(stroke='bad',kind='stroke'),settings=dict(undo=['bad'])),ok=False)
+        self.assertEqual(self.call('log'),before)
+        self.call('append','settings','-',value=dict(operation=stroke,settings=dict(unexpected=True)),ok=False)
+        self.assertEqual(self.call('log'),before)
+        self.proxy.stop();self.proxy.start()
+        self.assertEqual(self.call('snapshot')['undo'],['combined-stroke'])
     def test_object_put_returns_durable_post_edit_snapshot(self):
         result=self.call('object','put','snapshot','-',value=dict(object='snapshot-box',shape='rect',x=5,y=6,w=20,h=30))
         self.assertIn('operation',result)

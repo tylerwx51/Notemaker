@@ -280,6 +280,12 @@ public final class LocalProxy implements Closeable {
             snapshot.put("leases",copy(state.getOrDefault("leases",object())));snapshot.put("previews",previewSnapshot(doc,state));
             changed(true);return object("operation",map(pending.get(pending.size()-1)).get("id"),"snapshot",snapshot);
         }
+        if(cmd.equals("append")&&args.equals(Arrays.asList("append","settings","-"))){
+            Map<String,Object> input=map(body.get("input"));
+            Map<String,Object> state=local.appendWithSettings(map(input.get("operation")),actor,map(input.get("settings")));
+            List<Object> pending=list(state.get("pending"));changed(true);
+            return object("operation",map(pending.get(pending.size()-1)).get("id"),"saved",true);
+        }
         if((cmd.equals("undo")||cmd.equals("redo"))&&args.size()==2&&args.get(1).equals("snapshot")){
             Map<String,Object> result=local.history(actor,cmd.equals("redo"),true);
             Map<String,Object> state=map(result.remove("state"));Collaboration.expire(state,System.currentTimeMillis());

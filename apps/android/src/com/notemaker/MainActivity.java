@@ -234,10 +234,10 @@ public class MainActivity extends Activity {
         }catch(Exception e){android.util.Log.e("NoteMaker","Object save failed",e);runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectPreviews.remove(previewId);drawnObjectPreviews.remove(previewId);tiledObjectPreviews.remove(previewId);pendingObjectHistory.remove(pending);saveError=e.toString();update();Toast.makeText(this,"Could not save object: "+e.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     boolean objectHistoryPending(){synchronized(lock){return !pendingObjectHistory.isEmpty();}}
+    Map<String,Object> editorPreferences(){return Json.object("hidden",new ArrayList<>(hidden),"undo",new ArrayList<>(undo),"redo",new ArrayList<>(redo),"selected",selected,"page",page,"clipboard",selectionClipboard);}
     void save(){
         if(replica.remote()&&revision<0)return;
-        final Map<String,Object> preferences=Json.object("hidden",new ArrayList<>(hidden),"undo",new ArrayList<>(undo),"redo",new ArrayList<>(redo),"selected",selected,"page",page,"clipboard",selectionClipboard);
-        persist(Arrays.asList("settings","-"),preferences,null);
+        persist(Arrays.asList("settings","-"),editorPreferences(),null);
     }
     void refreshShared(Map<String,Object> state) throws Exception {
         long next=((Number)state.get("revision")).longValue();if(next<revision)return;
@@ -304,6 +304,10 @@ public class MainActivity extends Activity {
     void enqueue(JSONObject o,Map<String,Object> action){
         String token=id();optimistic.put(token,o);apply(o,action);
         persist(Arrays.asList("append","-"),action,token);
+    }
+    void enqueueFinalStroke(Map<String,Object> action){
+        JSONObject object=new JSONObject(action);String token=id();optimistic.put(token,object);apply(object,action);
+        persist(Arrays.asList("append","settings","-"),Json.object("operation",action,"settings",editorPreferences()),token);
     }
     void update(){synchronized(lock){
         if(editor==null)return;
@@ -794,7 +798,8 @@ public class MainActivity extends Activity {
             }catch(Exception ignored){}
         }
         void drawSelection(Canvas c){if(selectedEntities.isEmpty())return;c.save();transform(c);paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2/Math.max(.2f,zoom));paint.setPathEffect(new DashPathEffect(new float[]{8,5},0));for(Map<String,Object> entity:selectedEntities){String kind=String.valueOf(entity.get("kind")),id=String.valueOf(entity.get("id"));if(kind.equals("object")){Map<String,Object> o=model.objects.get(id);if(o!=null){float x=((Number)o.get("x")).floatValue(),y=((Number)o.get("y")).floatValue(),w=((Number)o.get("w")).floatValue(),h=((Number)o.get("h")).floatValue();c.save();c.translate(x+w/2,y+h/2);c.rotate(((Number)o.getOrDefault("rotation",0)).floatValue());c.scale(Boolean.TRUE.equals(o.get("flipX"))?-1:1,Boolean.TRUE.equals(o.get("flipY"))?-1:1);c.drawRect(-w/2-4,-h/2-4,w/2+4,h/2+4,paint);c.restore();}}else{JSONObject s=strokes.get(id);if(s!=null){JSONArray ps=s.optJSONArray("points");float l=Float.MAX_VALUE,t=Float.MAX_VALUE,r=-Float.MAX_VALUE,b=-Float.MAX_VALUE;for(int i=0;i<ps.length();i++){JSONArray p=ps.optJSONArray(i);l=Math.min(l,(float)p.optDouble(0));r=Math.max(r,(float)p.optDouble(0));t=Math.min(t,(float)p.optDouble(1));b=Math.max(b,(float)p.optDouble(1));}c.drawRect(l-8,t-8,r+8,b+8,paint);}}}paint.setPathEffect(null);paint.setStyle(Paint.Style.FILL);c.restore();}
-        void emit(){if(points!=null&&points.length()>0){Map<String,Object> snapshot=strokeValue();enqueue(new JSONObject(snapshot),snapshot);lastSent=System.currentTimeMillis();}}
+        void emit(){emit(false);}
+        void emit(boolean finalStroke){if(points!=null&&points.length()>0){Map<String,Object> snapshot=strokeValue();if(finalStroke&&!replica.remote())enqueueFinalStroke(snapshot);else enqueue(new JSONObject(snapshot),snapshot);lastSent=System.currentTimeMillis();}}
         void point(float sx,float sy,float pressure){float dx=x(sx),dy=y(sy);if(!type.equals("infinite")&&(dx<0||dy<0||dx>1000||dy>1400))return;if(points.length()>=8000){JSONArray reduced=new JSONArray();for(int i=0;i<points.length();i+=2)reduced.put(points.optJSONArray(i));points=reduced;}points.put(new JSONArray(Arrays.asList(dx,dy,Math.max(0,Math.min(1,pressure)))));}
         void erasePoint(float sx,float sy){float dx=x(sx),dy=y(sy);if(type.equals("infinite")||(dx>=0&&dy>=0&&dx<=1000&&dy<=1400))eraserPoints.put(new JSONArray(Arrays.asList(dx,dy)));}
         void eraseAt(float sx,float sy){JSONArray path=new JSONArray();path.put(new JSONArray(Arrays.asList(x(sx),y(sy))));applyErase("stroke",selected,page,path,eraserRadius);}
@@ -832,7 +837,7 @@ public class MainActivity extends Activity {
                     if(transforming){transforming=false;cancelTransformPreview();}
                     else if(shapeDragging)shapeDragging=false;
                     else if(eraserPoints!=null)eraserPoints=null;
-                    else if(points!=null&&!scribbleToErase){point(sx,sy,event.getPressure());emit();undo.add(current);redo.clear();save();}
+                    else if(points!=null&&!scribbleToErase){point(sx,sy,event.getPressure());undo.add(current);redo.clear();emit(true);if(replica.remote())save();}
                     points=null;current=null;invalidate();return true;
                 }
                 if(action==MotionEvent.ACTION_UP){
@@ -840,7 +845,7 @@ public class MainActivity extends Activity {
                     if(transforming){transformDeltaX=x(sx)-transformStartX;transformDeltaY=y(sy)-transformStartY;transforming=false;if(Math.abs(transformDeltaX)+Math.abs(transformDeltaY)>1)transformSelection(1,transformDeltaX,transformDeltaY,true);else cancelTransformPreview();return true;}
                     if(shapeDragging){shapeEndX=x(sx);shapeEndY=y(sy);if(!type.equals("infinite")){shapeEndX=Math.max(0,Math.min(1000,shapeEndX));shapeEndY=Math.max(0,Math.min(1400,shapeEndY));}shapeDragging=false;String shape=drawingShape;if(shape.equals("text")){if(pendingText!=null){placeText(pendingText,pendingTextSize,shapeStartX,shapeStartY);pendingText=null;}drawingShape=null;}else{float dx=shapeEndX-shapeStartX,dy=shapeEndY-shapeStartY;float left=Math.min(shapeStartX,shapeEndX),top=Math.min(shapeStartY,shapeEndY),w=Math.abs(dx),h=Math.abs(dy);if(shape.equals("line")||shape.equals("arrow")||shape.equals("arrowLine")){left=shapeStartX;top=shapeStartY;w=dx;h=dy;if(Math.abs(w)+Math.abs(h)<1){w=1;h=1;}}else{w=Math.max(12,w);h=Math.max(12,h);if(!type.equals("infinite")){left=Math.max(0,Math.min(1000-w,left));top=Math.max(0,Math.min(1400-h,top));}}persistObject(objectValue(shape,left,top,w,h,color,width,objectFillColor));}invalidate();return true;}
                     if(eraserPoints!=null){erasePoint(sx,sy);JSONArray path=eraserPoints;eraserPoints=null;if(!"page".equals(eraserMode))applyErase(eraserMode,selected,page,path,eraserRadius);}
-                    else if(points!=null){point(sx,sy,event.getPressure());if(scribbleToErase&&scribble(points))applyErase("area",selected,page,points,eraserRadius);else{emit();undo.add(current);redo.clear();save();}points=null;current=null;}
+                    else if(points!=null){point(sx,sy,event.getPressure());if(scribbleToErase&&scribble(points))applyErase("area",selected,page,points,eraserRadius);else{undo.add(current);redo.clear();emit(true);if(replica.remote())save();}points=null;current=null;}
                 }
                 invalidate();return true;
             }
