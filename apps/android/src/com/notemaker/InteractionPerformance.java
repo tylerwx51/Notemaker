@@ -18,6 +18,7 @@ final class InteractionPerformance {
         Map<String,List<Double>> queue=new LinkedHashMap<>(),action=new LinkedHashMap<>(),drawWait=new LinkedHashMap<>(),uiDraw=new LinkedHashMap<>();
         Map<String,List<Double>> frameDraw=new LinkedHashMap<>(),frameCommand=new LinkedHashMap<>();
         List<Double> undoUiDraw=new ArrayList<>(),redoUiDraw=new ArrayList<>(),undoCanvasDraw=new ArrayList<>(),redoCanvasDraw=new ArrayList<>();
+        List<Double> selectedHitTest=new ArrayList<>();
         for(String name:Arrays.asList("pan","zoom_redraw","tool_switch","layer_switch","selection_tap","document_reopen","history_toggle","stroke_history_toggle","object_create","page_switch")){
             draw.put(name,new ArrayList<>());handler.put(name,new ArrayList<>());
             frame.put(name,Collections.synchronizedList(new ArrayList<>()));
@@ -172,6 +173,10 @@ final class InteractionPerformance {
                         }
                     }
                     if(name.equals("selection_tap")){
+                        long[] hitNs={0};
+                        test.runOnMainSync(()->{long began=System.nanoTime();Map<String,Object> hit=app.selectedEntityAt(480,300);hitNs[0]=System.nanoTime()-began;
+                            com.notemaker.core.Model.require(hit!=null&&selectionId.equals(hit.get("id")),"Selected-object hit test missed the fixture");});
+                        if(index>=warmup)selectedHitTest.add(hitNs[0]/1e6);
                         test.runOnMainSync(app::deselect);
                         ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
                         test.waitForIdleSync();
@@ -245,6 +250,7 @@ final class InteractionPerformance {
                 "undo",object("input_to_ui_draw",Performance.stats(undoUiDraw),"input_to_draw",Performance.stats(undoCanvasDraw)),
                 "redo",object("input_to_ui_draw",Performance.stats(redoUiDraw),"input_to_draw",Performance.stats(redoCanvasDraw)));
         return object("modes",modes,"mode_resources",modeResources,"page_tile_cache",pageTiles,
+                "selected_hit_test",Performance.stats(selectedHitTest),
                 "start_resources",start,"end_resources",end,"post_gc_resources",postGc,
                 "history_directions",historyDirections,
                 "latency_definition","enqueue to first updated Canvas/window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, direct page switching, and selection tap with lease acquisition; history modes alternate object or stroke undo and redo",

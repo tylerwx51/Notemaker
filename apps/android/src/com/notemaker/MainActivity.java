@@ -452,7 +452,21 @@ public class MainActivity extends Activity {
     void selectWithin(float x0,float y0,float x1,float y1){selectRegion(com.notemaker.core.Geometry.rect(Math.min(x0,x1),Math.min(y0,y1),Math.abs(x1-x0),Math.abs(y1-y0)),false);}
     private void addLassoPoint(float x,float y){if(canvas==null)return;ArrayList<float[]> path=canvas.lassoPath;if(path.isEmpty()||Math.hypot(path.get(path.size()-1)[0]-x,path.get(path.size()-1)[1]-y)>=3.5f)path.add(new float[]{x,y});}
     void selectLasso(List<float[]> polygon){if(polygon.size()<3)return;double[][] p=new double[polygon.size()][2];for(int i=0;i<p.length;i++){p[i][0]=polygon.get(i)[0];p[i][1]=polygon.get(i)[1];}selectRegion(p,false);}
-    Map<String,Object> selectedEntityAt(float x,float y){double radius=6/Math.max(.01,canvas.scale()*canvas.zoom);double[][] region=com.notemaker.core.Geometry.capsule(new double[]{x,y},new double[]{x,y},radius);com.notemaker.core.LayerEditor editor=layerEditor();for(Map<String,Object> ref:selectedEntities){try{if(editor.resolve(String.valueOf(ref.get("kind")),String.valueOf(ref.get("id"))).intersects(region,com.notemaker.cli.ItemCoverage::create))return ref;}catch(IllegalArgumentException stale){}}return null;}
+    Map<String,Object> selectedEntityAt(float x,float y){
+        double radius=6/Math.max(.01,canvas.scale()*canvas.zoom);
+        double[][] region=com.notemaker.core.Geometry.capsule(new double[]{x,y},new double[]{x,y},radius);
+        com.notemaker.core.Model.require(model.layers.containsKey(selected)&&!Boolean.FALSE.equals(model.layerActive.get(selected)),"Layer is not editable");
+        com.notemaker.core.Model.require(page>=0&&page<=10000,"Invalid page");
+        for(Map<String,Object> ref:selectedEntities){
+            String kind=String.valueOf(ref.get("kind")),id=String.valueOf(ref.get("id"));
+            Map<String,Object> source="stroke".equals(kind)?model.strokes.get(id):"object".equals(kind)?model.objects.get(id):null;
+            if(source==null||Boolean.FALSE.equals(("stroke".equals(kind)?model.active:model.objectActive).get(id))||
+                    !selected.equals(source.get("layer"))||((Number)source.get("page")).intValue()!=page)continue;
+            try{if(new com.notemaker.core.DrawItem(model,source).intersects(region,com.notemaker.cli.ItemCoverage::create))return ref;}
+            catch(IllegalArgumentException stale){}
+        }
+        return null;
+    }
     void selectLayer(String layer){if(!Objects.equals(selected,layer)){boolean selectionTool=selecting;deselect();resetDrawingGesture();selected=layer;selecting=selectionTool;}save();update();}
     void deselectEntity(String kind,String id){if(selectionSession==null)return;ArrayList<Map<String,Object>> remaining=new ArrayList<>();for(Map<String,Object> entity:selectedEntities)if(!(kind.equals(entity.get("kind"))&&id.equals(entity.get("id"))))remaining.add(entity);String session=selectionSession;AppReplica target=replica;final long generation=selectionGeneration;selectionSession=null;selectedEntities.clear();pendingTransform=null;selecting=true;if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",session),null);if(!remaining.isEmpty()){if(generation!=selectionGeneration||!selecting||target!=replica)return;Map<String,Object> request=Json.object("layer",selected,"page",page,"entities",remaining);Map<String,Object> result=Json.map(target.command(Arrays.asList("selection","select","-"),request));String acquired=String.valueOf(result.get("session"));runOnUiThread(()->{if(target!=replica||generation!=selectionGeneration||!selecting){ReplicaService.writes.execute(()->{try{target.command(Arrays.asList("selection","deselect",acquired),null);}catch(Exception error){android.util.Log.w("NoteMaker","Could not release stale selection",error);}});return;}selectionSession=acquired;for(Object raw:Json.list(result.getOrDefault("selected",Collections.emptyList())))selectedEntities.add(Json.map(raw));selectionSkipped+=Json.list(result.getOrDefault("skipped",Collections.emptyList())).size();scheduleHeartbeat();update();});}else runOnUiThread(this::update);}catch(Exception error){runOnUiThread(()->Toast.makeText(this,"Could not release item lock: "+error.getMessage(),Toast.LENGTH_LONG).show());}});update();}
     private void scheduleHeartbeat(){
