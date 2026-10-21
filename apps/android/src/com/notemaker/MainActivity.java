@@ -75,6 +75,7 @@ public class MainActivity extends Activity {
     Thread syncThread, localThread;
     Store store;
     Model model=new Model();
+    long modelGeneration;
     long revision=-1;
     private static final class PendingObjectHistory { int index; PendingObjectHistory(int index){this.index=index;} }
 
@@ -209,7 +210,7 @@ public class MainActivity extends Activity {
         if(state.containsKey("leases"))leases=Json.map(state.get("leases"));if(state.containsKey("previews"))transformPreviews=Json.map(state.get("previews"));if(state.containsKey("conflicts"))conflicts=Json.list(state.get("conflicts"));
         if(state.get("clipboard") instanceof Map){Map<String,Object> sharedClipboard=Json.map(state.get("clipboard"));long sharedAt=((Number)sharedClipboard.getOrDefault("copiedAt",0L)).longValue(),localAt=((Number)selectionClipboard.getOrDefault("copiedAt",0L)).longValue();boolean sharedHasItems=!Json.list(sharedClipboard.getOrDefault("entities",Collections.emptyList())).isEmpty(),localHasItems=!Json.list(selectionClipboard.getOrDefault("entities",Collections.emptyList())).isEmpty();if(sharedAt>=localAt&&(sharedHasItems||!localHasItems))selectionClipboard=sharedClipboard;}
         getSharedPreferences("settings",0).edit().putString("selectionClipboard",Json.write(selectionClipboard)).apply();schedulePreviewExpiry();
-        model=Store.model(state);type=model.type;documentSeen=eventCount+pendingCount>0;
+        model=Store.model(state);modelGeneration++;type=model.type;documentSeen=eventCount+pendingCount>0;
         if(model.deleted){optimistic.clear();resetDrawingGesture();deselect();}
         LinkedHashMap<String,JSONObject> nextLayers=new LinkedHashMap<>(),nextStrokes=new LinkedHashMap<>();
         ArrayList<Map.Entry<String,Map<String,Object>>> orderedLayers=new ArrayList<>(model.layers.entrySet());
@@ -252,7 +253,7 @@ public class MainActivity extends Activity {
     void apply(JSONObject o){apply(o,Json.map(Json.parse(o.toString())));}
     void apply(JSONObject o,Map<String,Object> action){String kind=o.optString("kind");
         if(kind.equals("batch")){JSONArray a=o.optJSONArray("actions");for(int i=0;i<a.length();i++)apply(a.optJSONObject(i));return;}
-        model.apply(action);
+        model.apply(action);modelGeneration++;
         if(kind.equals("document")&&!documentSeen){type=o.optString("type","fixed");documentSeen=true;}
         if(kind.equals("layer"))layers.put(o.optString("layer"),o);
         if(kind.equals("stroke"))strokes.put(o.optString("stroke"),o);
@@ -637,6 +638,7 @@ public class MainActivity extends Activity {
         final Map<String,TileInkCache.Item> strokeTileItems=new HashMap<>();
         final Map<String,Map<String,Object>> objectTileSources=new HashMap<>();
         final Map<String,TileInkCache.Item> objectTileItems=new HashMap<>();
+        long prunedGeneration=-1;
         String inkDocument="",inkType="";int inkPage=-1,rasterTier=1;
         long inputStarted;
         java.util.function.LongConsumer drawLatency;
@@ -655,13 +657,11 @@ public class MainActivity extends Activity {
             startupMark(traceColdDraw,"first_strokes_start",startupEpoch);
             for(Map.Entry<String,Map<String,Object>> e:model.strokes.entrySet()){Map<String,Object> stroke=e.getValue();if(!e.getKey().equals(current)&&layer.equals(stroke.get("layer"))&&((Number)stroke.get("page")).intValue()==page&&!Boolean.FALSE.equals(active.get(e.getKey()))&&!pendingErase("stroke",e.getKey(),layer)){TileInkCache.Item cached=strokeTileItems.get(e.getKey());if(cached==null||cached.value!=stroke){cached=new TileInkCache.Item(e.getKey(),stroke);strokeTileItems.put(e.getKey(),cached);}visible.add(cached);}}
             startupMark(traceColdDraw,"first_strokes_prepared",startupEpoch);
-            strokeTileItems.keySet().retainAll(model.strokes.keySet());
             // Live ink uses the same transparent layer, item order and compositing
             // as committed ink. Switching to saved state must not change pixels.
             if(layer.equals(selected)&&points!=null&&current!=null)visible.add(new TileInkCache.Item(current,strokeValue(),false));
             for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(!"template".equals(o.get("shape"))&&layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)){TileInkCache.Item cached=objectTileItems.get(e.getKey());boolean linked=o.containsKey("from")||o.containsKey("to");if(cached==null||objectTileSources.get(e.getKey())!=o){cached=new TileInkCache.Item("object:"+e.getKey(),new DrawItem(model,o).geometry());objectTileSources.put(e.getKey(),o);objectTileItems.put(e.getKey(),cached);}else if(linked){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!cached.value.equals(geometry)){cached=new TileInkCache.Item("object:"+e.getKey(),geometry);objectTileItems.put(e.getKey(),cached);}}visible.add(cached);}}
             startupMark(traceColdDraw,"first_objects_prepared",startupEpoch);
-            objectTileSources.keySet().retainAll(model.objects.keySet());objectTileItems.keySet().retainAll(model.objects.keySet());
             startupMark(traceColdDraw,"first_ink_prepared",startupEpoch);
             RectF viewport=documentViewport();if(viewport.isEmpty())return;
             c.save();transform(c);
@@ -680,6 +680,7 @@ public class MainActivity extends Activity {
             startupMark(traceColdDraw,"first_tile_begin",startupEpoch);
             if(!document.equals(inkDocument)||!type.equals(inkType)){tileInk.clear();strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();inkDocument=document;inkType=type;}
             if(page!=inkPage){strokeTileItems.clear();objectTileSources.clear();objectTileItems.clear();inkPage=page;}
+            if(prunedGeneration!=modelGeneration){strokeTileItems.keySet().retainAll(model.strokes.keySet());objectTileSources.keySet().retainAll(model.objects.keySet());objectTileItems.keySet().retainAll(model.objects.keySet());prunedGeneration=modelGeneration;}
             rasterTier=TileInkCache.densityTier(scale()*zoom);
             startupMark(traceColdDraw,"first_tile_config",startupEpoch);
             c.save();transform(c);if(!type.equals("infinite")){paint.setColor(0xffaaaaaa);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);c.drawRect(0,0,1000,1400,paint);paint.setStyle(Paint.Style.FILL);}c.restore();
