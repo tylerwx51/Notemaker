@@ -23,7 +23,17 @@ public final class SvgAsset {
     private static final Map<String,Asset> CACHE=new LinkedHashMap<String,Asset>(16,.75f,true){protected boolean removeEldestEntry(Map.Entry<String,Asset> e){return size()>16;}};
     private static final String DECIMAL="-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?";
     private static final Pattern DOT_ROOT=Pattern.compile("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ("+DECIMAL+") ("+DECIMAL+")\" width=\"("+DECIMAL+")\" height=\"("+DECIMAL+")\"><g stroke=\"(#[0-9a-f]{6})\" stroke-opacity=\"("+DECIMAL+")\" stroke-width=\"("+DECIMAL+")\">");
-    private static final Pattern DOT_CIRCLE=Pattern.compile("<circle cx=\"("+DECIMAL+")\" cy=\"("+DECIMAL+")\" r=\"("+DECIMAL+")\" fill=\"(#[0-9a-f]{6})\"/>");
+    private static int after(String source,int start,String literal){return source.startsWith(literal,start)?start+literal.length():-1;}
+    private static double decimal(String source,int start,int end){
+        if(start<0||end<=start)return Double.NaN;
+        int i=start;if(source.charAt(i)=='-')i++;
+        boolean digits=false;while(i<end&&source.charAt(i)>='0'&&source.charAt(i)<='9'){digits=true;i++;}
+        if(i<end&&source.charAt(i)=='.'){i++;boolean fraction=false;while(i<end&&source.charAt(i)>='0'&&source.charAt(i)<='9'){fraction=true;i++;}if(!digits&&!fraction)return Double.NaN;}
+        else if(!digits)return Double.NaN;
+        if(i<end&&(source.charAt(i)=='e'||source.charAt(i)=='E')){i++;if(i<end&&(source.charAt(i)=='+'||source.charAt(i)=='-'))i++;int exponent=i;while(i<end&&source.charAt(i)>='0'&&source.charAt(i)<='9')i++;if(i==exponent)return Double.NaN;}
+        if(i!=end)return Double.NaN;
+        try{return Double.parseDouble(source.substring(start,end));}catch(NumberFormatException invalid){return Double.NaN;}
+    }
 
     /** Recognize only the exact, self-contained SVG emitted by the dot-grid action. */
     private static Asset generatedDots(String source){
@@ -33,11 +43,16 @@ public final class SvgAsset {
         double width=Double.parseDouble(root.group(1)),height=Double.parseDouble(root.group(2));
         double alpha=Double.parseDouble(root.group(6)),stroke=Double.parseDouble(root.group(7));
         if(!Double.isFinite(width)||!Double.isFinite(height)||width<=0||height<=0||width>1000000||height>1000000||alpha<0||alpha>1||!Double.isFinite(stroke)||stroke<=0||stroke>1000000)return null;
-        Matcher circle=DOT_CIRCLE.matcher(source);int offset=root.end(),count=0;
+        int offset=root.end(),count=0;
         while(offset<source.length()&&source.startsWith("<circle ",offset)){
-            circle.region(offset,source.length());if(!circle.lookingAt()||!root.group(5).equals(circle.group(4)))return null;
-            for(int i=1;i<=3;i++){double n=Double.parseDouble(circle.group(i));if(!Double.isFinite(n)||n<0||n>1000000||i==3&&n==0)return null;}
-            offset=circle.end();if(++count>9998)return null; // Root and group also count toward the 10,000-node SVG limit.
+            int position=after(source,offset,"<circle cx=\"");int end=source.indexOf('"',position);
+            double x=decimal(source,position,end);position=after(source,end,"\" cy=\"");end=position<0?-1:source.indexOf('"',position);
+            double y=decimal(source,position,end);position=after(source,end,"\" r=\"");end=position<0?-1:source.indexOf('"',position);
+            double radius=decimal(source,position,end);position=after(source,end,"\" fill=\"");
+            if(position<0||!source.startsWith(root.group(5),position))return null;
+            offset=after(source,position+root.group(5).length(),"\"/>");
+            if(offset<0||!Double.isFinite(x)||!Double.isFinite(y)||!Double.isFinite(radius)||x<0||y<0||radius<=0||x>1000000||y>1000000||radius>1000000)return null;
+            if(++count>9998)return null; // Root and group also count toward the 10,000-node SVG limit.
         }
         if(count==0||!source.startsWith("</g></svg>",offset)||offset+10!=source.length())return null;
         String normalized="<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 "+root.group(1)+" "+root.group(2)+"\" width=\"100%\" height=\"100%\">"+source.substring(source.indexOf("<g stroke="));
