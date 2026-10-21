@@ -274,6 +274,12 @@ public final class LocalProxy implements Closeable {
             require(args.size()==1,"snapshot takes no arguments");Map<String,Object> state=local.read();Collaboration.expire(state,System.currentTimeMillis());
             Map<String,Object> result=Main.snapshot(state);result.put("leases",copy(state.getOrDefault("leases",object())));result.put("previews",previewSnapshot(doc,state));return result;
         }
+        if((cmd.equals("undo")||cmd.equals("redo"))&&args.size()==2&&args.get(1).equals("snapshot")){
+            Map<String,Object> result=local.history(actor,cmd.equals("redo"),true);
+            Map<String,Object> state=map(result.remove("state"));Collaboration.expire(state,System.currentTimeMillis());
+            Map<String,Object> snapshot=Main.snapshot(state);snapshot.put("leases",copy(state.getOrDefault("leases",object())));snapshot.put("previews",previewSnapshot(doc,state));
+            result.put("snapshot",snapshot);changed(true);return result;
+        }
         if(cmd.equals("configure")){require(args.size()==2,"configure UPSTREAM_URL_OR_DESCRIPTOR (empty to disconnect)");configure(doc,args.get(1));return object("configured",true);}
         if(cmd.equals("sync")){require(args.size()<=2,"sync [UPSTREAM_URL_OR_DESCRIPTOR]");return syncCommand(doc,args.size()==2?args.get(1):null);}
         if(cmd.equals("selection")&&args.size()==3&&args.get(1).equals("select"))return acquireSelection(local,doc,actor,map(body.get("input")));

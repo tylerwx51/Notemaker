@@ -18,6 +18,17 @@ class DrawingToolsChecks(unittest.TestCase):
     def call(self,*args,value=None,ok=True):return self.proxy.cli(*args,value=value,ok=ok)
     def stroke(self,id='s',points=None):
         self.call('stroke','put','-',value=dict(stroke=id,layer='base',page=0,width=2,color=-16777216,points=points or [[0,50,1],[100,50,1]]))
+    def test_history_command_returns_durable_post_edit_snapshot(self):
+        self.call('object','put','-',value=dict(object='box',shape='rect',x=0,y=0,w=10,h=10))
+        undone=self.call('undo','snapshot')
+        self.assertIn('operation',undone)
+        self.assertFalse(undone['snapshot']['effectiveModel']['objectActive']['box'])
+        self.assertEqual(undone['snapshot'],self.call('snapshot'))
+        redone=self.call('redo','snapshot')
+        self.assertTrue(redone['snapshot']['effectiveModel']['objectActive']['box'])
+        self.assertEqual(redone['snapshot'],self.call('snapshot'))
+        self.proxy.stop();self.proxy.start()
+        self.assertTrue(self.call('snapshot')['effectiveModel']['objectActive']['box'])
     def test_partial_eraser_masks_and_undo_restores_as_one_action(self):
         self.stroke();before=self.call('log')
         self.call('erase','-',value=dict(mode='partial',layer='base',points=[[50,0],[50,100]],radius=9))

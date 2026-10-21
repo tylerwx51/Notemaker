@@ -46,6 +46,10 @@ JSON numbers are parsed without compiling a regex for every coordinate.
 Object undo/redo waits for the durable local result before redrawing the editor;
 the transient queued state does not justify an extra full E Ink frame. Failure
 still redraws the editor and reports the error.
+The editor's object-history command can return a materialized snapshot from
+the same successful local edit. This removes the separate read before the
+resulting frame without weakening the journal's fsync acknowledgment or
+changing the actor-specific undo/redo action.
 
 `ReplicaService` starts a loopback-only command proxy on port 8766 and performs
 background synchronization for configured documents. The app calls the shared

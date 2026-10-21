@@ -104,10 +104,14 @@ public final class Store {
     }
     private static Map<String,Object> history(Map<String,Object>state,String actor){Map<String,Object> actors=map(state.get("actors"));actors.putIfAbsent(actor,object("undo",new ArrayList<>(),"redo",new ArrayList<>()));return map(actors.get(actor));}
     public Map<String,Object> history(String actor,boolean redo) throws Exception {
+        return history(actor,redo,false);
+    }
+    /** Include the post-edit state so a caller can return it without another journal read. */
+    public Map<String,Object> history(String actor,boolean redo,boolean includeState) throws Exception {
         final Map<String,Object> result=object();
-        edit(state->{Model.require(!Store.model(state).deleted,"Document is deleted");Map<String,Object> h=history(state,actor);List<Object> from=list(h.get(redo?"redo":"undo")),to=list(h.get(redo?"undo":"redo"));Model.require(!from.isEmpty(),"No "+(redo?"redo":"undo")+" for actor "+actor);Map<String,Object> entry=map(from.get(from.size()-1));Collaboration.requireUnlocked(state,actor,list(entry.get(redo?"forward":"inverse")),System.currentTimeMillis());from.remove(from.size()-1);to.add(entry);
-            String id=UUID.randomUUID().toString();Map<String,Object> batch=object("kind","batch","id",id,"actor",actor,"actions",copy(entry.get(redo?"forward":"inverse")));Model.withBases(batch,Store.model(state));Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)batch.put("session",session);list(state.get("pending")).add(batch);result.put("operation",id);
-        });return result;
+        Map<String,Object> after=edit(state->{Model current=Store.model(state);Model.require(!current.deleted,"Document is deleted");Map<String,Object> h=history(state,actor);List<Object> from=list(h.get(redo?"redo":"undo")),to=list(h.get(redo?"undo":"redo"));Model.require(!from.isEmpty(),"No "+(redo?"redo":"undo")+" for actor "+actor);Map<String,Object> entry=map(from.get(from.size()-1));Collaboration.requireUnlocked(state,actor,list(entry.get(redo?"forward":"inverse")),System.currentTimeMillis());from.remove(from.size()-1);to.add(entry);
+            String id=UUID.randomUUID().toString();Map<String,Object> batch=object("kind","batch","id",id,"actor",actor,"actions",copy(entry.get(redo?"forward":"inverse")));Model.withBases(batch,current);Object session=map(state.getOrDefault("activeSessions",object())).get(actor);if(session!=null)batch.put("session",session);list(state.get("pending")).add(batch);result.put("operation",id);
+        });if(includeState)result.put("state",after);return result;
     }
     /** Immutable ingress log gives downstreams a resumable provisional order. */
     public Map<String,Object> accept(List<Object> operations,Object root) throws Exception {

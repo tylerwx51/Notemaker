@@ -109,6 +109,7 @@ The current trusted-LAN server has no authentication.
 | `snapshot` | Materialized model plus revision, pending/event counts and local editor preferences. |
 | `append FILE\|-` | Append one raw protocol action with a generated ID; used for editor strokes with editor-managed undo. |
 | `settings FILE\|-` | Local editor metadata: hidden, undo, redo string arrays, selected layer and page. Never replicated upstream. |
+| `undo snapshot` / `redo snapshot` | Apply one actor-history action and return `{ "operation": "...", "snapshot": {...} }` from the same durable edit. The ordinary `undo` and `redo` outputs stay unchanged. |
 
 Inspection retains erased entities for recovery; use the active maps and layer
 membership to determine what is currently visible. Export ignores UI-local hiding

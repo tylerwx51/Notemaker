@@ -43,7 +43,7 @@ public final class Main {
         + "settings FILE|-            Update local editor preferences\n"
         + "snapshot                   Materialized model and local editor metadata\n"
         + "checkpoint                 Fold the local journal into its durable base\n"
-        + "undo | redo                History for the selected actor\n"
+        + "undo | redo [snapshot]     History for the selected actor; optional post-edit snapshot\n"
         + "export FILE.svg|FILE.png [PAGE [X Y WIDTH HEIGHT]]   Page is zero-based\n"
         + "sync [UPSTREAM]            Request proxy synchronization (URL or proxy descriptor)\n"
         + "configure UPSTREAM         Set sole upstream; empty string disconnects\n"
@@ -121,7 +121,11 @@ public final class Main {
             case "status":{arity(a,0);Map<String,Object>s=store.read();return object("document",doc,"deleted",Store.model(s).deleted,"cursor",s.get("cursor"),"pending",list(s.get("pending")).size(),"revision",s.get("revision"),"serverId",s.get("serverId"));}
             case "log":arity(a,0);return store.read();
             case "checkpoint":arity(a,0);return store.checkpoint();
-            case "undo":case "redo":arity(a,0);return store.history(actor,command.equals("redo"));
+            case "undo":case "redo":{
+                boolean withSnapshot=a.size()==1&&a.get(0).equals("snapshot");if(!withSnapshot)arity(a,0);
+                Map<String,Object> result=store.history(actor,command.equals("redo"),withSnapshot);
+                if(withSnapshot)result.put("snapshot",snapshot(map(result.remove("state"))));return result;
+            }
             case "diagram":arity(a,2);require(a.get(0).equals("add"),"diagram add FILE|-");Map<String,Object> diagram=map(input(a.get(1)));return store.commit(actor,m->Actions.diagram(m,diagram));
             case "svg":{
                 Map<String,Object> raw=svgInput(a);raw.put("shape","svg");Map<String,Object> drawing=Actions.drawing(raw,"base");
