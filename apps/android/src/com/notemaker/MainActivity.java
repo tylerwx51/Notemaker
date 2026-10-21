@@ -328,7 +328,7 @@ public class MainActivity extends Activity {
     void pageDialog(){if(!type.equals("pages"))return;EditText field=new EditText(this);field.setInputType(2);field.setText(""+(page+1));new AlertDialog.Builder(this).setTitle("Go to / create page").setView(field).setPositiveButton("Open",(d,w)->{try{int next=Math.max(0,Math.min(10000,Integer.parseInt(field.getText().toString())-1));deselect();resetDrawingGesture();page=next;save();update();}catch(Exception ignored){}}).show();}
     void history(boolean forward){
         final ArrayList<String> from=forward?redo:undo,to=forward?undo:redo;final String entry;final AppReplica target=replica;
-        synchronized(lock){if(historyPending||!pendingObjectHistory.isEmpty()||from.isEmpty())return;entry=from.get(from.size()-1);historyPending=true;saving++;update();}
+        synchronized(lock){if(historyPending||!pendingObjectHistory.isEmpty()||from.isEmpty())return;entry=from.get(from.size()-1);historyPending=true;saving++;}
         ReplicaService.writes.execute(()->{try{
             if(entry.equals("object-action"))target.command(Arrays.asList(forward?"redo":"undo"),null);
             else{boolean erased=entry.startsWith("erase:");String stroke=erased?entry.substring(6):entry;target.command(Arrays.asList("append","-"),Json.object("kind","active","stroke",stroke,"active",erased?!forward:forward));}

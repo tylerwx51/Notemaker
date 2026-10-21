@@ -43,6 +43,9 @@ materialized snapshots, not history for UI replay. Current strokes are drawn
 over cached completed ink; cache invalidation preserves layer order, erasure,
 page changes and pan/zoom. At most three visible layer bitmaps are cached.
 JSON numbers are parsed without compiling a regex for every coordinate.
+Object undo/redo waits for the durable local result before redrawing the editor;
+the transient queued state does not justify an extra full E Ink frame. Failure
+still redraws the editor and reports the error.
 
 `ReplicaService` starts a loopback-only command proxy on port 8766 and performs
 background synchronization for configured documents. The app calls the shared
