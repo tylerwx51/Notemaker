@@ -7,6 +7,9 @@ import static com.notemaker.core.Model.require;
 /** Bounded flood selection of an enclosed region formed by native ink and shapes. */
 public final class RegionFill {
     private RegionFill() {}
+    private static final class FillRun {final int start,end,top;FillRun(int start,int end,int top){this.start=start;this.end=end;this.top=top;}}
+    private static void appendFillRun(StringBuilder path,FillRun run,int bottom){int length=run.end-run.start;
+        path.append('M').append(run.start-.5).append(' ').append(run.top-.5).append('h').append(length).append('v').append(bottom-run.top).append("h-").append(length).append('Z');}
     public static List<Object> create(Model model,Map<String,Object> input){
         double x=number(input,"x"),y=number(input,"y");Model.color(input,"color");
         double requestedPage=((Number)input.getOrDefault("page",0)).doubleValue();require(requestedPage==Math.rint(requestedPage)&&requestedPage>=0&&requestedPage<=10000,"Invalid fill page");int page=(int)requestedPage;String layer=(String)input.getOrDefault("layer","base");
@@ -42,7 +45,18 @@ public final class RegionFill {
             next=p+1;if(mask[next]==0){mask[next]=2;queue[tail++]=next;}
             next=p-width;if(mask[next]==0){mask[next]=2;queue[tail++]=next;}
             next=p+width;if(mask[next]==0){mask[next]=2;queue[tail++]=next;}}
-        StringBuilder path=new StringBuilder();for(int yy=1;yy<height-1;yy++)for(int xx=1;xx<width-1;xx++)if(mask[yy*width+xx]==2){int start=xx;while(xx+1<width&&mask[yy*width+xx+1]==2)xx++;path.append('M').append(start-.5).append(' ').append(yy-.5).append('h').append(xx-start+1).append("v1h-").append(xx-start+1).append('Z');}
+        StringBuilder path=new StringBuilder();List<FillRun> priorRuns=new ArrayList<>(),nextRuns=new ArrayList<>();
+        for(int yy=1;yy<height-1;yy++){
+            nextRuns.clear();int previous=0;
+            for(int xx=1;xx<width-1;xx++)if(mask[yy*width+xx]==2){int start=xx;while(xx+1<width-1&&mask[yy*width+xx+1]==2)xx++;int end=xx+1;
+                while(previous<priorRuns.size()&&(priorRuns.get(previous).start<start||priorRuns.get(previous).start==start&&priorRuns.get(previous).end<end))appendFillRun(path,priorRuns.get(previous++),yy);
+                FillRun run=previous<priorRuns.size()&&priorRuns.get(previous).start==start&&priorRuns.get(previous).end==end?priorRuns.get(previous++):new FillRun(start,end,yy);
+                nextRuns.add(run);
+            }
+            while(previous<priorRuns.size())appendFillRun(path,priorRuns.get(previous++),yy);
+            List<FillRun> swap=priorRuns;priorRuns=nextRuns;nextRuns=swap;
+        }
+        for(FillRun run:priorRuns)appendFillRun(path,run,height-1);
         int color=((Number)input.get("color")).intValue();String svg="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""+width+"\" height=\""+height+"\" viewBox=\"0 0 "+width+" "+height+"\"><path d=\""+path+"\" fill=\""+String.format(Locale.ROOT,"#%06x",color&0xffffff)+"\" fill-opacity=\""+(color>>>24)/255.0+"\"/></svg>";
         return Arrays.asList(Actions.drawing(object("shape","svg","svg",svg,"x",left,"y",top,"w",width*scale,"h",height*scale,"page",page),layer));
     }
