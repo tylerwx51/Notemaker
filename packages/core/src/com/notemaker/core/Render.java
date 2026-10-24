@@ -139,6 +139,7 @@ public final class Render {
         if(shape.equals("template"))return; // Infinite guides are generated against the live viewport by the tablet renderer.
         if(shape.equals("svg")){c.svg(x,y,w,h,string(o,"svg"));return;}
         if(shape.equals("image")){c.image(x,y,w,h,string(o,"image"));return;}
+        if(shape.equals("gif")){c.image(x,y,w,h,string(o,"gif"));return;}
         if(shape.equals("arrow")||shape.equals("arrowLine")){
             double[] ends=endpoints(m,o);x=ends[0];y=ends[1];double ex=ends[2],ey=ends[3];
             c.line(x,y,ex,ey,color,width);double angle=Math.atan2(ey-y,ex-x),length=Math.max(12,width*4);

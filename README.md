@@ -25,6 +25,22 @@ Move the `main` bookmark to the commit you intend to publish before pushing.
 
 ## Android testing
 
+GIF animations can be imported from **Insert → Insert GIF animation** or with
+`apps/cli/notemaker --document NAME --actor ACTOR gif add FILE.gif [PLACEMENT.json]`.
+Each GIF shows play/pause, previous and next frame, and a timeline beneath it.
+Select **Interact** on the toolbar to press or drag those controls. The
+**Insert → GIF player** dialog remains available for choosing an animation.
+Every Activity starts on the first frame, paused;
+playback position stays local to that Activity and never syncs to other apps.
+For a review fixture, run
+`nix-shell --run 'python3 apps/cli/examples/gif_review.py .test-artifacts/gif-review'`.
+The generated `diagram.json` contains three labeled animations for an atomic
+`diagram add` in a new fixed document. See the CLI README for player action names.
+With a running Android session, use
+`nix-shell --run 'python3 tests/gif_player_android.py --proxy-file PROXY.json --session SESSION --document "GIF Player Review" --id gif-review-moving-dot'`
+to check the live controls. Pass `--other-session SECOND_SESSION` to verify
+that playback in one Activity leaves another Activity's frame untouched.
+
 Use a recent Nixpkgs channel with Android API 36 support. `shell.nix` enables
 the Android SDK license and unfree packages for this shell.
 

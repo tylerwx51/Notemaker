@@ -1,5 +1,51 @@
 # Verification
 
+## GIF controls on the canvas — 2026-10-24
+
+Built and installed the updated APK on the physical Note Air6 C. The fixed
+**GIF Player Review** note now draws a previous/play/next row and a timeline
+immediately beneath each of its three GIFs. Moved the captions and instruction
+line in one atomic CLI action and confirmed the tablet replica received them.
+The final tablet capture is `.test-artifacts/gif-review/inline-controls-final.png`.
+
+The live-session CLI selected `tool.select` with `{"name":"interact"}` and
+`tests/gif_player_android.py` passed its control checks. Actual tablet taps on
+the first animation toggled play and pause, advanced one frame, and moved back
+one frame. Dragging its timeline selected frame 5. A tap on the second
+animation played it while the first remained paused at its own frame. Both
+returned to frame 0, paused; the note's revision stayed 27 with zero pending
+document actions. The note is left open with Interact selected. Perceived E Ink
+refresh quality still awaits user feedback.
+
+## GIF player — 2026-10-24
+
+Built the JVM CLI and Android APK in `nix-shell`; Python sources compiled.
+`tests/server_checks.py` passed 7 checks, including a valid two-frame GIF and
+rejection of a truncated GIF without a partial commit. `tests/cli_checks.py`
+passed 25 checks. A fresh local proxy accepted a real `gif add` CLI call and
+an atomic diagram with three GIFs and captions; PNG export showed frame zero.
+
+Restarted the existing desktop primary server and desktop proxy with the GIF
+schema, then created and synced the fixed **GIF Player Review** document.
+Inspection found 3 GIF objects and 5 text objects on its new layer. Installed
+the updated APK on the USB-connected Note Air6 C (`eac89823`), and the tablet
+proxy downloaded the note with zero pending actions. A tablet screenshot
+confirmed the captions and first frames were legible.
+
+`tests/gif_player_android.py` passed against the physical Activity: action
+discovery, paused start, next/previous, seek, timed advance, pause stability,
+and unchanged document revision. A second Activity kept frame 2 paused while
+the first played and sought independently. Tablet screenshots at frames 0 and
+3 differed by 6,422 pixels within the moving-dot region. The player dialog
+showed its timeline and three controls at readable sizes. A live
+`gif.import.open` CLI action opened Android's Documents picker, which was
+confirmed as the resumed Activity and then canceled. At that stage the note was
+left open at frame 0, paused, with its original player dialog visible. The
+tablet's original LAN server
+address was restored after USB synchronization; its Wi-Fi was disabled during
+the check, and the note remains in its local replica. Perceived E Ink refresh
+quality and comfortable playback speed await user feedback.
+
 ## App session ID in agent chat — 2026-10-21
 
 The Android chat send now includes the current app launch session ID. The server

@@ -10,10 +10,25 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import base64
+from io import BytesIO
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 
 class ServerChecks(unittest.TestCase):
+    def test_embedded_gif_is_validated_before_commit(self):
+        pixels=[Image.new('RGB',(2,2),color) for color in ('white','black')]
+        stream=BytesIO();pixels[0].save(stream,format='GIF',save_all=True,append_images=pixels[1:],duration=400,loop=0)
+        gif='data:image/gif;base64,'+base64.b64encode(stream.getvalue()).decode()
+        item=dict(id='gif-1',kind='object',object='gif-1',shape='gif',gif=gif,layer='base',page=0,
+                  x=0,y=0,w=20,h=20,width=3,color=-16777216)
+        self.post('gif-valid',[item])
+        self.assertEqual(self.read('gif-valid')[0]['op']['gif'],gif)
+        invalid=dict(item,id='gif-bad',object='gif-bad',gif='data:image/gif;base64,'+base64.b64encode(stream.getvalue()[:-1]).decode())
+        with self.assertRaises(urllib.error.HTTPError) as error:self.post('gif-invalid',[invalid])
+        self.assertEqual(error.exception.code,400)
+        self.assertEqual(self.read('gif-invalid'),[])
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()

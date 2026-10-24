@@ -26,6 +26,46 @@ CHATS = None
 PREVIEWS = {}
 UI = UiSessions()
 
+def validate_gif(uri):
+    if not isinstance(uri,str) or len(uri)>2_800_000 or not uri.startswith('data:image/gif;base64,'): raise ValueError('Invalid GIF data URI')
+    try: data=base64.b64decode(uri.split(',',1)[1],validate=True)
+    except Exception: raise ValueError('Invalid GIF base64')
+    if not 13<=len(data)<=2*1024*1024 or data[:6] not in (b'GIF87a',b'GIF89a'): raise ValueError('Invalid GIF header')
+    width,height=struct.unpack_from('<HH',data,6)
+    if not 0<width<=8192 or not 0<height<=8192 or width*height>32*1024*1024: raise ValueError('Invalid GIF dimensions')
+    pos=13
+    if data[10]&128: pos+=3*(1<<((data[10]&7)+1))
+    frames=0
+    def blocks(pos):
+        while pos<len(data):
+            size=data[pos];pos+=1
+            if size==0: return pos
+            if pos+size>len(data): break
+            pos+=size
+        raise ValueError('Truncated GIF block')
+    while pos<len(data):
+        tag=data[pos];pos+=1
+        if tag==0x3b:
+            if pos!=len(data) or frames==0: raise ValueError('Incomplete GIF')
+            return
+        if tag==0x21:
+            if pos>=len(data): raise ValueError('Truncated GIF extension')
+            label=data[pos];pos+=1
+            if label==0xf9:
+                if pos+6>len(data) or data[pos]!=4 or data[pos+5]!=0: raise ValueError('Invalid GIF frame control')
+                pos+=6
+            else: pos=blocks(pos)
+            continue
+        if tag!=0x2c or pos+9>len(data): raise ValueError('Invalid GIF frame')
+        fw,fh=struct.unpack_from('<HH',data,pos+4)
+        if not fw or not fh: raise ValueError('Invalid GIF frame size')
+        flags=data[pos+8];pos+=9
+        if flags&128: pos+=3*(1<<((flags&7)+1))
+        if pos>=len(data): raise ValueError('Truncated GIF frame')
+        pos=blocks(pos+1);frames+=1
+        if frames>500: raise ValueError('GIF has too many frames')
+    raise ValueError('Incomplete GIF')
+
 def validate(op, nested=False):
     if not isinstance(op, dict) or not isinstance(op.get('id'), str) or len(op['id']) > 200:
         raise ValueError('Operation needs an id')
@@ -60,7 +100,7 @@ def validate(op, nested=False):
     elif kind == 'object':
         if not all(isinstance(op.get(k), str) and 0 < len(op[k]) <= 200 for k in ('object', 'layer')):
             raise ValueError('Invalid object identity')
-        if op.get('shape') not in ('rect', 'ellipse', 'text', 'line', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'svg', 'image', 'cube', 'cylinder', 'cone', 'sphere', 'pyramid', 'trapezoid', 'triangle45', 'triangle60', 'triangle90', 'wave', 'curve', 'polyline', 'regularPolygon', 'circle', 'rectangle', 'rhombus', 'arrowLine', 'waveLine', 'regularHexagon', 'template'):
+        if op.get('shape') not in ('rect', 'ellipse', 'text', 'line', 'triangle', 'diamond', 'pentagon', 'hexagon', 'star', 'arrow', 'svg', 'image', 'gif', 'cube', 'cylinder', 'cone', 'sphere', 'pyramid', 'trapezoid', 'triangle45', 'triangle60', 'triangle90', 'wave', 'curve', 'polyline', 'regularPolygon', 'circle', 'rectangle', 'rhombus', 'arrowLine', 'waveLine', 'regularHexagon', 'template'):
             raise ValueError('Invalid shape')
         if op['shape'] == 'template':
             if op.get('template') not in ('ruled', 'grid', 'dots'):
@@ -70,6 +110,8 @@ def validate(op, nested=False):
                 raise ValueError('Invalid template spacing')
         if op['shape'] == 'svg':
             validate_svg(op.get('svg'))
+        if op['shape'] == 'gif':
+            validate_gif(op.get('gif'))
         if op['shape'] == 'image':
             uri=op.get('image','')
             if not isinstance(uri,str) or len(uri)>2_800_000 or not (uri.startswith('data:image/png;base64,') or uri.startswith('data:image/jpeg;base64,')): raise ValueError('Invalid image data URI')

@@ -92,6 +92,7 @@ final class EditorUi {
         tool(rail, "fill", "Fill", "Enclosed area fill");
         railRule(rail);
         tool(rail, "select", "Select", "Select and transform objects");
+        tool(rail, "interact", "Interact", "Press controls on the page");
         tool(rail, "text", "Text", "Text placement");
         tool(rail, "insert", "Insert", "Insert content");
         tool(rail, "move", "Move", "Canvas navigation");
@@ -352,16 +353,19 @@ final class EditorUi {
     void openTool(String kind, View anchor) {
         if(!kind.equals("select")&&(app.selecting||app.selectionSession!=null||!app.selectedEntities.isEmpty()))app.deselect();
         app.fillTapMode=false;
-        if (Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind)) selectedTool=kind;
-        if(Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(kind))app.selecting=kind.equals("select");
+        if (Arrays.asList("pen","eraser","move","shapes","text","fill","select","interact").contains(kind)) selectedTool=kind;
+        if(Arrays.asList("pen","eraser","move","shapes","text","fill","select","interact").contains(kind))app.selecting=kind.equals("select");
         LinearLayout box;
         switch (kind) {
             case "agent": dismissPopup();app.agent.show();return;
+            case "interact": app.pan=false;app.erase=false;app.drawingShape=null;app.pendingText=null;app.resetDrawingGesture();dismissPopup();app.update();return;
             case "layers": box=layersPanel();break;
             case "template": box=templatePanel();break;
             case "insert":
                 box=popupBody("Insert", "");
                 menuAction(box,"Insert picture…",true,app::choosePicture);
+                menuAction(box,"Insert GIF animation…",true,app::chooseGif);
+                menuAction(box,"GIF player…",true,()->app.animationPlayer.show());
                 menuAction(box,"Insert SVG artwork…",true,app::chooseSvgPicture);
                 menuAction(box,"Enter text…",true,app::textPlacementDialog);
                 break;
@@ -994,6 +998,7 @@ final class EditorUi {
                 case "document": case "page": path(canvas, 5, 2, 15, 2, 20, 7, 20, 22, 5, 22, 5, 2); path(canvas, 15, 2, 15, 7, 20, 7); path(canvas, 9, 12, 16, 12); path(canvas, 9, 16, 16, 16); break;
                 case "text": path(canvas, 5, 5, 19, 5);path(canvas,12,5,12,20);path(canvas,8,20,16,20);break;
                 case "select": paint.setPathEffect(new DashPathEffect(new float[]{3,2},0));canvas.drawRect(4,4,20,20,paint);paint.setPathEffect(null);path(canvas,12,4,12,20);path(canvas,4,12,20,12);break;
+                case "interact":canvas.drawCircle(15,5,2,paint);path(canvas,15,7,15,15,19,11,21,13,21,18,17,21,10,21,5,16,5,13,8,13,11,16,11,6);break;
                 case "fill": { Path fill=new Path();fill.moveTo(12,3);fill.cubicTo(9,8,4,12,4,16);fill.cubicTo(4,22,20,22,20,16);fill.cubicTo(20,12,15,8,12,3);canvas.drawPath(fill,paint);break; }
                 case "shapes":canvas.drawRect(3,4,13,14,paint);canvas.drawOval(11,10,21,20,paint);path(canvas,4,21,10,13,16,21,4,21);break;
                 case "rect":canvas.drawRect(4,5,20,19,paint);break;

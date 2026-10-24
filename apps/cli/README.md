@@ -282,6 +282,17 @@ view changes, selection controls, templates, history buttons, and Agent panel
 open/close are available. Use the existing document CLI commands for content
 creation and edits. The Files browser currently lists documents without folders.
 
+GIF controls are `gif.import.open` for Android's document picker,
+`gif.player.open`, `gif.select` with `{id}`, `gif.play`,
+`gif.pause`, `gif.next`, `gif.previous`, and `gif.seek` with a zero-based `{frame}`.
+GIFs also show these controls directly beneath the item. Select the toolbar's
+Interact tool with `tool.select` and `{"name":"interact"}` to use them by touch.
+Every action returns `state.gifPlayer`; `ui state` also reports the selected GIF
+and each loaded clip's frame, count, duration, and play state. Player actions
+affect only the addressed Activity session and do not create document history.
+Animations start paused. Android uses each GIF's frame delays with a 100 ms
+minimum to limit E Ink redraws; leaving the app pauses playback.
+
 Each session record includes `deviceId`, `deviceName`, `document`, `page`,
 `layer`, `tool`, `foreground`, `startedAt`, `proxyId`, `lastSeen`, and `expires`.
 The root drops a session after 12 seconds without a heartbeat. When an upstream
@@ -396,6 +407,7 @@ the entire content action and its undo history unchanged.
 | `erase -` | `{mode, page?, layer?, points?, radius?}`. Modes: `item` (`stroke` is a compatibility alias), `partial`, `area`, `page`. Whole-item and area modes test painted coverage against the swept round eraser, not its bounding rectangle. Page mode omits points. Partial erasing adds a local mask to any item type, preserving its ID/source in one undoable action. Defaults: layer `base`, page `0`, radius `12`. |
 | `fill -` | `{object, color, layer?, page?}` for a native closed shape, `{stroke, color, layer?, page?}` for a closed ink outline, or `{x,y,page,layer,color}` for a region enclosed by several native ink/shape boundaries. Defaults to `base`/`0`. Open regions, including erased boundary gaps, are rejected. |
 | `image add FILE [PLACEMENT.json]` | Embedded PNG/JPEG; maximum 2 MiB decoded, 8192 pixels per edge, 32 megapixels. Placement uses the SVG placement fields. No external image URLs. |
+| `gif add FILE [PLACEMENT.json]` | Embedded GIF with at most 500 frames; maximum 2 MiB decoded, 8192 pixels per edge, 32 megapixels. Placement uses the image placement fields. Playback state belongs to each live app session. |
 | `template add -` | `{template,page?,x?,y?,w?,h?,spacing?,color?,background?}`. Templates: `blank`, `ruled`, `grid`, `dots`, `planner`. Defaults to a reusable page background layer below drawing layers; `background:false` inserts into the supplied layer. |
 | `layer duplicate ID` | Copy layer and active contents atomically, remapping internal connector references. |
 | `layer merge SOURCE TARGET` | Move source contents into target and archive source; base cannot be the source. |

@@ -31,7 +31,7 @@ final class UiActions implements LocalProxy.UiSession {
         add("page.previous","{}",a->{require(app.type.equals("pages")&&app.page>0,"No previous page");app.deselect();app.resetDrawingGesture();app.page--;app.save();app.update();});
         add("layer.select","{id: layer ID}",a->{String id=string(a,"id");require(app.layers.containsKey(id)&&!Boolean.FALSE.equals(app.model.layerActive.get(id)),"Layer is unavailable");app.selectLayer(id);});
         add("layer.visibility","{id: layer ID, visible: boolean} — device view only",a->{String id=string(a,"id");require(app.layers.containsKey(id),"Unknown layer");boolean visible=bool(a,"visible");if(visible)app.hidden.remove(id);else app.hidden.add(id);app.save();app.update();});
-        add("tool.select","{name: pen|eraser|move|shapes|text|fill|select}",a->{String name=string(a,"name");require(Arrays.asList("pen","eraser","move","shapes","text","fill","select").contains(name),"Unknown drawing tool");app.editor.openPanel(name);});
+        add("tool.select","{name: pen|eraser|move|shapes|text|fill|select|interact}",a->{String name=string(a,"name");require(Arrays.asList("pen","eraser","move","shapes","text","fill","select","interact").contains(name),"Unknown drawing tool");app.editor.openPanel(name);});
         add("shape.select","{id: shape ID}",a->{String id=string(a,"id");require(com.notemaker.core.ShapeCatalog.ids().contains(id),"Unknown shape");app.editor.dismissPopup();app.setDrawingTool(id);});
         add("pen.configure","{brush?, color?, width?, material?}",a->{if(a.containsKey("brush")){String brush=string(a,"brush");require(Arrays.asList("pen","pencil","marker","brush","oily","fountain","charcoal","neoBrush","latinCalligraphy","asiaCalligraphy","square").contains(brush),"Unknown brush");app.brush=brush;}if(a.containsKey("color"))app.color=integer(a,"color",Integer.MIN_VALUE,Integer.MAX_VALUE);if(a.containsKey("width"))app.width=integer(a,"width",1,30);if(a.containsKey("material")){app.material=integer(a,"material",0,100);app.getSharedPreferences("settings",0).edit().putInt("penMaterial",app.material).apply();}app.update();});
         add("pen.preset.save","{name: string}",a->app.editor.savePenPreset(string(a,"name")));
@@ -53,12 +53,20 @@ final class UiActions implements LocalProxy.UiSession {
         add("template.insert","{name: ruled|grid|dots|planner|blank}",a->{String name=string(a,"name");require(Arrays.asList("ruled","grid","dots","planner","blank").contains(name),"Unknown template");app.insertTemplate(name);});
         add("agent.open","{}",a->app.agent.show());
         add("agent.close","{}",a->app.agent.dismiss());
+        add("gif.player.open","{}",a->app.animationPlayer.show());
+        add("gif.import.open","{}",a->app.chooseGif());
+        add("gif.select","{id: GIF object ID}",a->app.animationPlayer.select(string(a,"id")));
+        add("gif.play","{}",a->app.animationPlayer.play(true));
+        add("gif.pause","{}",a->app.animationPlayer.play(false));
+        add("gif.next","{}",a->app.animationPlayer.step(1));
+        add("gif.previous","{}",a->app.animationPlayer.step(-1));
+        add("gif.seek","{frame: zero-based integer}",a->app.animationPlayer.seek(integer(a,"frame",0,499)));
     }
     private void add(String name,String schema,Action action){actions.put(name,action);descriptions.put(name,schema);}
     private static int integer(Map<String,Object> a,String key,int min,int max){Object value=a.get(key);require(value instanceof Number&&((Number)value).doubleValue()==((Number)value).intValue(),key+" must be an integer");int n=((Number)value).intValue();require(n>=min&&n<=max,key+" is out of range");return n;}
     private static double number(Map<String,Object> a,String key){Object value=a.get(key);require(value instanceof Number,key+" must be a number");return ((Number)value).doubleValue();}
     private static boolean bool(Map<String,Object> a,String key){require(a.get(key) instanceof Boolean,key+" must be boolean");return (Boolean)a.get(key);}
-    private Map<String,Object> state(){return object("session",app.appSessionId,"deviceId",app.deviceId,"deviceName",android.os.Build.MANUFACTURER+" "+android.os.Build.MODEL,"platform","Android","startedAt",app.appSessionStartedAt,"document",app.document,"documentType",app.type,"page",app.page,"layer",app.selected,"tool",app.editor.selectedTool(),"filesOpen",app.browser!=null&&app.browser.showing(),"files",app.browser!=null&&app.browser.showing()?app.browser.state():null,"panelOpen",app.editor.panelShowing(),"agentOpen",app.agent.showing(),"foreground",app.foreground,"zoom",app.canvas.zoom,"offsetX",app.canvas.offsetX,"offsetY",app.canvas.offsetY,"color",app.color,"brush",app.brush,"width",app.width,"material",app.material,"eraserMode",app.eraserMode,"eraserRadius",app.eraserRadius,"selectedCount",app.selectedEntities.size());}
+    private Map<String,Object> state(){return object("gifPlayer",app.animationPlayer.state(),"session",app.appSessionId,"deviceId",app.deviceId,"deviceName",android.os.Build.MANUFACTURER+" "+android.os.Build.MODEL,"platform","Android","startedAt",app.appSessionStartedAt,"document",app.document,"documentType",app.type,"page",app.page,"layer",app.selected,"tool",app.editor.selectedTool(),"filesOpen",app.browser!=null&&app.browser.showing(),"files",app.browser!=null&&app.browser.showing()?app.browser.state():null,"panelOpen",app.editor.panelShowing(),"agentOpen",app.agent.showing(),"foreground",app.foreground,"zoom",app.canvas.zoom,"offsetX",app.canvas.offsetX,"offsetY",app.canvas.offsetY,"color",app.color,"brush",app.brush,"width",app.width,"material",app.material,"eraserMode",app.eraserMode,"eraserRadius",app.eraserRadius,"selectedCount",app.selectedEntities.size());}
     @Override public Object request(String verb,String action,Map<String,Object> input) throws Exception {
         Callable<Object> task=()->{
             require(app.running,"App session is closed");

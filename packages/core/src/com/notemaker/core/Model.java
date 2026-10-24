@@ -103,6 +103,7 @@ public final class Model {
                 if(shape.equals("svg"))SvgAsset.validate(string(o,"svg"));
                 if(shape.equals("template")){require(Arrays.asList("ruled","grid","dots").contains(string(o,"template")),"Unknown infinite template");range(o,"spacing",8,1000000);}
                 if(shape.equals("image"))ImageAsset.validate(string(o,"image"));
+                if(shape.equals("gif"))GifAsset.validate(string(o,"gif"));
                 for(String key:Arrays.asList("bold","italic","underline","flipX","flipY"))if(o.containsKey(key))bool(o,key);
                 if(o.containsKey("rotation"))range(o,"rotation",-360,360);
                 if(o.containsKey("fontFamily"))require(Arrays.asList("sans-serif","serif","monospace").contains(string(o,"fontFamily")),"Unknown font family");

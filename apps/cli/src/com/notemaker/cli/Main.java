@@ -39,7 +39,7 @@ public final class Main {
         + "transform preview FILE|- | transform commit FILE|- | transform cancel SESSION\n"
         + "conflicts | conflict resolve ID local|remote|both\n"
         + "stroke put FILE|- | stroke hide ID | stroke show ID\n"
-        + "erase FILE|- | fill FILE|- | template add FILE|- | image add FILE [PLACEMENT.json]\n"
+        + "erase FILE|- | fill FILE|- | template add FILE|- | image add FILE [PLACEMENT.json] | gif add FILE [PLACEMENT.json]\n"
         + "apply FILE|-               Atomic JSON array of protocol actions\n"
         + "append [snapshot] FILE|-   Append one raw action; optionally return post-edit snapshot\n"
         + "settings FILE|-            Update local editor preferences\n"
@@ -74,7 +74,7 @@ public final class Main {
             Map<String,Object> descriptor=map(parse(new String(Files.readAllBytes(Paths.get(proxy)),StandardCharsets.UTF_8)));
             Object value=null;String cmd=a.get(0);
             if(cmd.equals("svg")){value=svgInput(a.subList(1,a.size()));a=new ArrayList<>(Arrays.asList("svg","add","-"));}
-            else if(cmd.equals("image")){Map<String,Object> placement=imagePlacement(a);placement.put("shape","image");placement.put("image",ImageAsset.fromBytes(imageBytes(a.get(2))));value=placement;a=new ArrayList<>(Arrays.asList("image","add","-"));}
+            else if(cmd.equals("image")||cmd.equals("gif")){Map<String,Object> placement=imagePlacement(a);boolean gif=cmd.equals("gif");placement.put("shape",gif?"gif":"image");placement.put(gif?"gif":"image",gif?GifAsset.fromBytes(assetBytes(a.get(2),GifAsset.MAX_BYTES)):ImageAsset.fromBytes(imageBytes(a.get(2))));value=placement;a=new ArrayList<>(Arrays.asList(cmd,"add","-"));}
             else if((cmd.equals("selection")&&a.size()==3&&Arrays.asList("select","paste","query").contains(a.get(1)))||(cmd.equals("transform")&&a.size()==3&&Arrays.asList("preview","commit").contains(a.get(1)))){int last=a.size()-1;value=input(a.get(last));a.set(last,"-");}
             else if(cmd.equals("ui")&&a.size()==5&&a.get(1).equals("action")){value=input(a.get(4));a.set(4,"-");}
             else if(cmd.equals("append")||cmd.equals("settings")||cmd.equals("apply")||cmd.equals("diagram")||cmd.equals("erase")||cmd.equals("fill")||cmd.equals("template")||((cmd.equals("object")||cmd.equals("layer")||cmd.equals("stroke")||cmd.equals("image"))&&(a.contains("put")||a.contains("update")||a.contains("add")))){
@@ -147,6 +147,7 @@ public final class Main {
             case "fill":{arity(a,1);Map<String,Object> request=map(input(a.get(0)));Model model=store.model();List<Object> dependencies=new ArrayList<>();if(request.containsKey("object"))dependencies.add(object("kind","object","id",request.get("object"),"page",request.getOrDefault("page",0)));else if(request.containsKey("stroke"))dependencies.add(object("kind","stroke","id",request.get("stroke"),"page",request.getOrDefault("page",0)));else{int page=LayerEditor.page(request);String layer=String.valueOf(request.getOrDefault("layer","base"));for(Map<String,Object> entity:model.strokes.values())if(page==((Number)entity.getOrDefault("page",0)).intValue()&&layer.equals(entity.get("layer"))&&!Boolean.FALSE.equals(model.layerActive.get(layer))&&!Boolean.FALSE.equals(model.active.get(entity.get("stroke"))))dependencies.add(object("kind","stroke","id",entity.get("stroke"),"page",page));for(Map<String,Object> entity:model.objects.values())if(page==((Number)entity.getOrDefault("page",0)).intValue()&&layer.equals(entity.get("layer"))&&!Boolean.FALSE.equals(model.layerActive.get(layer))&&!Boolean.FALSE.equals(model.objectActive.get(entity.get("object"))))dependencies.add(object("kind","object","id",entity.get("object"),"page",page));}return store.commit(actionActor,m->DrawingActions.fill(m,request),dependencies);}
             case "template":{arity(a,2);require(a.get(0).equals("add"),"template add FILE|-");Map<String,Object> request=map(input(a.get(1)));return store.commit(actionActor,m->DrawingActions.template(m,request));}
             case "image":{if(Boolean.TRUE.equals(inProxy.get())){arity(a,2);Map<String,Object> placement=map(input(a.get(1)));return store.commit(actionActor,m->Arrays.asList(Actions.drawing(placement,"base")));}require(a.size()>=2&&a.get(0).equals("add"),"image add FILE [PLACEMENT.json]");Map<String,Object> placement=imagePlacement(a);byte[] bytes=imageBytes(a.get(1));return store.commit(actionActor,m->DrawingActions.image(m,bytes,placement));}
+            case "gif":{if(Boolean.TRUE.equals(inProxy.get())){arity(a,2);Map<String,Object> placement=map(input(a.get(1)));return store.commit(actionActor,m->Arrays.asList(Actions.drawing(placement,"base")));}require(a.size()>=2&&a.get(0).equals("add"),"gif add FILE [PLACEMENT.json]");Map<String,Object> placement=imagePlacement(a);placement.put("shape","gif");placement.put("gif",GifAsset.fromBytes(assetBytes(a.get(1),GifAsset.MAX_BYTES)));return store.commit(actionActor,m->Arrays.asList(Actions.drawing(placement,"base")));}
             case "apply":arity(a,1);List<Object> ops=list(input(a.get(0)));return store.commit(actor,m->ops);
             case "selection":{
                 require(a.size()>=1,"selection select|heartbeat|deselect|disconnect|duplicate|delete|copy|cut|paste");String sub=a.remove(0);
@@ -193,7 +194,7 @@ public final class Main {
         return parse(readInput(path));
     }
     private static Map<String,Object> imagePlacement(List<String> args)throws IOException{
-        int offset=args.get(0).equals("image")?2:1;require(args.size()==offset+1||args.size()==offset+2,"image add FILE [PLACEMENT.json]");require(args.get(offset-1).equals("add"),"image add FILE [PLACEMENT.json]");Map<String,Object> placement=args.size()==offset+2?map(parse(readInput(args.get(offset+1)))):object();
+        int offset=Arrays.asList("image","gif").contains(args.get(0))?2:1;require(args.size()==offset+1||args.size()==offset+2,"image|gif add FILE [PLACEMENT.json]");require(args.get(offset-1).equals("add"),"image|gif add FILE [PLACEMENT.json]");Map<String,Object> placement=args.size()==offset+2?map(parse(readInput(args.get(offset+1)))):object();
         for(String key:placement.keySet())require(Arrays.asList("x","y","w","h","layer","page","object").contains(key),"Unknown image placement field: "+key);return placement;
     }
     static Map<String,Object> snapshot(Map<String,Object> s){
@@ -202,6 +203,10 @@ public final class Main {
     }
     private static byte[] imageBytes(String path)throws IOException{
         byte[] bytes;if(path.equals("-")){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int count;while((count=System.in.read(buffer))!=-1){out.write(buffer,0,count);require(out.size()<=ImageAsset.MAX_BYTES,"Image exceeds 2 MiB");}bytes=out.toByteArray();}else{require(Files.size(Paths.get(path))<=ImageAsset.MAX_BYTES,"Image exceeds 2 MiB");bytes=Files.readAllBytes(Paths.get(path));}ImageAsset.fromBytes(bytes);return bytes;
+    }
+    private static byte[] assetBytes(String path,int limit)throws IOException{
+        if(path.equals("-")){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int count;while((count=System.in.read(buffer))!=-1){out.write(buffer,0,count);require(out.size()<=limit,"Asset exceeds 2 MiB");}return out.toByteArray();}
+        require(Files.size(Paths.get(path))<=limit,"Asset exceeds 2 MiB");return Files.readAllBytes(Paths.get(path));
     }
     private static String readInput(String path)throws IOException{
         byte[] bytes;if(path.equals("-")){ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;while((n=System.in.read(buffer))!=-1){b.write(buffer,0,n);require(b.size()<=3000000,"Input exceeds 3 MB");}bytes=b.toByteArray();}else{require(Files.size(Paths.get(path))<=3000000,"Input exceeds 3 MB");bytes=Files.readAllBytes(Paths.get(path));}return new String(bytes,StandardCharsets.UTF_8);

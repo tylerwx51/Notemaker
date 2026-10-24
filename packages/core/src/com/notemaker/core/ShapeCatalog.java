@@ -7,7 +7,7 @@ public final class ShapeCatalog {
     private static final List<String> IDS=Collections.unmodifiableList(Arrays.asList(
         "rect","ellipse","text","line","triangle","diamond","pentagon","hexagon","star","arrow","svg",
         "trapezoid","triangle45","triangle60","triangle90","wave","curve","polyline","regularPolygon",
-        "cube","cylinder","cone","sphere","pyramid","image","circle","rectangle","rhombus","arrowLine","waveLine","regularHexagon"));
+        "cube","cylinder","cone","sphere","pyramid","image","gif","circle","rectangle","rhombus","arrowLine","waveLine","regularHexagon"));
     private ShapeCatalog() {}
     public static List<String> ids(){return IDS;}
     public static boolean known(String id){return IDS.contains(id);}
@@ -18,7 +18,7 @@ public final class ShapeCatalog {
             case "star":return "Star";case "arrow":return "Arrow";case "svg":return "SVG";case "trapezoid":return "Trapezoid";
             case "triangle45":return "45° Triangle";case "triangle60":return "60° Triangle";case "triangle90":return "Right Triangle";
             case "wave":return "Wave";case "curve":return "Curve";case "polyline":return "Polyline";case "regularPolygon":return "Regular Polygon";
-            case "cube":return "Cube";case "cylinder":return "Cylinder";case "cone":return "Cone";case "sphere":return "Sphere";case "pyramid":return "Pyramid";case "image":return "Picture";
+            case "cube":return "Cube";case "cylinder":return "Cylinder";case "cone":return "Cone";case "sphere":return "Sphere";case "pyramid":return "Pyramid";case "image":return "Picture";case "gif":return "GIF animation";
             case "circle":return "Circle";case "rectangle":return "Rectangle";case "rhombus":return "Rhombus";case "arrowLine":return "Arrow Line";case "waveLine":return "Wave Line";case "regularHexagon":return "Regular Hexagon";
             default:throw new IllegalArgumentException("Unknown shape: "+id);}
     }

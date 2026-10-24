@@ -14,11 +14,12 @@ import java.util.*;
 import com.notemaker.core.*;
 
 public class MainActivity extends Activity {
-    private static final int SVG_PICK_REQUEST = 4512, IMAGE_PICK_REQUEST = 4513;
+    private static final int SVG_PICK_REQUEST = 4512, IMAGE_PICK_REQUEST = 4513, GIF_PICK_REQUEST = 4514;
     String appSessionId;
     String deviceId;
     long appSessionStartedAt;
     UiActions uiActions;
+    AnimationPlayer animationPlayer;
     DocumentBrowser browser;
     final Object lock = new Object();
     int eventCount, pendingCount;
@@ -119,6 +120,7 @@ public class MainActivity extends Activity {
         agent=new AgentUi(this);
         startupMark(startupTrace,"agent_created",startupStarted);
         editor=new EditorUi(this);
+        animationPlayer=new AnimationPlayer(this);
         View root=editor.build();
         startupMark(startupTrace,"view_built",startupStarted);
         setContentView(root);
@@ -141,10 +143,11 @@ public class MainActivity extends Activity {
         startupMark(startupTrace,"configure_done",startupStarted);
 
     }
-    @Override public void onDestroy(){running=false;if(ReplicaService.proxy!=null)ReplicaService.proxy.unregisterUiSession(appSessionId);if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);if(previewExpiryTask!=null)selectionHandler.removeCallbacks(previewExpiryTask);if(previewDispatchTask!=null)selectionHandler.removeCallbacks(previewDispatchTask);AppReplica departing=replica;if(departing!=null&&selectionSession!=null)ReplicaService.writes.execute(()->{try{departing.command(Arrays.asList("selection","disconnect"),null);}catch(Exception ignored){}});if(replica!=null)replica.close();if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
+    @Override public void onDestroy(){running=false;if(animationPlayer!=null)animationPlayer.stop();if(ReplicaService.proxy!=null)ReplicaService.proxy.unregisterUiSession(appSessionId);if(heartbeatTask!=null)selectionHandler.removeCallbacks(heartbeatTask);if(previewExpiryTask!=null)selectionHandler.removeCallbacks(previewExpiryTask);if(previewDispatchTask!=null)selectionHandler.removeCallbacks(previewDispatchTask);AppReplica departing=replica;if(departing!=null&&selectionSession!=null)ReplicaService.writes.execute(()->{try{departing.command(Arrays.asList("selection","disconnect"),null);}catch(Exception ignored){}});if(replica!=null)replica.close();if(agent!=null)agent.destroy();if(editor!=null)editor.dismissPopup();if(syncThread!=null)syncThread.interrupt();if(localThread!=null)localThread.interrupt();super.onDestroy();}
     @Override protected void onStart(){super.onStart();foreground=true;}
     @Override protected void onStop(){
         foreground=false;
+        if(animationPlayer!=null)animationPlayer.pauseAll();
         AppReplica target=replica;
         if(target!=null&&!target.remote()&&new File(target.local.file+".journal").length()>=1024*1024){
             // Queue after outstanding edits. A hidden editor can spend a few
@@ -383,6 +386,7 @@ public class MainActivity extends Activity {
     }
     void openDocument(String name, String documentType){
         deselect();
+        animationPlayer.reset();
         synchronized(lock){save();document=name;connected=false;load(documentType);canvas.zoom=1;canvas.offsetX=canvas.offsetY=0;}
         getSharedPreferences("settings",0).edit().putString("document",document).apply();
         configureProxy();update();
@@ -437,21 +441,23 @@ public class MainActivity extends Activity {
     void choosePicture(){
         Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT);picker.setType("image/png");picker.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/png","image/jpeg"});picker.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(picker,IMAGE_PICK_REQUEST);
     }
+    void chooseGif(){Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT);picker.setType("image/gif");picker.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(picker,GIF_PICK_REQUEST);}
     void chooseSvgPicture(){
         Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT);picker.setType("image/svg+xml");picker.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(picker,SVG_PICK_REQUEST);
     }
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
         super.onActivityResult(requestCode,resultCode,data);
-        if((requestCode!=SVG_PICK_REQUEST&&requestCode!=IMAGE_PICK_REQUEST)||resultCode!=RESULT_OK||data==null||data.getData()==null)return;
+        if((requestCode!=SVG_PICK_REQUEST&&requestCode!=IMAGE_PICK_REQUEST&&requestCode!=GIF_PICK_REQUEST)||resultCode!=RESULT_OK||data==null||data.getData()==null)return;
         android.net.Uri uri=data.getData();
         ReplicaService.writes.execute(()->{
             try(java.io.InputStream input=getContentResolver().openInputStream(uri)){
                 if(input==null)throw new IllegalArgumentException("Could not open image");
                 java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();byte[] buffer=new byte[8192];int count;
-                int maxBytes=requestCode==SVG_PICK_REQUEST?com.notemaker.core.SvgAsset.MAX_BYTES:com.notemaker.core.ImageAsset.MAX_BYTES;
+                int maxBytes=requestCode==SVG_PICK_REQUEST?com.notemaker.core.SvgAsset.MAX_BYTES:requestCode==GIF_PICK_REQUEST?com.notemaker.core.GifAsset.MAX_BYTES:com.notemaker.core.ImageAsset.MAX_BYTES;
                 while((count=input.read(buffer))!=-1){if(bytes.size()+count>maxBytes)throw new IllegalArgumentException("Image exceeds the supported size");bytes.write(buffer,0,count);}
                 byte[] raw=bytes.toByteArray();
                 if(requestCode==SVG_PICK_REQUEST){String source=new String(raw,StandardCharsets.UTF_8);double[] size=com.notemaker.core.SvgAsset.validate(source);runOnUiThread(()->insertSvg(source,size[0],size[1]));}
+                else if(requestCode==GIF_PICK_REQUEST){String uriData=com.notemaker.core.GifAsset.fromBytes(raw);com.notemaker.core.GifAsset.Info info=com.notemaker.core.GifAsset.validate(raw);runOnUiThread(()->insertGif(uriData,info.width,info.height));}
                 else {String uriData=com.notemaker.core.ImageAsset.fromBytes(raw);double[] size=com.notemaker.core.ImageAsset.validate(uriData);runOnUiThread(()->insertImage(uriData,size[0],size[1]));}
             }catch(Exception error){runOnUiThread(()->Toast.makeText(this,"Could not import picture: "+error.getMessage(),Toast.LENGTH_LONG).show());}
         });
@@ -627,6 +633,7 @@ public class MainActivity extends Activity {
         double scale=Math.min(800/intrinsicWidth,1000/intrinsicHeight);float w=(float)(intrinsicWidth*scale),h=(float)(intrinsicHeight*scale);
         JSONObject object=obj("kind","object","object",id(),"shape","image","image",data,"layer",selected,"page",page,"x",(1000-w)/2,"y",(1400-h)/2,"w",w,"h",h,"color",color,"width",width,"fontSize",24,"text","");persistObject(object);
     }
+    private void insertGif(String data,double intrinsicWidth,double intrinsicHeight){double scale=Math.min(800/intrinsicWidth,1000/intrinsicHeight);float w=(float)(intrinsicWidth*scale),h=(float)(intrinsicHeight*scale);JSONObject object=obj("kind","object","object",id(),"shape","gif","gif",data,"layer",selected,"page",page,"x",(1000-w)/2,"y",(1400-h)/2,"w",w,"h",h,"color",color,"width",width,"fontSize",24,"text","");persistObject(object);}
     void textPlacementDialog(){
         EditText content=new EditText(this);content.setHint("Text to place");content.setMinLines(2);content.setGravity(Gravity.TOP);
         EditText size=new EditText(this);size.setSingleLine(true);size.setInputType(8194|4096);size.setText("24");size.setHint("Font size");
@@ -718,7 +725,7 @@ public class MainActivity extends Activity {
             // Live ink uses the same transparent layer, item order and compositing
             // as committed ink. Switching to saved state must not change pixels.
             if(layer.equals(selected)&&points!=null&&current!=null)visible.add(new TileInkCache.Item(current,strokeValue(),false));
-            for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(!"template".equals(o.get("shape"))&&layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)){TileInkCache.Item cached=objectTileItems.get(e.getKey());boolean linked=o.containsKey("from")||o.containsKey("to");if(cached==null||objectTileSources.get(e.getKey())!=o){cached=new TileInkCache.Item("object:"+e.getKey(),new DrawItem(model,o).geometry());objectTileSources.put(e.getKey(),o);objectTileItems.put(e.getKey(),cached);}else if(linked){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!cached.value.equals(geometry)){cached=new TileInkCache.Item("object:"+e.getKey(),geometry);objectTileItems.put(e.getKey(),cached);}}visible.add(cached);}}
+            for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(!"template".equals(o.get("shape"))&&!animationPlayer.loaded(e.getKey())&&layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)){TileInkCache.Item cached=objectTileItems.get(e.getKey());boolean linked=o.containsKey("from")||o.containsKey("to");if(cached==null||objectTileSources.get(e.getKey())!=o){cached=new TileInkCache.Item("object:"+e.getKey(),new DrawItem(model,o).geometry());objectTileSources.put(e.getKey(),o);objectTileItems.put(e.getKey(),cached);}else if(linked){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!cached.value.equals(geometry)){cached=new TileInkCache.Item("object:"+e.getKey(),geometry);objectTileItems.put(e.getKey(),cached);}}visible.add(cached);}}
             for(Map.Entry<String,Map<String,Object>> entry:pendingObjectPreviews.entrySet()){
                 Map<String,Object> preview=entry.getValue();String id=entry.getKey();
                 if(layer.equals(preview.get("layer"))&&((Number)preview.get("page")).intValue()==page&&!model.objects.containsKey(id)){
@@ -740,6 +747,7 @@ public class MainActivity extends Activity {
             if(model.deleted){c.drawColor(Color.WHITE);paint.setColor(Color.BLACK);paint.setTextSize(32);c.drawText("Document deleted · open another file from Notes",24,60,paint);return;}
             if(eraseTimings!=null)eraseTimings.put("draw_start",System.nanoTime());
             if(getWidth()==0||getHeight()==0)return;
+            animationPlayer.prepareVisible();
             if(traceColdDraw){TileInkCache.traceFirstDraw=true;com.notemaker.cli.Png.traceSvg=true;TileInkCache.tracedCompileNs=TileInkCache.tracedPlayNs=TileInkCache.tracedOtherNs=TileInkCache.tracedOtherMaxNs=0;TileInkCache.tracedCompiles=TileInkCache.tracedPlays=TileInkCache.tracedOtherRenders=0;TileInkCache.tracedOtherMaxShape="";}
             tileInk.beginFrame();
             startupMark(traceColdDraw,"first_tile_begin",startupEpoch);
@@ -765,17 +773,19 @@ public class MainActivity extends Activity {
                 c.save();transform(c);
                 if(type.equals("infinite"))for(Map<String,Object> guide:model.objects.values())if(layer.equals(guide.get("layer"))&&"template".equals(guide.get("shape"))&&((Number)guide.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(guide.get("object")))&&!pendingErase("object",String.valueOf(guide.get("object")),layer))drawInfiniteTemplate(c,guide);
                 if((!useInkCache||previewing)&&layer.equals(selected)&&points!=null&&current!=null)drawStroke(c,stroke());
-                if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)&&!(previewing&&previewed("object",e.getKey()))){if(previewing){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!RectF.intersects(previewViewport,new TileInkCache.Item("object:"+e.getKey(),geometry).bounds))continue;}Render.drawObject(model,o,new com.notemaker.cli.Png(c));}}
+                if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> e:model.objects.entrySet()){Map<String,Object> o=e.getValue();if(layer.equals(o.get("layer"))&&!animationPlayer.loaded(e.getKey())&&((Number)o.get("page")).intValue()==page&&!Boolean.FALSE.equals(model.objectActive.get(e.getKey()))&&!pendingErase("object",e.getKey(),layer)&&!(previewing&&previewed("object",e.getKey()))){if(previewing){Map<String,Object> geometry=new DrawItem(model,o).geometry();if(!RectF.intersects(previewViewport,new TileInkCache.Item("object:"+e.getKey(),geometry).bounds))continue;}Render.drawObject(model,o,new com.notemaker.cli.Png(c));}}
                 if(!useInkCache||previewing)for(Map.Entry<String,Map<String,Object>> entry:pendingObjectPreviews.entrySet()){
                     Map<String,Object> pending=entry.getValue();
                     if(layer.equals(pending.get("layer"))&&((Number)pending.get("page")).intValue()==page&&!model.objects.containsKey(entry.getKey())){
                         Render.drawObject(model,pending,new com.notemaker.cli.Png(c));drawnObjectPreviews.add(entry.getKey());
                     }
                 }
+                animationPlayer.draw(c,layer);
                 c.restore();
                 c.restore();
             }
             if(mono)c.restore();
+            c.save();transform(c);animationPlayer.drawControls(c);c.restore();
             drawTransformPreviews(c);drawSelection(c);
             if(lassoing){c.save();transform(c);paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2/Math.max(.2f,zoom));paint.setPathEffect(new DashPathEffect(new float[]{7,5},0));if(freeformLasso&&lassoPath.size()>1){Path outline=new Path();outline.moveTo(lassoPath.get(0)[0],lassoPath.get(0)[1]);for(int i=1;i<lassoPath.size();i++)outline.lineTo(lassoPath.get(i)[0],lassoPath.get(i)[1]);c.drawPath(outline,paint);}else c.drawRect(lassoStartX,lassoStartY,lassoEndX,lassoEndY,paint);paint.setPathEffect(null);paint.setStyle(Paint.Style.FILL);c.restore();}
             if(inputStarted!=0){if(drawLatency!=null)drawLatency.accept(System.nanoTime()-inputStarted);inputStarted=0;}
@@ -823,11 +833,13 @@ public class MainActivity extends Activity {
             synchronized(lock){
                 scaling.onTouchEvent(event);int action=event.getActionMasked();float sx=event.getX(),sy=event.getY();
                 if(event.getPointerCount()>1){
+                    if(editor.selectedTool().equals("interact"))animationPlayer.touch(MotionEvent.ACTION_CANCEL,x(sx),y(sy));
                     if(action==MotionEvent.ACTION_POINTER_DOWN){lastGestureX=centroidX(event);lastGestureY=centroidY(event);}
                     if(action==MotionEvent.ACTION_MOVE&&!scaling.isInProgress()){float cx=centroidX(event),cy=centroidY(event);offsetX+=cx-lastGestureX;offsetY+=cy-lastGestureY;lastGestureX=cx;lastGestureY=cy;}
                     if(shapeDragging)shapeDragging=false;if(eraserPoints!=null)eraserPoints=null;points=null;current=null;transforming=false;lassoing=false;invalidate();return true;
                 }
                 boolean stylus=event.getToolType(event.getActionIndex())==MotionEvent.TOOL_TYPE_STYLUS||event.getToolType(event.getActionIndex())==MotionEvent.TOOL_TYPE_ERASER;
+                if(editor.selectedTool().equals("interact")){inputStarted=0;return animationPlayer.touch(action,x(sx),y(sy));}
                 if(pan){if(action==MotionEvent.ACTION_DOWN){lastX=sx;lastY=sy;}if(action==MotionEvent.ACTION_MOVE&&!scaling.isInProgress()&&event.getPointerCount()==1){offsetX+=sx-lastX;offsetY+=sy-lastY;invalidate();}lastX=sx;lastY=sy;return true;}
                 if(action==MotionEvent.ACTION_DOWN){
                     if(!visible(selected)){Toast.makeText(MainActivity.this,"Show the selected layer to draw on it",0).show();return true;}
