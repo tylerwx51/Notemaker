@@ -6,6 +6,8 @@ import xml.etree.ElementTree as ET
 import subprocess
 import tempfile
 import time
+os.environ.setdefault('NOTEMAKER_DRAWING_ANDROID_PORT', '5594')
+os.environ.setdefault('NOTEMAKER_DRAWING_ANDROID_OUT', '.test-artifacts/files-android')
 import drawing_android as ui
 
 
@@ -23,6 +25,16 @@ def hold_file(name):
     time.sleep(.5)
 
 
+def await_ui(text, present=True, seconds=10):
+    deadline=time.monotonic()+seconds
+    hierarchy=''
+    while time.monotonic()<deadline:
+        hierarchy=ui.ui_dump()
+        if (text in hierarchy)==present:return hierarchy
+        time.sleep(.15)
+    raise AssertionError(f'Expected {text!r} present={present} in Android UI; last hierarchy: {hierarchy}')
+
+
 def main():
     deadline=time.monotonic()+30
     while ui.SERIAL in ui.run('adb', 'devices') and time.monotonic()<deadline:
@@ -31,7 +43,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='notemaker-files-') as temp:
         with (ui.OUT / 'files-emulator.log').open('w') as log:
             emulator = subprocess.Popen(
-                ['boox-emulator-headless', '-port', '5590', '-memory', '1536', '-cores', '2', '-wipe-data'],
+                ['boox-emulator-headless', '-port', str(ui.PORT), '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'],
                 env=dict(os.environ, ANDROID_AVD_HOME=temp + '/avd'), stdout=log, stderr=subprocess.STDOUT)
             try:
                 ui.wait_ready()
@@ -40,26 +52,23 @@ def main():
                 ui.instrument('draw')
                 ui.instrument('file-preview')
                 time.sleep(1)
-                ui.adb('shell', 'am', 'force-stop', 'com.notemaker')
+                ui.bridge.close();ui.adb('shell', 'am', 'force-stop', 'com.notemaker')
                 ui.adb('shell', 'am', 'start', '-W', '-n', 'com.notemaker/.MainActivity')
                 browse()
-                assert 'Files grid' in ui.ui_dump()
-                for _ in range(10):
-                    if 'Preview of Original' in ui.ui_dump():
-                        break
-                    time.sleep(.5)
-                else:
-                    raise AssertionError('Grid preview did not load')
+                await_ui('Files grid')
+                await_ui('Preview of Original')
                 ui.screenshot('files-grid')
                 ui.tap('List')
-                assert 'Files list' in ui.ui_dump()
+                await_ui('Files list')
                 ui.screenshot('files-list')
                 ui.tap('New file')
                 ui.tap('Create')
-                assert 'Enter a file name' in ui.ui_dump()
+                await_ui('Enter a file name')
                 ui.tap('File name')
                 ui.adb('shell', 'input', 'text', 'Browser-test')
                 ui.tap('Fixed page')
+                if 'Multiple pages' not in ui.ui_dump():
+                    ui.tap('Fixed page')
                 ui.tap('Multiple pages')
                 ui.tap('Create')
                 time.sleep(1)
@@ -69,47 +78,50 @@ def main():
                 ui.tap('File name')
                 ui.adb('shell', 'input', 'text', 'Browser-test')
                 ui.tap('Create')
-                assert 'Document already exists' in ui.ui_dump()
+                await_ui('Document already exists')
                 ui.tap('Cancel')
+                if 'Search files' not in ui.ui_dump():
+                    browse()
                 ui.tap('Search files')
                 ui.adb('shell', 'input', 'text', 'missing')
-                assert 'No matching files' in ui.ui_dump()
+                await_ui('No matching files')
                 ui.adb('shell', 'input', 'keyevent', '4')
                 ui.tap('Close')
                 browse()
                 ui.tap('Original')
                 assert 'Original' in ui.adb('shell', 'run-as', 'com.notemaker', 'cat', 'shared_prefs/settings.xml')
-                ui.adb('shell', 'am', 'force-stop', 'com.notemaker')
+                ui.bridge.close();ui.adb('shell', 'am', 'force-stop', 'com.notemaker')
                 ui.adb('shell', 'am', 'start', '-n', 'com.notemaker/.MainActivity')
                 browse()
-                assert 'Files list' in ui.ui_dump()
+                await_ui('Files list')
                 ui.tap('Grid')
-                assert 'Files grid' in ui.ui_dump()
+                await_ui('Files grid')
                 ui.screenshot('files-browser')
                 ui.tap('Browser-test')
                 assert ui.latest_state()['type'] == 'pages'
                 browse()
                 hold_file('Browser-test')
                 ui.tap('Cancel')
-                assert 'Browser-test' in ui.ui_dump()
+                await_ui('Browser-test')
                 hold_file('Browser-test')
                 # Exact button text avoids matching the confirmation title.
                 node=next(n for n in ET.fromstring(ui.ui_dump()).iter('node') if n.attrib.get('text','').casefold() == 'delete')
                 left,top,right,bottom=map(int,re.findall(r'\d+',node.attrib['bounds']))
                 ui.adb('shell','input','tap',str((left+right)//2),str((top+bottom)//2))
                 time.sleep(1)
-                assert 'Browser-test' not in ui.ui_dump()
+                await_ui('Browser-test',present=False)
                 ui.tap('Close')
-                assert 'Deleted' in ui.ui_dump()
+                await_ui('Deleted')
                 ui.screenshot('files-deleted')
-                ui.adb('shell','am','force-stop','com.notemaker')
+                ui.bridge.close();ui.adb('shell','am','force-stop','com.notemaker')
                 ui.adb('shell','am','start','-W','-n','com.notemaker/.MainActivity')
                 browse()
-                assert 'Browser-test' not in ui.ui_dump()
+                await_ui('Browser-test',present=False)
                 ui.tap('Original')
                 assert not ui.latest_state()['model']['deleted']
                 print('PASS file browser, offline creation, deletion confirmation/cancel, active-file deletion and restart persistence')
             finally:
+                ui.bridge.close()
                 try:
                     (ui.OUT / 'files-logcat.txt').write_text(ui.adb('logcat', '-d', '-t', '2000'))
                 except Exception:

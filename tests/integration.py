@@ -12,6 +12,7 @@ import urllib.request
 import urllib.parse
 import uuid
 from replica import read_replica
+from android_bridge import AndroidBridge
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / '.test-artifacts'
@@ -20,6 +21,7 @@ SERIALS = ['emulator-5580', 'emulator-5582']
 processes = []
 server = None
 completed = False
+bridges = {serial: AndroidBridge(serial, OUT) for serial in SERIALS}
 
 def command(args, **kwargs):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, **kwargs)
@@ -50,24 +52,18 @@ def start_server():
     wait_until(ready, 15)
 
 def instrument(serial, action, **args):
-    params = ['shell', 'am', 'instrument', '-w', '-e', 'action', action]
-    for key, value in args.items():
-        params += ['-e', key, str(value)]
-    result = adb(serial, *params, 'com.notemaker/.Integration')
+    result = bridges[serial].command(action, **args)['stream']
     (OUT / f'{serial}-{action}.txt').write_text(result)
     assert f'PASS {action}' in result, result
     value = json.loads(adb(serial, 'shell', 'run-as', 'com.notemaker', 'cat', 'files/integration.json'))
     (OUT / f'{serial}-state.json').write_text(json.dumps(value, indent=2))
-    # Finishing instrumentation stops its target process. Keep the ordinary app
-    # running between commands so its reconnect loop can make uninterrupted progress.
-    adb(serial, 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
     return value
 
 def state(serial):
     return json.loads(adb(serial, 'shell', 'run-as', 'com.notemaker', 'cat', 'files/integration.json'))
 
 def snapshot(serial):
-    instrument(serial, 'state')
+    instrument(serial, 'state', image='true')
     data = subprocess.check_output(['adb', '-s', serial, 'exec-out', 'run-as', 'com.notemaker', 'cat', 'files/integration.png'])
     (OUT / f'{serial}.png').write_bytes(data)
     return hashlib.sha256(data).hexdigest()
@@ -109,7 +105,7 @@ try:
     for index, serial in enumerate(SERIALS):
         env = dict(os.environ, ANDROID_AVD_HOME=str(OUT / f'avd-{index}'))
         log = (OUT / f'{serial}.log').open('w')
-        process = subprocess.Popen(['boox-emulator-headless', '-port', str(5580 + index * 2), '-memory', '1536', '-cores', '2', '-wipe-data'], env=env, stdout=log, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(['boox-emulator-headless', '-port', str(5580 + index * 2), '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'], env=env, stdout=log, stderr=subprocess.STDOUT)
         processes.append((serial, process))
     for serial in SERIALS:
         report(f'Waiting for {serial} to boot')
@@ -178,14 +174,14 @@ try:
         futures = [pool.submit(instrument, s, 'draw', shift=360+i*120) for i,s in enumerate(SERIALS)]
         for future in futures:
             assert future.result()['pending'] > 0
-    adb(SERIALS[0], 'shell', 'am', 'force-stop', 'com.notemaker')
+    bridges[SERIALS[0]].close();adb(SERIALS[0], 'shell', 'am', 'force-stop', 'com.notemaker')
     assert instrument(SERIALS[0], 'state')['pending'] > 0
     start_server()
     wait_until(lambda: converged(5))
     same_image()
     report('PASS offline drawing survives app restart; reconnect and server restart converge without lost strokes')
     from browser import check_browser
-    browser_stats = check_browser(OUT, 18765, instrument(SERIALS[0], 'state')['cursor'])
+    browser_stats = check_browser(OUT, 18765, instrument(SERIALS[0], 'state', image='true')['cursor'])
     native_stats=json.loads(adb(SERIALS[0], 'shell', 'run-as', 'com.notemaker', 'cat', 'files/render-stats.json'))
     assert all(abs(a-b)<=2 for a,b in zip(native_stats['bounds'],browser_stats['bounds'])), (native_stats,browser_stats)
     assert abs(native_stats['pixels']-browser_stats['pixels'])/native_stats['pixels']<.10, (native_stats,browser_stats)
@@ -213,12 +209,8 @@ try:
         adb(serial, 'shell', 'wm', 'dismiss-keyguard')
         adb(serial, 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
         def editor_ready():
-            adb(serial,'shell','uiautomator','dump','/data/local/tmp/integration-ready.xml')
-            hierarchy=adb(serial,'shell','cat','/data/local/tmp/integration-ready.xml')
-            # The old title wordmark is no longer part of the editor. Use the
-            # stable document action control to distinguish it from a launcher
-            # or transient instrumentation screen.
-            return 'content-desc="Document actions"' in hierarchy and 'text="infinite"' in hierarchy
+            nodes=bridges[serial].ui_nodes()
+            return any(n['content-desc']=='Document actions' for n in nodes) and any(n['text']=='infinite' for n in nodes)
         wait_until(editor_ready,30)
     wait_until(lambda: converged(1))
     baseline = {e['op'].get('stroke') for e in events('infinite') if e['op']['kind'] == 'stroke'}
@@ -236,6 +228,7 @@ try:
     # A visible Activity can precede its restarted proxy's upstream handshake.
     # Establish readiness before timing delivery, without extending the budget.
     wait_until(lambda: all(observe('status',i)['connected'] for i in range(2)),30)
+    bridges[SERIALS[0]].close()
     swipe = subprocess.Popen(['adb', '-s', SERIALS[0], 'shell', 'am', 'instrument', '-w', '-e', 'action', 'live-draw', 'com.notemaker/.Integration'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def received_partial():
@@ -264,7 +257,7 @@ try:
     report('PASS live partial stylus stroke reaches the server before pen-up; both apps converge after completion')
     # Open an existing multipage document with the default fixed-page creation choice.
     pages_file = 'files/document-' + str(uuid.UUID(bytes=hashlib.md5(b'pages').digest(), version=3)) + '.json'
-    adb(SERIALS[1], 'shell', 'am', 'force-stop', 'com.notemaker')
+    bridges[SERIALS[1]].close();adb(SERIALS[1], 'shell', 'am', 'force-stop', 'com.notemaker')
     adb(SERIALS[1], 'shell', 'run-as', 'com.notemaker', 'rm', pages_file, pages_file+'.journal')
     instrument(SERIALS[1], 'configure', document='pages', host='http://10.0.2.2:18765', type='fixed')
 
@@ -281,6 +274,8 @@ try:
     report('ALL INTEGRATION CHECKS PASSED')
     completed = True
 finally:
+    for bridge in bridges.values():
+        bridge.close()
     if server is not None and server.poll() is None:
         server.terminate();server.wait(timeout=10)
     for serial, process in processes:

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from android_bridge import AndroidBridge
 
 ROOT = Path(__file__).resolve().parents[1]
 APK = ROOT / 'apps/android/build/notemaker.apk'
@@ -18,6 +19,7 @@ PORT = int(os.environ.get('NOTEMAKER_DRAWING_ANDROID_PORT', '5590'))
 SERIAL = os.environ.get('NOTEMAKER_DRAWING_ANDROID_SERIAL', f'emulator-{PORT}')
 OUT = ROOT / os.environ.get('NOTEMAKER_DRAWING_ANDROID_OUT', '.test-artifacts/drawing-android')
 OUT.mkdir(parents=True, exist_ok=True)
+bridge = AndroidBridge(SERIAL, OUT)
 
 
 def run(*args, timeout=90):
@@ -45,12 +47,9 @@ def encoded(value):
 
 
 def instrument(action, relaunch=True, timeout=90, **kwargs):
-    args = ['shell', 'am', 'instrument', '-w', '-e', 'action', action]
-    for key, value in kwargs.items():
-        args += ['-e', key, str(value)]
-    result = run('adb', '-s', SERIAL, 'shell', shlex.join(args[1:] + ['com.notemaker/.Integration']), timeout=timeout)
+    result = bridge.command(action, **kwargs)['stream']
     (OUT / f'{action}.txt').write_text(result)
-    if action == 'viewport':
+    if action == 'viewport' and 'PASS viewport' not in result:
         for name in ('viewport-edge-cached.png', 'viewport-edge-reference.png', 'viewport-edge-debug.txt',
                      'viewport-seam-tiled.png', 'viewport-seam-monolithic.png',
                      'viewport-seam-direct.png', 'viewport-seam-debug.txt',
@@ -63,17 +62,19 @@ def instrument(action, relaunch=True, timeout=90, **kwargs):
             except subprocess.CalledProcessError:
                 pass
     assert f'PASS {action}' in result, result
-    if relaunch and action != 'select-panel':
-        run('adb', '-s', SERIAL, 'shell', 'am', 'start', '-f', '0x20000000', '-n', 'com.notemaker/.MainActivity')
     return result
 
 
 def tap(label):
-    hierarchy = ui_dump()
-    tree = ET.fromstring(hierarchy)
-    node = next((n for n in tree.iter('node') if n.attrib.get('content-desc') == label
-                 or (label == 'Pen tools' and n.attrib.get('content-desc', '').startswith('Pen tool, '))
-                 or label.casefold() in n.attrib.get('text', '').casefold()), None)
+    deadline=time.monotonic()+10
+    node=None
+    while node is None and time.monotonic()<deadline:
+        hierarchy = ui_dump()
+        tree = ET.fromstring(hierarchy)
+        node = next((n for n in tree.iter('node') if n.attrib.get('content-desc') == label
+                     or (label == 'Pen tools' and n.attrib.get('content-desc', '').startswith('Pen tool, '))
+                     or label.casefold() in n.attrib.get('text', '').casefold()), None)
+        if node is None:time.sleep(.15)
     if node is None:
         (OUT / f'missing-{re.sub(r"[^a-z0-9]+", "-", label.casefold()).strip("-")}.xml').write_text(hierarchy)
         screenshot(f'missing-{re.sub(r"[^a-z0-9]+", "-", label.casefold()).strip("-")}')
@@ -95,16 +96,22 @@ def latest_state():
 def ui_dump():
     for attempt in range(8):
         try:
-            adb('shell', 'uiautomator', 'dump', '/data/local/tmp/drawing-ui.xml')
-            return adb('shell', 'cat', '/data/local/tmp/drawing-ui.xml')
-        except subprocess.CalledProcessError:
-            if attempt == 7:
-                raise
+            nodes=bridge.ui_nodes()
+            if nodes:
+                root=ET.Element('hierarchy')
+                for node in nodes:
+                    ET.SubElement(root,'node',{key:str(value) for key,value in node.items()})
+                return ET.tostring(root,encoding='unicode')
+        except (OSError,RuntimeError,AssertionError):
+            pass
+        if attempt < 7:
             time.sleep(.5)
+        else:
+            raise RuntimeError('Android accessibility hierarchy remained unavailable')
 
 
 def show_editor():
-    # Instrumentation teardown can race the immediate Activity relaunch.
+    # Return from dialogs or the launcher before checking editor controls.
     for _ in range(5):
         adb('shell','am','start','-W','-f','0x20000000','-n','com.notemaker/.MainActivity')
         hierarchy=ui_dump()
@@ -122,8 +129,7 @@ def check_panels():
     show_editor()
     tap('Pen tools')
     tap('More brush types…')
-    adb('shell', 'uiautomator', 'dump', '/data/local/tmp/drawing-ui.xml')
-    assert 'charcoal' in adb('shell', 'cat', '/data/local/tmp/drawing-ui.xml').casefold()
+    assert 'charcoal' in ui_dump().casefold()
     tap('charcoal')
     tap('Erase')
     tap('Scribble to erase')
@@ -165,7 +171,7 @@ def main():
         log = (OUT / 'emulator.log').open('w')
         try:
             emulator = subprocess.Popen(
-                ['boox-emulator-headless', '-port', str(PORT), '-memory', '1536', '-cores', '2', '-wipe-data'],
+                ['boox-emulator-headless', '-port', str(PORT), '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'],
                 env=env, stdout=log, stderr=subprocess.STDOUT)
             wait_ready()
             adb('install', '-r', str(APK))
@@ -266,6 +272,7 @@ def main():
             screenshot('selection-panel')
             instrument('configure', document='android-conflict-ui', host='offline')
             instrument('conflict-preview')
+            adb('shell','input','keyevent','4')
             tap('conflict(s)')
             tap('android-conflict-item')
             conflict_ui = ui_dump()
@@ -293,12 +300,13 @@ def main():
             time.sleep(1)
             after = latest_state()
             assert len(after['model']['objects']) == before + 1, after['model']['objects']
-            adb('shell', 'am', 'force-stop', 'com.notemaker')
+            bridge.close();adb('shell', 'am', 'force-stop', 'com.notemaker')
             run('adb', '-s', SERIAL, 'shell', 'am', 'start', '-n', 'com.notemaker/.MainActivity')
             time.sleep(1)
             tap('Select and transform objects')
             assert 'Paste copied selection' in ui_dump(), 'Clipboard was lost after app restart'
             instrument('configure', document='android-clipboard-b')
+            adb('shell','input','keyevent','4')
             tap('Select and transform objects')
             assert 'Paste copied selection' in ui_dump(), 'Cross-document clipboard was replaced by the destination document snapshot'
             tap('Paste copied selection')
@@ -308,6 +316,7 @@ def main():
             print('PASS Android copy/paste survives app restart via local shared clipboard')
             check_panels()
         finally:
+            bridge.close()
             if emulator is not None:
                 try:
                     (OUT/'logcat.txt').write_text(adb('logcat','-d','-t','600'))

@@ -11,10 +11,12 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from chat_checks import ChatChecks, ROOT
+from android_bridge import AndroidBridge
 
 OUT = ROOT / '.test-artifacts/chat-ui'
 OUT.mkdir(parents=True, exist_ok=True)
 SERIAL = 'emulator-5586'
+bridge = AndroidBridge(SERIAL, OUT)
 
 
 def command(*args, timeout=90):
@@ -40,8 +42,10 @@ def wait(fn, seconds=90):
 
 
 def tree():
-    adb('shell', 'uiautomator', 'dump', '/data/local/tmp/chat-ui.xml')
-    return ET.fromstring(adb('shell', 'cat', '/data/local/tmp/chat-ui.xml'))
+    root=ET.Element('hierarchy')
+    for node in bridge.ui_nodes():
+        ET.SubElement(root,'node',{key:str(value) for key,value in node.items()})
+    return root
 
 
 def tap(value):
@@ -67,7 +71,12 @@ def capture(name):
 
 
 def control_bounds(label):
-    node = next(n for n in tree().iter('node') if n.get('content-desc') == label)
+    deadline=time.monotonic()+15
+    node=None
+    while node is None and time.monotonic()<deadline:
+        node=next((n for n in tree().iter('node') if n.get('content-desc') == label), None)
+        if node is None:time.sleep(.2)
+    if node is None:raise AssertionError('Missing control '+label)
     return list(map(int, re.findall(r'\d+', node.get('bounds'))))
 
 
@@ -91,20 +100,19 @@ try:
         check.create()
     with tempfile.TemporaryDirectory(prefix='notemaker-chat-ui-') as temp:
         env = dict(os.environ, ANDROID_AVD_HOME=temp + '/avd')
-        emulator = subprocess.Popen(['boox-emulator-headless', '-port', '5586', '-memory', '1536', '-cores', '2', '-wipe-data'],
+        emulator = subprocess.Popen(['boox-emulator-headless', '-port', '5586', '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'],
             env=env, stdout=(OUT / 'emulator.log').open('w'), stderr=subprocess.STDOUT)
         wait(lambda: adb('shell', 'getprop', 'sys.boot_completed').strip() == '1', 240)
         adb('install', '-r', str(ROOT / 'apps/android/build/notemaker.apk'))
         adb('shell', 'settings', 'put', 'secure', 'show_ime_with_hard_keyboard', '1')
-        result = adb('shell', 'am', 'instrument', '-w', '-e', 'action', 'configure', '-e', 'document', 'chat-ui',
-                     '-e', 'host', f'http://10.0.2.2:{check.port}', 'com.notemaker/.Integration')
-        assert 'PASS configure' in result, result
+        bridge.command('configure',document='chat-ui',host=f'http://10.0.2.2:{check.port}')
+        bridge.close()
         adb('shell', 'am', 'force-stop', 'com.notemaker')
         adb('shell', 'am', 'start', '-W', '-n', 'com.notemaker/.MainActivity')
         time.sleep(2)
         tap('Open Agent'); capture('recent')
-        assert sum('New chat · idle' == n.attrib.get('text') for n in tree().iter('node')) == 5
-        tap('More chats'); assert sum('New chat · idle' == n.attrib.get('text') for n in tree().iter('node')) == 6
+        wait(lambda: sum('New chat · idle' == n.attrib.get('text') for n in tree().iter('node')) == 5)
+        tap('More chats'); wait(lambda: sum('New chat · idle' == n.attrib.get('text') for n in tree().iter('node')) == 6)
         tap('New chat'); tap('Harness'); tap('mock')
         tap('Model'); tap('openai / gpt-5.6-luna')
         tap('Effort'); tap('high'); capture('new-chat')
@@ -134,12 +142,12 @@ try:
         assert any(row['session'] == app_session for row in sessions), sessions
         wait(lambda: any('Mock response: Hello-agent' in n.attrib.get('text', '') for n in tree().iter('node')))
         tap('Expand tool activity'); capture('conversation')
-        assert any('no document was read or changed' in n.attrib.get('text', '') for n in tree().iter('node'))
+        wait(lambda: any('no document was read or changed' in n.attrib.get('text', '') for n in tree().iter('node')))
         tap('Close'); tap('Open Agent'); tap('Hello-agent · done')
         wait(lambda: any('Mock response: Hello-agent' in n.attrib.get('text', '') for n in tree().iter('node')))
         tap('Message agent'); adb('shell', 'input', 'text', 'Saved-draft'); adb('shell', 'input', 'keyevent', '4')
         tap('Close'); tap('Open Agent'); tap('Hello-agent · done')
-        assert any(n.attrib.get('text') == 'Saved-draft' for n in tree().iter('node'))
+        wait(lambda: any(n.attrib.get('text') == 'Saved-draft' for n in tree().iter('node')))
         capture('reopened')
         tap('Close')
         # Replay representative Pi events without spending provider tokens. Only
@@ -160,21 +168,19 @@ try:
         tap('Tool examples · idle')
         wait(lambda: any('read apps/cli/README.md' in n.get('text','') for n in tree().iter('node')))
         tap('▸ read apps/cli/README.md · done')
-        labels = [n.get('text','') for n in tree().iter('node')]
-        assert any('Starting line: 10' in value and 'Read result' in value for value in labels), labels
+        wait(lambda: any('Starting line: 10' in n.get('text','') and 'Read result' in n.get('text','') for n in tree().iter('node')))
         tap('▸ bash printf "hello\\n" · done')
-        labels = [n.get('text','') for n in tree().iter('node')]
-        assert any('printf "hello\\n"\n\nTimeout (seconds): 30' in value for value in labels), labels
+        wait(lambda: any('printf "hello\\n"\n\nTimeout (seconds): 30' in n.get('text','') for n in tree().iter('node')))
         tap('▸ edit scratch.txt · done')
-        labels = [n.get('text','') for n in tree().iter('node')]
-        assert any('Replace:\nbefore' in value and 'With:\nafter' in value for value in labels), labels
+        wait(lambda: any('Replace:\nbefore' in n.get('text','') and 'With:\nafter' in n.get('text','') for n in tree().iter('node')))
         capture('tool-formatting')
         process = adb('shell', 'pidof', 'com.notemaker').strip()
         errors = adb('logcat', '-d', '--pid=' + process, '-s', 'AndroidRuntime:E')
         assert 'FATAL EXCEPTION' not in errors, errors
         print('PASS: chats, selectors, streaming, draft persistence, keyboard resize/restore and readable read/bash/edit activity')
-        adb('emu', 'kill'); emulator.wait(timeout=30); emulator = None
+        bridge.close();adb('emu', 'kill'); emulator.wait(timeout=30); emulator = None
 finally:
+    bridge.close()
     if emulator:
         emulator.terminate(); emulator.wait(timeout=30)
     if hasattr(check, 'process'):

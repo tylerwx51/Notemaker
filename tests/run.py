@@ -33,11 +33,12 @@ CLAIMS = {
     'cli_android': {'emu:5584', 'server:18766', 'browser:19224'},
     'drawing_android': {'emu:5590'},
     'viewport_android': {'emu:5592'},
-    'files_android': {'emu:5590'},
+    'files_android': {'emu:5594'},
     'chat_ui': {'emu:5586'},
     'performance': {'emu:5586', 'performance'},
 }
 EMULATOR_SUITES = {'integration', 'cli_android', 'drawing_android', 'viewport_android', 'files_android', 'chat_ui', 'performance'}
+EMULATOR_SLOTS = {'integration': 2}
 
 
 def recent_averages(root=ROOT, limit=5):
@@ -73,15 +74,12 @@ def suite_estimate(name, averages):
     return averages.get(name, DEFAULT_SECONDS.get(name, 30.0))
 
 
-def claims_conflict(name, active, active_emulator_count, isolated_networks=False):
+def claims_conflict(name, active, active_emulator_count, isolated_networks=False, max_emulators=5):
+    if 'performance' in active:
+        return True
     if not isolated_networks and CLAIMS.get(name, set()) & active:
         return True
-    # Integration owns two emulators at once. Keep it to the two-emulator
-    # resource budget on this host by not pairing it with another emulator
-    # suite, even when suite containers isolate their ports.
-    if name == 'integration' and active_emulator_count:
-        return True
-    if name in EMULATOR_SUITES and 'integration' in active:
+    if name in EMULATOR_SUITES and active_emulator_count + EMULATOR_SLOTS.get(name, 1) > max_emulators:
         return True
     if name == 'performance' and active_emulator_count:
         return True
@@ -168,13 +166,13 @@ def main():
     parser.add_argument('--install-tablet', action='store_true', help='Back up and upgrade selected tablet before checks')
     parser.add_argument('--reverse-port', type=int, help='Explicit USB port mapping for hardware tier')
     parser.add_argument('--require-resources', action='store_true', help='Treat missing device/config as failure')
-    parser.add_argument('--jobs', type=int, default=2,
-                        help='Maximum concurrent test environments (1-4; default 2 on this host)')
+    parser.add_argument('--jobs', type=int, default=6,
+                        help='Maximum concurrent suites (1-8; default 6, at most 5 emulator slots)')
     parser.add_argument('--containers', action='store_true',
                         help='Run each suite in its own Docker network/process environment')
     args = parser.parse_args()
-    if not 1 <= args.jobs <= 4:
-        parser.error('--jobs must be between 1 and 4')
+    if not 1 <= args.jobs <= 8:
+        parser.error('--jobs must be between 1 and 8')
     tiers = args.tier or ['local']
     if (args.install_tablet or args.reverse_port) and ('hardware' not in tiers or not args.serial):
         parser.error('Tablet installation/port mapping requires --tier hardware --serial SERIAL')
@@ -224,8 +222,14 @@ def main():
                 record(dict(name=name, status='skip', reason=reason))
         runnable_checks = [c for c in checks if not c['skip'] and not failed]
         averages = recent_averages()
+        # Measure frame latency before other emulators pressure memory. Keep
+        # the longest dependency chains ahead of short suites when slots free.
+        emulator_priority = {'performance': 4, 'viewport_android': 3,
+                             'drawing_android': 3, 'integration': 2,
+                             'cli_android': 2, 'files_android': 1}
         pending = sorted(runnable_checks,
-                         key=lambda c: suite_estimate(c['name'], averages), reverse=True)
+                         key=lambda c: (emulator_priority.get(c['name'], 0), suite_estimate(c['name'], averages)),
+                         reverse=True)
         condition = threading.Condition()
         active_claims = set()
         active_emulator_count = 0
@@ -244,7 +248,8 @@ def main():
                         selected = next((i for i, item in enumerate(pending)
                                          if not claims_conflict(item['name'], active_claims,
                                                                 active_emulator_count,
-                                                                isolated_networks=args.containers)), None)
+                                                                isolated_networks=args.containers,
+                                                                max_emulators=min(args.jobs, 5))), None)
                         if selected is None:
                             condition.wait()
                             continue
@@ -255,7 +260,7 @@ def main():
                             claims.add('integration')
                         active_claims.update(claims)
                         if name in EMULATOR_SUITES:
-                            active_emulator_count += 1
+                            active_emulator_count += EMULATOR_SLOTS.get(name, 1)
                         active_count += 1
                         break
                 worker_tmp = out / 'workers' / name
@@ -290,7 +295,7 @@ def main():
                         record(result)
                     active_claims.difference_update(claims)
                     if name in EMULATOR_SUITES:
-                        active_emulator_count -= 1
+                        active_emulator_count -= EMULATOR_SLOTS.get(name, 1)
                     active_count -= 1
                     condition.notify_all()
 

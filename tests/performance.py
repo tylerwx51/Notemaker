@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
         for package in ('com.google.android.googlequicksearchbox', 'com.google.android.gms'):
             adb('shell', 'pm', 'disable-user', '--user', '0', package)
             assert 'package:' + package in adb('shell', 'pm', 'list', 'packages', '-d').splitlines()
-        time.sleep(20)  # Let first-boot package setup settle before collecting frame timings.
+        time.sleep(3)  # Disabled first-boot packages have time to leave the frame scheduler.
         adb('install', '-r', str(ROOT/'apps/android/build/notemaker.apk'))
         print('Running 1,000 strokes on isolated API 36 emulator; timings include real window frames.', flush=True)
         output = adb('shell', 'am', 'instrument', '-w', '-e', 'action', 'performance', 'com.notemaker/.Integration', timeout=600)
@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
         assert len(model['strokes']) == 1000
         sizes = [len(stroke['points']) for stroke in model['strokes']]
         assert sizes.count(50) == 990 and sizes.count(500) == 10, sizes
-        reopened=adb('shell','am','instrument','-w','-e','action','state','com.notemaker/.Integration',timeout=90)
+        reopened=adb('shell','am','instrument','-w','-e','action','state','-e','verifyCache','true','com.notemaker/.Integration',timeout=90)
         (OUT/'reopened.txt').write_text(reopened)
         if 'PASS state' not in reopened:
             for name in ('cache-diff-cached.png', 'cache-diff-reference.png', 'cache-diff.json'):

@@ -245,7 +245,7 @@ retained; screenshots are saved in `.test-artifacts/ui-review/`.
 
 For file browsing, creation, deletion, search and offline restart checks on an isolated
 emulator, run `nix-shell --run 'apps/android/build.sh && python3 tests/files_android.py'`.
-This uses emulator port 5590 and saves artifacts in `.test-artifacts/drawing-android/`.
+This uses emulator port 5594 and saves artifacts in `.test-artifacts/files-android/`.
 
 For live CLI control of a running app session, build the JVM CLI and APK, then
 run `nix-shell --run 'python3 tests/ui_sessions_android.py'`. The isolated test
@@ -450,7 +450,7 @@ computer; it never discovers or selects a physical tablet automatically.
 | Tier | Coverage | External resources |
 | --- | --- | --- |
 | `local` (default) | Framework, server, CLI, drawing/export/browser, proxy, mock-chat, generated topology/failure tests | None; temporary local servers/proxies and Chromium |
-| `emulator` | Two-client integration, drawing/selection UI, Android CLI, chat UI, 1,000-stroke performance | Local Android emulators; host graphics for performance |
+| `emulator` | Two-client integration, drawing/selection UI, file browser, viewport, Android CLI, chat UI, 1,000-stroke performance | Local Android emulators; host graphics by default |
 | `hardware` | Installed tablet app/proxy connectivity, drained queue, logs, screenshot; optional backed-up upgrade | Explicit ADB serial and reachable configured server |
 | `network` | Edits through multiple existing proxies, final server order and model convergence | Explicit server URL and at least two reachable proxy descriptors |
 
@@ -474,15 +474,15 @@ commit if a check fails. Chat proxy-routing checks verify forwarding through a
 two-proxy chain and guard Android against using the upstream URL directly.
 
 The runner builds the required artifacts once, then schedules suites in parallel
-using up to two workers by default (`--jobs 1` through `--jobs 4`). The default
-is two because a four-worker probe caused heavy swap use on this host. It uses
-the mean of each suite's last five completed durations to start longer work
-first, with initial estimates for suites without history. In direct mode,
-resource claims keep suites with overlapping emulator ports or services apart;
-the performance suite runs without other emulator suites so host load does not
-skew frame timings. Adjust the pool with
-`--jobs 1` if host memory or CPU becomes constrained; raise to `--jobs 3` or
-`--jobs 4` on a larger host. Use `--no-build` only with current build artifacts.
+using six workers by default (`--jobs 1` through `--jobs 8`), with at most five
+emulator slots. The strict
+performance suite runs first and alone, before other suites load host memory.
+Integration uses two emulator slots; other emulator suites use one. Drawing and
+viewport start in the first functional emulator batch, and files start at the
+next free slot. The remaining suites use the mean of their last five durations, with
+initial estimates where there is no history. Resource claims keep overlapping
+ports and services apart. Use fewer jobs when the host has less
+memory or GPU capacity. Use `--no-build` only with current build artifacts.
 Existing individual scripts remain available. Each run
 writes streamed suite logs and a `report.json` with pass/fail/skip outcomes in
 `.test-artifacts/runs/<timestamp>/`; rolling timing history is stored alongside
@@ -625,10 +625,10 @@ limits relative to the first window (2× plus 8/20/25/25 ms). It also bounds the
 full replay, and verifies all strokes survive a process restart. Reports are in
 `.test-artifacts/performance/`. The emulator is stopped on completion. These
 budgets are regression gates, not physical E Ink pen-latency measurements.
-The benchmark uses the host GPU with Vulkan disabled and requires a working
-graphical session and host graphics driver. `shell.nix` supplies the GL loader;
-`NOTEMAKER_TEST_GPU` can override the renderer. The usual emulator launchers
-retain their software-rendering defaults for functional tests.
+The automated emulator suites use the host GPU with Vulkan disabled and require
+a working graphical session and host graphics driver. `shell.nix` supplies the
+GL loader; `NOTEMAKER_TEST_GPU` can override the test renderer. The usual emulator
+launchers retain their software-rendering defaults for manual use.
 
 To profile an existing note without modifying it, capture the tablet's app files
 and run the latency probe against a disposable copy. Replace `SERIAL` and the

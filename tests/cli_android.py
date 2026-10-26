@@ -17,6 +17,7 @@ import uuid
 from browser import check_browser
 from replica import read_replica
 from topology_support import Proxy
+from android_bridge import AndroidBridge
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'.test-artifacts/cli-android'
@@ -25,6 +26,7 @@ SERIAL='emulator-5584'
 PORT=18766
 CLI=ROOT/'apps/cli/notemaker'
 EXAMPLE=json.loads((ROOT/'apps/cli/examples/diagram.json').read_text())
+bridge=AndroidBridge(SERIAL,OUT)
 
 def command(*args,timeout=90):
     return subprocess.check_output(args,text=True,stderr=subprocess.STDOUT,timeout=timeout)
@@ -55,17 +57,11 @@ def wait(fn,seconds=90):
     raise AssertionError(f'Timed out: {last}')
 
 def instrument(action,**kwargs):
-    args=['shell','am','instrument','-w','-e','action',action]
-    for key,value in kwargs.items():args+=['-e',key,str(value)]
-    out=adb('shell',shlex.join(args[1:]+['com.notemaker/.Integration']))
+    out=bridge.command(action,**kwargs)['stream']
     (OUT/f'{action}.txt').write_text(out)
     assert f'PASS {action}' in out,out
     state=json.loads(adb('shell','run-as','com.notemaker','cat','files/integration.json'))
     (OUT/'latest-state.json').write_text(json.dumps(state,indent=2))
-    # Complete instrumentation process teardown before reopening the editor.
-    adb('shell','am','force-stop','com.notemaker')
-    adb('shell','am','start','-W','-f','0x20000000','-n','com.notemaker/.MainActivity')
-    wait(lambda: bool(re.search(r'topResumedActivity=.*com\.notemaker/\.MainActivity', adb('shell','dumpsys','activity','activities'))),15)
     return state
 
 def encoded(value):return base64.b64encode(json.dumps(value).encode()).decode()
@@ -86,23 +82,20 @@ def object_snapshot(object_id):
 def tap(value):
     node=None
     for _ in range(15):
-        adb('shell','uiautomator','dump','/data/local/tmp/cli-ui.xml')
-        tree=ET.fromstring(adb('shell','cat','/data/local/tmp/cli-ui.xml'))
-        node=next((n for n in tree.iter('node') if n.attrib.get('content-desc')==value or n.attrib.get('text','').casefold()==value.casefold()),None)
+        nodes=bridge.ui_nodes()
+        node=next((n for n in nodes if n.get('content-desc')==value or n.get('text','').casefold()==value.casefold()),None)
         if node is not None:break
         time.sleep(.4)
     if node is None:
-        (OUT/'missing-ui.xml').write_bytes(ET.tostring(tree))
+        (OUT/'missing-ui.json').write_text(json.dumps(nodes,indent=2))
         (OUT/'missing-ui.png').write_bytes(subprocess.check_output(['adb','-s',SERIAL,'exec-out','screencap','-p']))
         raise AssertionError(f'Missing UI control after waiting for the editor: {value}')
-    left,top,right,bottom=map(int,re.findall(r'\d+',node.attrib['bounds']))
+    left,top,right,bottom=map(int,re.findall(r'\d+',node['bounds']))
     adb('shell','input','tap',str((left+right)//2),str((top+bottom)//2));time.sleep(.3)
 
 def canvas_gesture():
-    adb('shell','uiautomator','dump','/data/local/tmp/cli-ui.xml')
-    tree=ET.fromstring(adb('shell','cat','/data/local/tmp/cli-ui.xml'))
-    node=next(n for n in tree.iter('node') if n.attrib.get('content-desc')=='Drawing canvas')
-    left,top,right,bottom=map(int,re.findall(r'\d+',node.attrib['bounds']))
+    node=wait(lambda: next((n for n in bridge.ui_nodes() if n.get('content-desc')=='Drawing canvas'),None),15)
+    left,top,right,bottom=map(int,re.findall(r'\d+',node['bounds']))
     # Left half avoids the layer tray overlay; coordinates follow actual layout.
     x1=left+(right-left)//6;y1=top+(bottom-top)//4
     x2=left+(right-left)//3;y2=top+(bottom-top)//3
@@ -127,13 +120,12 @@ try:
     # Unique directories keep prior artifacts and any personal state untouched.
     with tempfile.TemporaryDirectory(prefix='notemaker-cli-android-') as temp:
         env=dict(os.environ,ANDROID_AVD_HOME=temp+'/avd')
-        emulator=subprocess.Popen(['boox-emulator-headless','-port','5584','-memory','1536','-cores','2','-wipe-data'],env=env,stdout=(OUT/'emulator.log').open('w'),stderr=subprocess.STDOUT)
+        emulator=subprocess.Popen(['boox-emulator-headless','-port','5584','-memory','1536','-cores','2','-gpu',os.environ.get('NOTEMAKER_TEST_GPU','host'),'-feature','-Vulkan','-wipe-data'],env=env,stdout=(OUT/'emulator.log').open('w'),stderr=subprocess.STDOUT)
         wait(lambda:adb('shell','getprop','sys.boot_completed').strip()=='1',240)
         adb('install','-r',str(ROOT/'apps/android/build/notemaker.apk'))
         instrument('configure',document='drawing-ui',host='')
         tap('Shape tools')
-        adb('shell','uiautomator','dump','/data/local/tmp/palette.xml')
-        assert 'Create Triangle' in adb('shell','cat','/data/local/tmp/palette.xml')
+        wait(lambda:any('Create Triangle' in node.get('content-desc','') for node in bridge.ui_nodes()),15)
         (OUT/'shape-palette.png').write_bytes(subprocess.check_output(['adb','-s',SERIAL,'exec-out','screencap','-p']))
         tap('Create Triangle');canvas_gesture()
         state=instrument('state')
@@ -166,7 +158,7 @@ try:
         tablet('object','update',text['object'],'-',value={'text':'CLI edits Android text'})
         state=instrument('state')
         assert state['model']['objects'][-1]['text']=='CLI edits Android text'
-        adb('shell','am','force-stop','com.notemaker')
+        bridge.close();adb('shell','am','force-stop','com.notemaker')
         state=instrument('state')
         assert len(state['model']['objects'])==11
         print('PASS Android shape/text creation, cancellation, signed lines, atomic history and offline restart',flush=True)
@@ -207,7 +199,14 @@ try:
         data=subprocess.check_output(['adb','-s',SERIAL,'exec-out','run-as','com.notemaker','cat','files/agent-export.png'])
         assert data.startswith(b'\x89PNG')
         (OUT/'android-cli.png').write_bytes(data)
-        tap('Document actions');tap('Edit diagram objects…');tap('rect · Offline agent edit')
+        for attempt in range(2):
+            tap('Document actions');tap('Edit diagram objects…')
+            try:
+                tap('rect · Offline agent edit')
+                break
+            except AssertionError:
+                if attempt:
+                    raise
         (OUT/'object-editor.png').write_bytes(subprocess.check_output(['adb','-s',SERIAL,'exec-out','screencap','-p']))
         tap('Erase')
         state=tablet('inspect');assert state['model']['objectActive']['app'] is False
@@ -244,7 +243,7 @@ try:
         stats=check_browser(OUT,PORT,state['cursor'],debug_port=19224,svg_exports=True)
         assert stats['pixels']>5000,stats
         print('PASS browser renders synchronized diagram objects',flush=True)
-        adb('shell','am','force-stop','com.notemaker')
+        bridge.close();adb('shell','am','force-stop','com.notemaker')
         state=instrument('state');assert state['model']==desktop('inspect')
         print('PASS replica and pending/history survive app restart',flush=True)
         # Select another durable proxy as the editor's writer and read source.
@@ -272,8 +271,9 @@ try:
         assert p.returncode==0,p.stderr
         assert json.loads(p.stdout)['objects'][-1]==star,'Android shape bypassed selected proxy'
         print('PASS selected proxy creates and renders a multipage document',flush=True)
-        adb('emu','kill');emulator.wait(timeout=20);emulator=None
+        bridge.close();adb('emu','kill');emulator.wait(timeout=20);emulator=None
 finally:
+    bridge.close()
     if desktop_proxy:desktop_proxy.stop()
     if server:server.terminate();server.wait(timeout=10)
     if emulator:

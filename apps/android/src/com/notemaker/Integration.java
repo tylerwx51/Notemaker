@@ -4,6 +4,7 @@ import android.os.*;
 import android.content.*;
 import android.graphics.*;
 import android.view.*;
+import android.view.accessibility.AccessibilityNodeInfo;
 import org.json.*;
 import java.util.Map;
 
@@ -36,32 +37,68 @@ public class Integration extends Instrumentation {
         Bundle result=new Bundle();try{
             Intent intent=new Intent(getTargetContext(),MainActivity.class);intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             MainActivity app=(MainActivity)startActivitySync(intent);android.util.Log.i("NoteMakerPerformance","Activity started");waitForIdleSync();
+            if("bridge".equals(arguments.getString("action")))serve(app);
+            else result=runAction(app,arguments);
+            finish(Activity.RESULT_OK,result);
+        }catch(Throwable error){result.putString("stream","FAIL: "+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result);}
+    }
+    private void serve(MainActivity app) throws Exception {
+        try(java.net.ServerSocket server=new java.net.ServerSocket(0,16,java.net.InetAddress.getByName("127.0.0.1"))){
+            server.setSoTimeout(120000);
+            try(java.io.FileOutputStream out=app.openFileOutput("integration-bridge-port",0)){
+                out.write(Integer.toString(server.getLocalPort()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            while(true)try(java.net.Socket socket=server.accept();
+                            java.io.BufferedReader input=new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(),java.nio.charset.StandardCharsets.UTF_8));
+                            java.io.BufferedWriter output=new java.io.BufferedWriter(new java.io.OutputStreamWriter(socket.getOutputStream(),java.nio.charset.StandardCharsets.UTF_8))){
+                String line;
+                while((line=input.readLine())!=null){
+                    JSONObject request=new JSONObject(line);
+                    if("shutdown".equals(request.optString("action"))){output.write("{\"stream\":\"PASS shutdown\"}\n");output.flush();return;}
+                    Bundle command=new Bundle();java.util.Iterator<String> keys=request.keys();while(keys.hasNext()){String key=keys.next();command.putString(key,request.getString(key));}
+                    Bundle result;
+                    try{result=runAction(app,command);}
+                    catch(Throwable error){result=new Bundle();result.putString("stream","FAIL: "+android.util.Log.getStackTraceString(error)+"\n");}
+                    JSONObject response=new JSONObject();for(String key:result.keySet())response.put(key,result.getString(key));
+                    output.write(response.toString());output.write('\n');output.flush();
+                }
+            }
+        }
+    }
+    private Bundle runAction(MainActivity app,Bundle arguments) throws Exception {
+            Bundle result=new Bundle();
             String action=arguments.getString("action","state");
-            if(action.equals("erase-performance")){result.putString("stream","PASS erase-performance\n"+com.notemaker.core.Json.write(ErasePerformance.run(this,app))+"\n");finish(Activity.RESULT_OK,result);return;}
+            if(action.equals("ui-tree")){
+                org.json.JSONArray nodes=new org.json.JSONArray();
+                AccessibilityNodeInfo root=getUiAutomation().getRootInActiveWindow();
+                if(root!=null)collectNodes(root,nodes);
+                result.putString("nodes",nodes.toString());result.putString("stream","PASS ui-tree\n");return result;
+            }
+            if(action.equals("erase-performance")){result.putString("stream","PASS erase-performance\n"+com.notemaker.core.Json.write(ErasePerformance.run(this,app))+"\n");return result;}
             if(action.equals("interaction-performance")){
                 String metrics=com.notemaker.core.Json.write(InteractionPerformance.run(this,app));
                 try(java.io.FileOutputStream out=app.openFileOutput("interaction-performance.json",0)){out.write(metrics.getBytes("UTF-8"));}
-                result.putString("stream","PASS interaction-performance\n");finish(Activity.RESULT_OK,result);return;
+                result.putString("stream","PASS interaction-performance\n");return result;
             }
             if(action.equals("checkpoint-performance")){
                 String metrics=com.notemaker.core.Json.write(CheckpointPerformance.run(app));
                 try(java.io.FileOutputStream out=app.openFileOutput("checkpoint-performance.json",0)){out.write(metrics.getBytes("UTF-8"));}
-                result.putString("stream","PASS checkpoint-performance\n");finish(Activity.RESULT_OK,result);return;
+                result.putString("stream","PASS checkpoint-performance\n");return result;
             }
-            if(action.equals("stroke-pixels")){StrokeCheck.run(this,app);result.putString("stream","PASS stroke-pixels\n");finish(Activity.RESULT_OK,result);return;}
-            if(action.equals("viewport")){ViewportCheck.run(this,app);result.putString("stream","PASS viewport\n");finish(Activity.RESULT_OK,result);return;}
-            if(action.equals("coverage")){CoverageCheck.run(this,app);result.putString("stream","PASS coverage\n");finish(Activity.RESULT_OK,result);return;}
+            if(action.equals("stroke-pixels")){StrokeCheck.run(this,app);result.putString("stream","PASS stroke-pixels\n");return result;}
+            if(action.equals("viewport")){ViewportCheck.run(this,app);result.putString("stream","PASS viewport\n");return result;}
+            if(action.equals("coverage")){CoverageCheck.run(this,app);result.putString("stream","PASS coverage\n");return result;}
             if(action.equals("file-preview")){
                 Map<String,Object> snapshot=app.replica.read();Bitmap preview=DocumentBrowser.thumbnail(snapshot);
                 int ink=0;for(int y=0;y<preview.getHeight();y++)for(int x=0;x<preview.getWidth();x++)if(preview.getPixel(x,y)!=Color.WHITE)ink++;
                 preview.recycle();if(ink==0)throw new IllegalStateException("Document preview contains no drawing");
                 if(!snapshot.get("revision").equals(app.replica.read().get("revision")))throw new IllegalStateException("Preview changed document state");
-                result.putString("stream","PASS file-preview\n");finish(Activity.RESULT_OK,result);return;
+                result.putString("stream","PASS file-preview\n");return result;
             }
             if(action.equals("performance")){
                 String metrics=com.notemaker.core.Json.write(Performance.run(this,app));
                 try(java.io.FileOutputStream out=app.openFileOutput("performance.json",0)){out.write(metrics.getBytes("UTF-8"));}
-                result.putString("stream","PASS performance; metrics saved to performance.json\n");finish(Activity.RESULT_OK,result);return;
+                result.putString("stream","PASS performance; metrics saved to performance.json\n");return result;
             }
             ReplicaService.writes.submit(()->{}).get(30,java.util.concurrent.TimeUnit.SECONDS);
             java.lang.Process child=null;
@@ -313,10 +350,10 @@ public class Integration extends Instrumentation {
                 waitForIdleSync();
             }
             ReplicaService.writes.submit(()->{}).get(30,java.util.concurrent.TimeUnit.SECONDS);
-            Thread.sleep(800);
+            Thread.sleep(50);
             runOnMainSync(()->{synchronized(app.lock){
                 try{
-                    if(action.equals("state")){
+                    if(action.equals("state")&&Boolean.parseBoolean(arguments.getString("verifyCache","false"))){
                         int width=app.canvas.getWidth(),height=app.canvas.getHeight();
                         Bitmap cached=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888),reference=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);
                         app.canvas.draw(new Canvas(cached));app.canvas.cullTileItems=false;
@@ -328,15 +365,25 @@ public class Integration extends Instrumentation {
                     }
                     Map<String,Object> stored=app.store.read();
                     JSONObject state=MainActivity.obj("document",app.document,"type",app.type,"cursor",app.cursor,"pending",app.pendingCount,"strokes",app.strokes.size(),"editorUndoCount",app.undo.size(),"storedUndoCount",com.notemaker.core.Json.list(stored.getOrDefault("undo",java.util.Collections.emptyList())).size(),"events",new JSONArray(com.notemaker.core.Json.list(stored.get("events"))),"visible",app.canvas.visible("test-layer"),"page",app.page,"model",new JSONObject(com.notemaker.core.Json.write(app.model.json())));
+                    try(java.io.FileOutputStream out=app.openFileOutput("integration.json",0)){out.write(state.toString().getBytes("UTF-8"));}
+                    if(Boolean.parseBoolean(arguments.getString("image","false"))){
                     Bitmap image=Bitmap.createBitmap(1000,1400,Bitmap.Config.ARGB_8888);Canvas c=new Canvas(image);c.drawColor(Color.WHITE);
                     com.notemaker.core.Render.draw(app.model,app.page,app.hidden,new com.notemaker.cli.Png(c));
                     try(java.io.FileOutputStream out=app.openFileOutput("integration.png",0)){image.compress(Bitmap.CompressFormat.PNG,100,out);}
-                    try(java.io.FileOutputStream out=app.openFileOutput("integration.json",0)){out.write(state.toString().getBytes("UTF-8"));}
-                    int[] pixels=new int[1000*1400];image.getPixels(pixels,0,1000,0,0,1000,1400);int count=0,minX=1000,minY=1400,maxX=-1,maxY=-1;for(int i=0;i<pixels.length;i++){int pixel=pixels[i];if(Color.red(pixel)<245||Color.green(pixel)<245||Color.blue(pixel)<245){count++;int x=i%1000,y=i/1000;minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}}JSONObject stats=MainActivity.obj("pixels",count,"bounds",new JSONArray(java.util.Arrays.asList(minX,minY,maxX,maxY)));try(java.io.FileOutputStream out=app.openFileOutput("render-stats.json",0)){out.write(stats.toString().getBytes("UTF-8"));}result.putString("state",state.toString().length()<32000?state.toString():"See files/integration.json");
+                    int[] pixels=new int[1000*1400];image.getPixels(pixels,0,1000,0,0,1000,1400);int count=0,minX=1000,minY=1400,maxX=-1,maxY=-1;for(int i=0;i<pixels.length;i++){int pixel=pixels[i];if(Color.red(pixel)<245||Color.green(pixel)<245||Color.blue(pixel)<245){count++;int x=i%1000,y=i/1000;minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}}JSONObject stats=MainActivity.obj("pixels",count,"bounds",new JSONArray(java.util.Arrays.asList(minX,minY,maxX,maxY)));try(java.io.FileOutputStream out=app.openFileOutput("render-stats.json",0)){out.write(stats.toString().getBytes("UTF-8"));}image.recycle();
+                    }
+                    result.putString("state",state.toString().length()<32000?state.toString():"See files/integration.json");
                 }catch(Exception e){throw new RuntimeException(e);}
             }});
-            result.putString("stream","PASS "+action+"\n");finish(Activity.RESULT_OK,result);
-        }catch(Throwable error){result.putString("stream","FAIL: "+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result);}
+            result.putString("stream","PASS "+action+"\n");return result;
+    }
+    private void collectNodes(AccessibilityNodeInfo node,org.json.JSONArray nodes) throws Exception {
+        android.graphics.Rect bounds=new android.graphics.Rect();node.getBoundsInScreen(bounds);
+        nodes.put(MainActivity.obj("text",node.getText()==null?"":node.getText().toString(),
+                "content-desc",node.getContentDescription()==null?"":node.getContentDescription().toString(),
+                "bounds","["+bounds.left+","+bounds.top+"]["+bounds.right+","+bounds.bottom+"]",
+                "package",node.getPackageName()==null?"":node.getPackageName().toString()));
+        for(int i=0;i<node.getChildCount();i++){AccessibilityNodeInfo child=node.getChild(i);if(child!=null)collectNodes(child,nodes);}
     }
     private void drainWrites() throws Exception {ReplicaService.writes.submit(()->{}).get(30,java.util.concurrent.TimeUnit.SECONDS);}
     private void waitForSelection(MainActivity app,int count,String label)throws Exception{waitForSelectionCondition(app,()->app.selectionSession!=null&&app.selectedEntities.size()>=count,label);}

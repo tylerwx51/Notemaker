@@ -1,5 +1,22 @@
 # Verification
 
+## Pre-commit emulator runtime — 2026-10-26
+
+Ran `.githooks/pre-commit` through the Nix development shell with six workers
+and five emulator slots. The full hook passed **22/22 checks in 292.23 seconds**
+by an external monotonic timer; the runner reported 289.08 seconds after its
+startup. The seven emulator suites took: performance 90.04 s, integration
+182.92 s, CLI Android 112.54 s, drawing Android 137.73 s, viewport Android
+130.04 s, files Android 75.61 s, and chat UI 60.91 s. These suites overlap
+except for performance, which ran first and alone. Its 1,000-stroke check had
+zero events over 30 ms and a 21.79 ms maximum. The run report is
+`.test-artifacts/runs/20261026-034559-272573/report.json`; the hook transcript
+is `.test-artifacts/phase-profile/full-six-workers-hook.log`.
+
+The ordinary x86_64 API 36 emulator was used. E Ink refresh, BOOX-specific
+behavior, physical stylus timing, and the external server/network tiers were
+not tested by this pre-commit run.
+
 ## GIF controls on the canvas — 2026-10-24
 
 Built and installed the updated APK on the physical Note Air6 C. The fixed

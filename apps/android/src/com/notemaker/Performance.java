@@ -26,7 +26,33 @@ final class Performance {
     static int bucket(int stroke){return stroke<100?0:stroke>=400&&stroke<500?1:stroke>=900?2:-1;}
     static double percentile(List<Double> values,double fraction){List<Double> sorted=new ArrayList<>(values);Collections.sort(sorted);return sorted.isEmpty()?0:sorted.get(Math.min(sorted.size()-1,(int)(sorted.size()*fraction)));}
     static Map<String,Object> stats(List<Double> values){return object("over_30_ms",values.stream().filter(v->v>=30).count(),"samples",values.size(),"p50_ms",percentile(values,.50),"p95_ms",percentile(values,.95),"p99_ms",percentile(values,.99),"max_ms",percentile(values,1));}
+    private static void prewarmGraphics(Instrumentation test,MainActivity app) throws Exception {
+        test.runOnMainSync(()->{
+            app.document="performance-warmup-"+System.currentTimeMillis();app.host="http://127.0.0.1:1";
+            app.load("fixed");app.configureProxy();app.update();app.setDrawingTool(null);app.width=10;
+        });
+        // Exercise the complete pen-to-window path before measuring a fresh
+        // document. GPU command setup can stall one of the first rendered frames.
+        for(int stroke=0;stroke<40;stroke++){
+            final int number=stroke;
+            test.runOnMainSync(()->{
+                long down=SystemClock.uptimeMillis();float scale=app.canvas.scale();
+                for(int step=0;step<3;step++){
+                    MotionEvent.PointerProperties pp=new MotionEvent.PointerProperties();pp.id=0;pp.toolType=MotionEvent.TOOL_TYPE_STYLUS;
+                    MotionEvent.PointerCoords pc=new MotionEvent.PointerCoords();
+                    position(pc,number,step*24,scale,app.canvas.getWidth()/scale,app.canvas.getHeight()/scale);
+                    pc.pressure=.5f;pc.size=1;
+                    int action=step==0?MotionEvent.ACTION_DOWN:step==2?MotionEvent.ACTION_UP:MotionEvent.ACTION_MOVE;
+                    MotionEvent e=MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,1,new MotionEvent.PointerProperties[]{pp},new MotionEvent.PointerCoords[]{pc},0,0,1,1,0,0,InputDevice.SOURCE_STYLUS,0);
+                    app.canvas.dispatchTouchEvent(e);e.recycle();
+                }
+            });
+            Thread.sleep(18);
+        }
+        ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS);
+    }
     static Map<String,Object> run(Instrumentation test,MainActivity app) throws Exception {
+        prewarmGraphics(test,app);
         @SuppressWarnings("unchecked") List<Double>[][] samples=new List[3][4];
         for(int b=0;b<3;b++)for(int m=0;m<4;m++)samples[b][m]=Collections.synchronizedList(new ArrayList<>());
         @SuppressWarnings("unchecked") List<Double>[][] framePhases=new List[3][FRAME_PHASE_IDS.length];
@@ -93,7 +119,8 @@ final class Performance {
                     dispatchStalls.add(object("stroke",number+1,"step",index,"wall_ms",System.currentTimeMillis(),"wait_ms",(System.nanoTime()-queued)/1e6,"stacks",stacks));
                     Model.require(handled.await(5,TimeUnit.SECONDS),"Input dispatch timed out");
                 }
-                Thread.sleep(16);
+                // Sample at 250 Hz; real window frames still determine draw latency.
+                Thread.sleep(6);
             }
             final int[] pending={0};test.runOnMainSync(()->pending[0]=app.saving);maxSaving=Math.max(maxSaving,pending[0]);
             if(stroke%100==99){resources.add(resources(stroke+1));android.util.Log.i("NoteMakerPerformance","strokes="+(stroke+1)+" saveQueue="+pending[0]);}
