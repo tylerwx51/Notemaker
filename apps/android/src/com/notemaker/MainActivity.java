@@ -41,6 +41,8 @@ public class MainActivity extends Activity {
     final HashSet<String> tiledObjectPreviews=new HashSet<>();
     long coalescedObjectFrames;
     java.util.function.Consumer<String> objectCommitAck;
+    Runnable beforeObjectCommitCallback;
+    boolean objectRefreshDeferred;
     String proxyUrl="",proxyToken="";
     AppReplica replica;
     String document="notes", host="", type="fixed", selected="base";
@@ -229,6 +231,7 @@ public class MainActivity extends Activity {
         ReplicaService.writes.execute(()->{try{
             Map<String,Object> result=Json.map(target.command(Arrays.asList("object","put","snapshot","-"),preview));
             Map<String,Object> snapshot=result.get("snapshot") instanceof Map?Json.map(result.get("snapshot")):null;
+            if(beforeObjectCommitCallback!=null)beforeObjectCommitCallback.run();
             runOnUiThread(()->{
                 saving--;if(target!=replica)return;
                 Map<String,Object> displayedPreview=pendingObjectPreviews.remove(previewId);
@@ -243,9 +246,9 @@ public class MainActivity extends Activity {
                 boolean retainPixels=displayed&&!target.remote()&&saveError==null&&samePaintedObject(before,displayedPreview,previewId);
                 save();if(retainPixels){coalescedObjectFrames++;updateChrome();}else update();
                 if(objectCommitAck!=null)objectCommitAck.accept(previewId);
-                if(snapshot==null)ReplicaService.writes.execute(()->refreshFrom(target));
+                if(snapshot==null||objectRefreshDeferred){objectRefreshDeferred=false;ReplicaService.writes.execute(()->refreshFrom(target));}
             });
-        }catch(Exception e){android.util.Log.e("NoteMaker","Object save failed",e);runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectPreviews.remove(previewId);drawnObjectPreviews.remove(previewId);tiledObjectPreviews.remove(previewId);pendingObjectHistory.remove(pending);saveError=e.toString();update();Toast.makeText(this,"Could not save object: "+e.getMessage(),Toast.LENGTH_LONG).show();});}});
+        }catch(Exception e){android.util.Log.e("NoteMaker","Object save failed",e);runOnUiThread(()->{saving--;if(target!=replica)return;pendingObjectPreviews.remove(previewId);drawnObjectPreviews.remove(previewId);tiledObjectPreviews.remove(previewId);pendingObjectHistory.remove(pending);saveError=e.toString();update();if(objectRefreshDeferred){objectRefreshDeferred=false;ReplicaService.writes.execute(()->refreshFrom(target));}Toast.makeText(this,"Could not save object: "+e.getMessage(),Toast.LENGTH_LONG).show();});}});
     }
     boolean objectHistoryPending(){synchronized(lock){return !pendingObjectHistory.isEmpty();}}
     Map<String,Object> editorPreferences(){return Json.object("hidden",new ArrayList<>(hidden),"undo",new ArrayList<>(undo),"redo",new ArrayList<>(redo),"selected",selected,"page",page,"clipboard",selectionClipboard);}
@@ -282,6 +285,7 @@ public class MainActivity extends Activity {
         resetDrawingGesture();
         if(canvas!=null)canvas.erasePreviews.clear();
         pendingObjectHistory.clear();pendingObjectPreviews.clear();drawnObjectPreviews.clear();tiledObjectPreviews.clear();
+        objectRefreshDeferred=false;
         historyPending=false;
         // Reuse unchanged entity wrappers for a warm reopen, never across documents.
         eventCount=pendingCount=0;optimistic.clear();if(!document.equals(renderedDocument))renderedEntities.clear();cursor=0;revision=-1;hidden.clear();undo.clear();redo.clear();selected="base";page=0;type=newType;
@@ -406,6 +410,14 @@ public class MainActivity extends Activity {
         try{
             Map<String,Object> snapshot=target.read();
             runOnUiThread(()->{if(target!=replica)return;try{
+                if(!target.remote()&&!pendingObjectPreviews.isEmpty()&&((Number)snapshot.get("revision")).longValue()>revision){
+                    Model incoming=Store.model(snapshot);
+                    for(String id:pendingObjectPreviews.keySet())if(incoming.objects.containsKey(id)){
+                        // The save callback owns the preview-to-model handoff. A listener
+                        // refresh here would invalidate its already painted frame.
+                        objectRefreshDeferred=true;return;
+                    }
+                }
                 boolean wasConnected=connected;connected=target.remote()||(ReplicaService.proxy!=null&&Boolean.TRUE.equals(ReplicaService.proxy.connected.get(document)));
                 if(((Number)snapshot.get("revision")).longValue()>revision){refreshShared(snapshot);update();}
                 else {

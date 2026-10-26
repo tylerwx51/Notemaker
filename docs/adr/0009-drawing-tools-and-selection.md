@@ -46,6 +46,10 @@ content and no other model changes, the existing tile pixels remain visible
 without a second Canvas redraw; a mismatch, remote result, or rejection
 redraws from authoritative state. The CLI and proxy still own validation,
 durability, and synchronization.
+The local-state listener defers a snapshot containing an object with a still
+pending preview until that object's save callback has compared the painted
+preview with the committed model. The callback then requests a fresh replica
+read so any concurrent changes withheld with that snapshot are applied.
 For a local Android stroke, pen-up appends the final stroke state and saves
 the editor undo list in one selected-proxy transaction. Remote selected proxies
 keep the separate commands. This retains an atomic durable final stroke and

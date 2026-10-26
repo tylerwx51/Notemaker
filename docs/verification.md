@@ -1400,3 +1400,17 @@ grid, including hatches, path-outlined labels, and colors. The tablet remains
 open to this note. Backups, action input, export, and screenshot are in
 `.test-artifacts/matplotlib-deploy-20261021-112546/`; the APK upgrade report is
 in `.test-artifacts/tablet/20261021-112623-402849/`.
+
+## Android object-preview refresh ordering (2026-10-26)
+
+The Android coverage check now pauses an object save callback after the local
+command commits and delivers a local-state refresh first. Before the fix,
+`nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --coverage-only'`
+failed at `Matching committed object still redrew the canvas`. With the listener
+deferring the pending object's snapshot until the save callback handles the
+painted preview, the same command passed. The check also compares the committed
+canvas pixels with the preview before reporting a redraw failure. Physical E Ink
+refresh behavior was not checked.
+
+The full `nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py'`
+suite then passed all drawing checks on the isolated emulator.

@@ -45,6 +45,8 @@ final class CoverageCheck {
     private static void objectPreview(Integration test,MainActivity app)throws Exception{
         String id="preview-created-box";
         java.util.concurrent.CountDownLatch paused=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch committed=new java.util.concurrent.CountDownLatch(1),deliver=new java.util.concurrent.CountDownLatch(1);
+        app.beforeObjectCommitCallback=()->{committed.countDown();try{if(!deliver.await(30,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("Object callback gate timed out");}catch(InterruptedException e){Thread.currentThread().interrupt();throw new RuntimeException(e);}};
         ReplicaService.writes.execute(()->{paused.countDown();try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}});
         require(paused.await(5,java.util.concurrent.TimeUnit.SECONDS),"Object writer did not pause");
         long coalescedBefore=app.coalescedObjectFrames;
@@ -62,13 +64,21 @@ final class CoverageCheck {
             });
             require(!Store.model(app.replica.read()).objects.containsKey(id),"Preview changed durable state");
         }finally{release.countDown();}
+        try{
+            require(committed.await(30,java.util.concurrent.TimeUnit.SECONDS),"Object command did not commit");
+            app.refreshFrom(app.replica);
+            test.waitForIdleSync();
+            require(app.objectRefreshDeferred,"Local listener did not reach the pending object before save callback");
+            require(!app.model.objects.containsKey(id),"Local listener replaced the painted preview before save callback");
+        }finally{deliver.countDown();app.beforeObjectCommitCallback=null;}
         ReplicaService.writes.submit(()->{}).get(10,java.util.concurrent.TimeUnit.SECONDS);test.waitForIdleSync();
         require(app.pendingObjectPreviews.isEmpty(),"Committed object retained transient preview");
         require(Store.model(app.replica.read()).objects.containsKey(id),"Previewed object was not durable");
-        require(app.coalescedObjectFrames==coalescedBefore+1,"Matching committed object still redrew the canvas");
         test.runOnMainSync(()->app.canvas.draw(new Canvas(after)));
-        require(during.sameAs(after),"Committed object changed preview pixels");
+        boolean samePixels=during.sameAs(after);
         before.recycle();during.recycle();after.recycle();
+        require(samePixels,"Committed object changed preview pixels");
+        require(app.coalescedObjectFrames==coalescedBefore+1,"Matching committed object still redrew the canvas");
     }
     private static void previewRollback(Integration test,MainActivity app)throws Exception{
         java.util.concurrent.CountDownLatch paused=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
