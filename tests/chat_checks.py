@@ -171,12 +171,12 @@ class ChatChecks(unittest.TestCase):
             self.assertTrue(post('/api/chats/' + running['id'] + '/stop', {})['stopping'])
 
     def test_android_agent_chat_transport_is_proxy_only(self):
-        source = (ROOT / 'apps/android/src/com/notemaker/AgentUi.java').read_text()
+        source = (ROOT / 'apps/android/src/agent_ui.rs').read_text()
         self.assertNotIn('app.host', source,
             'Proxy routing check failed: Android sent a request directly to the upstream. All app network traffic must go through the proxy.')
-        self.assertIn('ReplicaService.ensure(app)', source)
-        self.assertIn('app.proxyUrl', source)
-        self.assertIn('Authorization", "Bearer " + proxyToken', source)
+        self.assertIn('replica_service::ensure(&app.this)', source)
+        self.assertIn('app.proxy_url', source)
+        self.assertIn('"Authorization", &format!("Bearer {}"', source)
 
     def test_stop_and_concurrent_send(self):
         chat = self.create()

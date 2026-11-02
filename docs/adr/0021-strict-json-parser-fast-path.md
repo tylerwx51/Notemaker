@@ -31,3 +31,10 @@ A physical 1,000-stroke run passed restart and replay parity with input-to-draw
 p95 of 69.7 ms, near prior runs. The parser is shared, so its correctness
 remains part of all app and CLI checks. See
 `docs/design/performance/json-parser-fast-path.md`.
+
+## Update 2026-11-02
+
+The Java implementation described here was ported one-to-one to Rust and
+removed (ADR 0026 CLI, ADR 0029 Android app, `docs/design/rust-port.md`).
+The decision stands; JVM, `app_process`, jsvg/androidsvg and `.java` details
+now refer to their Rust equivalents (native CLI binary, resvg).

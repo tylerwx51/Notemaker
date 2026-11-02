@@ -1,0 +1,52 @@
+[package]
+name = "notemaker_cli"
+description = "NoteMaker CLI and embedded local proxy (port of apps/cli Java)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+# src/main.rs is not used: the Java class `Main` is the library module `main`
+# (src/cli_main.rs) and every binary is declared below.
+autobins = false
+
+[lib]
+name = "notemaker_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "notemaker"
+path = "src/bin/notemaker.rs"
+
+# Ports of tests/*.java probes; same arguments and output.
+[[bin]]
+name = "stroke_svg_raster"
+path = "src/bin/stroke_svg_raster.rs"
+
+[[bin]]
+name = "coverage_parity"
+path = "src/bin/coverage_parity.rs"
+
+[[bin]]
+name = "latency_probe"
+path = "src/bin/latency_probe.rs"
+
+[[bin]]
+name = "cache_footprint_probe"
+path = "src/bin/cache_footprint_probe.rs"
+
+[dependencies]
+notemaker_core = { path = "../../packages/core" }
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = "2"
+libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+sha2 = "0.10"
+roxmltree = "0.20"
+# resvg re-exports the matching usvg and tiny-skia versions (`resvg::usvg`,
+# `resvg::tiny_skia`); the crate uses those re-exports only.
+resvg = { version = "0.45", default-features = false, features = ["text"] }
+ab_glyph = "0.2"
+png = "0.17"
+gif = "0.13"
+jpeg-decoder = { version = "0.3", default-features = false }
+i_overlay = "9.1.0"

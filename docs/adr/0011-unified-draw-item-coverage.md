@@ -235,3 +235,10 @@ Entry caps are deliberately not described as a total byte budget. Under 30 ms
 is approached for partial feedback, but is not achieved for every erase or for
 durable completion. See the [latency report](../design/latency/report.md) for
 measurements, branches, limits and reproducible charts.
+
+## Update 2026-11-02
+
+The Java implementation described here was ported one-to-one to Rust and
+removed (ADR 0026 CLI, ADR 0029 Android app, `docs/design/rust-port.md`).
+The decision stands; JVM, `app_process`, jsvg/androidsvg and `.java` details
+now refer to their Rust equivalents (native CLI binary, resvg).

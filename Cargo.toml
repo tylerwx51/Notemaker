@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["packages/core", "apps/cli", "apps/android"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "UNLICENSED"
+
+[profile.release]
+debug = 1
+panic = "unwind"

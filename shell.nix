@@ -13,9 +13,10 @@ let
     includeEmulator = true;
     includeSystemImages = true;
     systemImageTypes = [ "google_apis" ];
-    abiVersions = [ "x86_64" ];
+    abiVersions = [ "x86_64" "arm64-v8a" ];
     includeSources = false;
-    includeNDK = false;
+    includeNDK = true;
+    ndkVersions = [ "29.0.14206865" ];
     includeCmake = false;
   };
   sdk = "${android.androidsdk}/libexec/android-sdk";
@@ -57,6 +58,25 @@ let
       exec boox-emulator -no-window -no-audio -no-snapshot "$@"
     '';
   };
+  arm64Emulator = pkgs.writeShellApplication {
+    name = "boox-emulator-arm64";
+    runtimeInputs = [ android.androidsdk pkgs.coreutils pkgs.gnused pkgs.bubblewrap pkgs.util-linux ];
+    text = ''
+      export ANDROID_HOME="${sdk}"
+      export ANDROID_SDK_ROOT="$ANDROID_HOME"
+      export JAVA_HOME="${pkgs.jdk17.home}"
+      export LD_LIBRARY_PATH="${pkgs.libglvnd}/lib:${pkgs.lib.getLib pkgs.systemd}/lib:${pkgs.lib.getLib pkgs.dbus}/lib:''${LD_LIBRARY_PATH:-}"
+      export QT_XKB_CONFIG_ROOT="${pkgs.xkeyboard_config}/share/X11/xkb"
+      export QTCOMPOSE="${pkgs.lib.getLib pkgs.libx11}/share/X11/locale"
+    '' + builtins.readFile ./scripts/boox-emulator-arm64.sh;
+  };
+  arm64Headless = pkgs.writeShellApplication {
+    name = "boox-emulator-arm64-headless";
+    runtimeInputs = [ arm64Emulator ];
+    text = ''
+      exec boox-emulator-arm64 -no-window "$@"
+    '';
+  };
   rootlessDocker = pkgs.writeShellApplication {
     name = "notemaker-dockerd";
     runtimeInputs = [ pkgs.docker pkgs.rootlesskit pkgs.slirp4netns pkgs.fuse-overlayfs pkgs.coreutils ];
@@ -73,18 +93,21 @@ let
 in
 pkgs.mkShell {
   packages = [ android.androidsdk pkgs.jdk17 (pkgs.python3.withPackages (ps: [ ps.pyyaml ps.hypothesis ps.matplotlib ps.pillow ])) pkgs.chromium pkgs.fontconfig pkgs.dejavu_fonts pkgs.zip pkgs.unzip pkgs.jadx pkgs.apktool emulator headless pkgs.git pkgs.jujutsu pkgs.openssh pkgs.tmux pkgs.iproute2 pkgs.bubblewrap pkgs.nodejs
-    pkgs.docker pkgs.rootlesskit pkgs.slirp4netns pkgs.fuse-overlayfs rootlessDocker ];
+    pkgs.docker pkgs.rootlesskit pkgs.slirp4netns pkgs.fuse-overlayfs rootlessDocker arm64Emulator arm64Headless pkgs.gdb
+    pkgs.rustup pkgs.cargo-ndk pkgs.pkg-config ];
   ANDROID_HOME = sdk;
   ANDROID_SDK_ROOT = sdk;
   JAVA_HOME = pkgs.jdk17.home;
+  ANDROID_NDK_HOME = "${sdk}/ndk/29.0.14206865";
+  # Only packages/core/tests/parity.sh uses jsvg, to build the Java reference CLI.
   NOTEMAKER_JSVG = (import ./apps/cli/dependencies.nix { inherit (pkgs) fetchurl; }).jsvg;
-  NOTEMAKER_ANDROIDSVG = (import ./apps/android/dependencies.nix { inherit (pkgs) fetchurl; }).androidsvg;
   NOTEMAKER_GL_LIBRARY_PATH = "${pkgs.libglvnd}/lib";
   FONTCONFIG_FILE = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
   shellHook = ''
     export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-$HOME/.cache/notemaker/docker-runtime}"
     export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
     echo "Android 16 ready: boox-emulator (GUI), boox-emulator-headless (automated testing), adb"
+    echo "ARM64 Android 16: boox-emulator-arm64, boox-emulator-arm64-headless (software CPU emulation)"
     echo "Rootless Docker: start notemaker-dockerd in another shell; socket is $DOCKER_HOST"
   '';
 }

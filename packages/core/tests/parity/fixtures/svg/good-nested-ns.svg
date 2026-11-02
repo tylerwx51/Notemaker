@@ -1,0 +1,1 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:foo="urn:foo" viewBox="0 0 10 10"><g xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><path id="p" d="M0 0"/></defs><use xlink:href="#p"/></g><g xmlns:foo="urn:bar" xmlns:l="http://www.w3.org/1999/xlink"><use l:href="#p"/></g></svg>

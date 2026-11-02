@@ -1,0 +1,11 @@
+data:image/png;base64,
+data:image/png;base64,@@@@
+data:image/png;base64,iVBORw0KGgo=
+data:image/png;base64,a
+data:image/gif;base64,R0lGODlh
+data:image/gif;base64,R0lGODlhAQABAAAAACw=x
+data:image/gif;base64,R0lGé
+data:image/gif;base64,R0lGODlhAQABA===
+data:image/webp;base64,AAAA
+data:image/jpeg;base64,/9j/2Q==
+http://example.com/a.png

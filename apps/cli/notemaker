@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec java -Djava.awt.headless=true -jar "$(dirname "$0")/build/notemaker.jar" "$@"
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+exec "${CARGO_TARGET_DIR:-$root/target}/release/notemaker" "$@"

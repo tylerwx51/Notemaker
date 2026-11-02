@@ -125,3 +125,10 @@ the CLI as an app child on an isolated emulator, draws concurrently while offlin
 checks shared state/history/export, reconnects desktop and tablet through a real
 server, and checks browser replay. Existing app integration remains a regression
 check. Executed results are recorded in `docs/verification.md`.
+
+## Update 2026-11-02
+
+The Java implementation described here was ported one-to-one to Rust and
+removed (ADR 0026 CLI, ADR 0029 Android app, `docs/design/rust-port.md`).
+The decision stands; JVM, `app_process`, jsvg/androidsvg and `.java` details
+now refer to their Rust equivalents (native CLI binary, resvg).

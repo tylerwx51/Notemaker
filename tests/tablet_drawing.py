@@ -44,16 +44,26 @@ def main():
         if 'PASS ' + action not in text:
             raise AssertionError('Instrumentation failed: ' + text)
         adb('shell', 'am', 'start', '-f', '0x20000000', '-n', PACKAGE + '/.MainActivity')
+        # Instrumentation restarts the app process; wait for the relaunched
+        # editor before tapping, or taps can land on the dying window.
+        bounds('Drawing canvas', 60)
 
     def tree():
         adb('shell', 'uiautomator', 'dump', '/data/local/tmp/notemaker-drawing-check.xml')
         return ET.fromstring(adb('shell', 'cat', '/data/local/tmp/notemaker-drawing-check.xml'))
 
-    def bounds(value):
-        for node in tree().iter('node'):
-            if value in (node.get('text'), node.get('content-desc')):
-                return list(map(int, re.findall(r'\d+', node.get('bounds'))))
-        raise AssertionError('Missing UI control: ' + value)
+    def bounds(value, seconds=20):
+        # The editor can still be starting after `am start` (cold replica
+        # opening takes seconds with large local histories); wait like the
+        # emulator suites' tap helpers do.
+        deadline = time.monotonic() + seconds
+        while True:
+            for node in tree().iter('node'):
+                if value in (node.get('text'), node.get('content-desc')):
+                    return list(map(int, re.findall(r'\d+', node.get('bounds'))))
+            if time.monotonic() >= deadline:
+                raise AssertionError('Missing UI control: ' + value)
+            time.sleep(.5)
 
     def tap(value):
         l, t, r, b = bounds(value)
@@ -184,8 +194,11 @@ def main():
             width=2, color=-16777216, points=[[100,700,1],[300,700,1]]))
         cli(document, 'erase', '-', value=dict(mode='partial', points=[[200,680],[200,720]], radius=9))
         model = cli(document, 'inspect')
-        assert model['strokeActive']['hardware-erase'] is False
-        assert len([s for s in model['strokes'] if s['stroke']!='hardware-erase']) == 2
+        # Partial erasure masks the stroke (ADR 0011) rather than splitting it,
+        # as tests/drawing_tools_checks.py also asserts.
+        erased = next(s for s in model['strokes'] if s['stroke'] == 'hardware-erase')
+        assert model['strokeActive']['hardware-erase'] is True and len(erased.get('erasures', [])) == 1, erased
+        assert len([s for s in model['strokes'] if s['stroke']!='hardware-erase']) == 0
         check('BOOX clipboard, native fill, background template and atomic partial eraser')
         instrument('draw', shift=100, color=-16776961)
         assert any(len(s['points']) >= 12 for s in cli(document, 'inspect')['strokes'])

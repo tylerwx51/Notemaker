@@ -8,10 +8,9 @@ on local Linux/Android filesystem semantics.
 
 ## Build and run
 
-All tools are supplied by the root Nix shell. SVG rendering libraries are pinned
-by URL and hash in `apps/cli/dependencies.nix` (JSVG, JVM) and
-`apps/android/dependencies.nix` (AndroidSVG). Nix fetches them at shell setup;
-the builds bundle them, so installed applications need no runtime downloads.
+All tools are supplied by the root Nix shell. The CLI is the Rust crate
+`notemaker_cli` (see [RUST.md](RUST.md) for the Java → Rust API mapping). The
+former Java sources are in git history at commit `0534499`.
 
 ```sh
 nix-shell
@@ -19,11 +18,14 @@ apps/cli/build.sh --android
 apps/cli/notemaker --help
 ```
 
-Artifacts: `apps/cli/build/notemaker.jar` (JVM bytecode, JDK 17 in the Nix shell)
-and `apps/cli/build/notemaker-android.jar` (DEX, API 26+). Android uses the device's
-ART runtime, so the DEX artifact works with either ARM64 tablets or x86_64 emulators.
-The NixOS launcher needs Java; this is not a standalone native executable.
-`apps/android/build.sh` compiles the same CLI/core into the APK.
+`apps/cli/build.sh` runs `cargo build --release -p notemaker_cli`; artifacts are
+`target/release/notemaker` (run through `apps/cli/notemaker`) plus the probe
+binaries `stroke_svg_raster`, `coverage_parity`, `latency_probe` and
+`cache_footprint_probe`. `--android` also cross-builds them with cargo ndk for
+arm64-v8a and x86_64 (`target/<triple>/release/`), so the native binary runs on
+ARM64 tablets and x86_64 emulators. SVG objects render with resvg; text uses
+DejaVu from `FONTCONFIG_FILE` on the host and `/system/fonts` on Android
+(`NOTEMAKER_FONT` overrides the regular face). No JVM is needed.
 
 ## Global options and output
 
@@ -306,17 +308,18 @@ Run `nix-shell --run 'python3 tests/ui_sessions_android.py'` for the live API 36
 session check, then `nix-shell --run 'python3 tests/ui_topology_android.py'` for
 the two-proxy, main-server route.
 
-Call `MainActivity.startCli(String... args)` off the UI thread, write input, drain
-stdout **and** stderr concurrently, wait for completion with a timeout, and check
-the exit code. The method returns a standard `java.lang.Process`; orchestration
-and process lifecycle management belong to the caller. Example argument array:
+Call `MainActivity::start_cli(&[&str])` (Rust, `apps/android/src/main_activity.rs`)
+off the UI thread, write input, drain stdout **and** stderr concurrently, wait for
+completion with a timeout, and check the exit code. It returns a
+`std::process::Child` with all three streams piped; orchestration and process
+lifecycle management belong to the caller. Example arguments:
 
-```java
-new String[]{"--actor", "agent-session-17", "diagram", "add", "-"}
+```rust
+app.start_cli(&["--actor", "agent-session-17", "diagram", "add", "-"])
 ```
 
-The launcher runs `/system/bin/app_process /system/bin com.notemaker.cli.Main`,
-sets `CLASSPATH` to the installed APK, and supplies the current document and app's
+The launcher runs the APK's native CLI (`<nativeLibraryDir>/libnotemaker_cli.so`,
+the `notemaker` binary packaged under a library name so Android extracts it) and supplies the current document and app's
 private replica proxy descriptor. The child uses the app's authenticated
 selected proxy (the device's localhost proxy by default). No root, writable executable extraction, or Termux is required.
 Android may stop the app and its children; durable pending edits survive this and
@@ -353,7 +356,9 @@ Prefer a new agent-owned layer for independent contributions.
 
 Use `notemaker --state DIR --document NAME serve [PORT [UPSTREAM]]` to start
 the owner (default port 8766). UPSTREAM is a main-server URL or private descriptor
-path for another durable proxy. No upstream is needed for editing. One proxy
+path for another durable proxy; `https://` URLs are verified against the
+platform CA store, and `NOTEMAKER_EXTRA_CA_FILE=ca.pem` adds trusted CAs (for
+example a self-signed home-server CA). No upstream is needed for editing. One proxy
 owns a directory; a second owner fails. `--proxy-file FILE` or
 `NOTEMAKER_PROXY_FILE` selects it for clients. Standalone mutations and the old
 `watch` command are no longer supported.

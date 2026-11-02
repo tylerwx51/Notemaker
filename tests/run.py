@@ -139,7 +139,7 @@ def suite_command(name, container, worker_tmp):
                '--env', 'ANDROID_USER_HOME=/tmp/home/.android', '--env', 'ANDROID_AVD_HOME=/tmp/avd']
     runtime_environment = {
         'PATH', 'ANDROID_HOME', 'ANDROID_SDK_ROOT', 'JAVA_HOME',
-        'NOTEMAKER_JSVG', 'NOTEMAKER_ANDROIDSVG', 'NOTEMAKER_GL_LIBRARY_PATH',
+        'NOTEMAKER_JSVG', 'NOTEMAKER_GL_LIBRARY_PATH',
         'LD_LIBRARY_PATH', 'NIX_LD_LIBRARY_PATH', 'NIX_LD',
         'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'GDK_PIXBUF_MODULE_FILE',
         'FONTCONFIG_FILE', 'FONTCONFIG_PATH', 'XKB_CONFIG_ROOT',

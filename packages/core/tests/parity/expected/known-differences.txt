@@ -1,0 +1,6 @@
+# Substrings identifying documented Java/Rust differences (see packages/core/README.md).
+# serde_json cannot hold NaN/Infinity: Rust writes null where Java threw "Nonfinite JSON number".
+nonfinite
+# XML well-formedness errors are reported by roxmltree, not Xerces (same "Invalid SVG: " prefix).
+== svg/bad-not-xml.svg
+== svg/bad-undeclared-prefix.svg

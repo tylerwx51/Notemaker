@@ -10,13 +10,8 @@ from topology_support import Proxy, ROOT
 
 
 class StrokeRenderingChecks(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.compiled = tempfile.TemporaryDirectory()
-        cls.addClassCleanup(cls.compiled.cleanup)
-        cls.classpath = cls.compiled.name + ':' + str(ROOT / 'apps/cli/build/notemaker.jar')
-        subprocess.run(['javac', '-cp', cls.classpath, '-d', cls.compiled.name,
-                        str(ROOT / 'tests/StrokeSvgRaster.java')], check=True, capture_output=True)
+    # Rust port of tests/StrokeSvgRaster.java, built by apps/cli/build.sh.
+    RASTER = ROOT / 'target/release/stroke_svg_raster'
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -41,8 +36,7 @@ class StrokeRenderingChecks(unittest.TestCase):
         if svg:
             source = self.root / (name + '.svg')
             self.proxy.cli('export', str(source), '0', '0', '0', '200', '200')
-            subprocess.run(['java', '-Djava.awt.headless=true', '-cp', self.classpath,
-                            'StrokeSvgRaster', str(source), str(output)], check=True, capture_output=True)
+            subprocess.run([str(self.RASTER), str(source), str(output)], check=True, capture_output=True)
         else:
             self.proxy.cli('export', str(output), '0', '0', '0', '200', '200')
         return np.rint(imread(output) * 255).astype(int)
@@ -74,11 +68,16 @@ class StrokeRenderingChecks(unittest.TestCase):
                             for dy in range(3):
                                 for dx in range(3):
                                     flat &= np.all(expected[dy:dy+58, dx:dx+58] == expected[1:59, 1:59], axis=2)
-                            self.assertTrue(np.all(delta[1:59, 1:59][flat] == 0), 'crossing interior changed')
+                            # resvg (exported-SVG path) composites fill-opacity and element
+                            # opacity 1/255 apart, and antialiases clip-path masks, so the
+                            # clipped overlap layer's edge gets coverage squared. See
+                            # docs/verification.md (resvg tolerances).
+                            tolerance, mean_limit = (1, .5) if svg else (0, .25)
+                            self.assertTrue(np.all(delta[1:59, 1:59][flat] <= tolerance), 'crossing interior changed')
                             self.assertLessEqual(delta.max(), 64, 'crossing edge coverage changed')
-                            self.assertLess(delta.mean(), .25)
-                            self.assertTrue(np.array_equal(actual[30, 30], expected[30, 30]),
-                                            'crossing center must receive both passes of ink')
+                            self.assertLess(delta.mean(), mean_limit)
+                            self.assertLessEqual(np.abs(actual[30, 30] - expected[30, 30]).max(), tolerance,
+                                                 'crossing center must receive both passes of ink')
 
     def test_translucent_curves_have_no_seams_between_ribbon_passes(self):
         circle = [(100 + 60 * math.cos(math.radians(angle)),

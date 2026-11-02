@@ -99,8 +99,8 @@ with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
         print(json.dumps(metrics, indent=2), flush=True)
         check(metrics)
         adb('shell', 'am', 'force-stop', 'com.notemaker')
-        apk = adb('shell', 'pm', 'path', 'com.notemaker').strip().removeprefix('package:')
-        model = json.loads(adb('shell', 'run-as', 'com.notemaker', 'env', 'CLASSPATH='+apk, '/system/bin/app_process', '/system/bin', 'com.notemaker.cli.Main', '--state', '/data/user/0/com.notemaker/files', '--document', metrics['document'], 'inspect'))
+        from replica import cli_command
+        model = json.loads(subprocess.check_output(cli_command(SERIAL) + ['--state', '/data/user/0/com.notemaker/files', '--document', metrics['document'], 'inspect'], text=True, timeout=60))
         assert len(model['strokes']) == 1000
         sizes = [len(stroke['points']) for stroke in model['strokes']]
         assert sizes.count(50) == 990 and sizes.count(500) == 10, sizes

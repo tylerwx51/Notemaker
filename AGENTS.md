@@ -8,11 +8,16 @@ computer or the Phenom II home server. Keep application boundaries clear and
 share protocols and reusable code when there is an actual common need.
 
 Applications live in `apps/android`, `apps/server`, and `apps/cli`. The shared
-Java replica, action model, and rendering traversal live in `packages/core`.
-Keep the CLI available on both the JVM (NixOS) and Android.
+Rust replica, action model, and rendering traversal live in `packages/core`
+(crate `notemaker_core`). Keep the CLI available on both NixOS and Android (one
+Rust binary; the APK packages it). The Android app is Rust over JNI; its Java
+shim in `apps/android/shim` only forwards framework callbacks and holds no logic.
 
 Every new document/drawing action must also be exposed through the CLI, with
 structured input/output and appropriate verification using actual CLI calls.
+Every new app navigation or editor control must also have a semantic live-session
+CLI action in `UiActions`, with structured input/output and an actual CLI check.
+Update the discoverable action registry and CLI documentation with that control.
 App and CLI edits go through shared local state; neither may bypass it with
 direct server mutations. Local editing must work with the server unavailable.
 Preserve actor-specific histories and atomic actions, including entire diagrams.

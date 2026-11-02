@@ -57,6 +57,65 @@ screen. Its Android logical density may differ; confirm layouts on real hardware
 The emulator does not reproduce BOOX firmware, E Ink refresh, color rendering,
 or stylus latency and pressure.
 
+The physical NoteAir6C reports Android 16 / API 36, `arm64-v8a`, and the same
+1860 × 2480 / 300 dpi display profile. For ARM64 native-code testing on this
+x86_64 Linux computer, use the separate software-emulated target:
+
+```sh
+nix-shell --run boox-emulator-arm64
+# Or without a window:
+nix-shell --run boox-emulator-arm64-headless
+# In another terminal:
+nix-shell --run 'adb -s emulator-5574 shell getprop sys.boot_completed'
+nix-shell --run 'adb -s emulator-5574 shell am get-started-user-state 0'
+nix-shell --run 'adb -s emulator-5574 install --no-incremental -r apps/android/build/notemaker.apk'
+nix-shell --run 'adb -s emulator-5574 shell am start -n com.notemaker/.MainActivity'
+nix-shell --run 'adb -s emulator-5574 emu kill'
+```
+
+Wait for `sys.boot_completed` to report `1` and the user state to report
+`RUNNING_UNLOCKED` before installing or launching apps. User storage can take
+another minute or two to unlock after boot completion; earlier launches can
+incorrectly report that an installed activity does not exist. The ARM64 AVD is
+`notemaker-boox-air6c-arm64-api36`, with separate persistent data, 4 GiB RAM,
+four emulated cores, and port 5574 by default. Pass `-port 5576` to use a different
+port (ADB serial then becomes `emulator-5576`), or `-wipe-data` to reset only this
+AVD. Ordinary emulator flags pass through; raw `-qemu` arguments are reserved
+for the launcher, and `-avd`/`-ports` overrides are rejected. CPU translation
+makes boot and apps substantially slower than the KVM-accelerated x86_64
+target. Snapshots, Vulkan, and audio are disabled.
+
+Android Emulator 37.1.11's frontend rejects ARM64 API 36 on x86_64. The ARM64
+launcher invokes its bundled ARM64 engine directly with QEMU's `virt` machine
+and `cortex-a57` CPU instead of the incompatible default `ranchu` machine. This
+is an experimental compatibility path; SDK upgrades need a boot smoke check.
+Bubblewrap masks `/dev/kvm` only inside the ARM64 emulator's mount namespace
+to prevent its graphics memory translator from incorrectly selecting KVM.
+This requires unprivileged user namespaces; it does not change host device
+permissions or affect accelerated x86_64 emulators. The Nix shell supplies
+both images, Bubblewrap, and GDB for emulator crash diagnosis.
+
+The launcher waits for its own ADB serial, verifies the AVD name, briefly uses
+`adb root` to set `dalvik.vm.boot-image=/system/nonexistent` and
+`ro.hw_timeout_multiplier=10`, restarts the guest framework,
+then restores non-root ADB. This selects ART's class-loading fallback to avoid
+image relocation crashes under TCG, and gives the framework watchdog
+enough time for software-emulated startup. SELinux remains enforcing. No USB
+tablet is selected. Allow several minutes for boot, especially on first use;
+a verified cold restart took about 6½ minutes on this development computer.
+
+This remains experimental: NoteMaker's editor was smoke-tested, but Google's
+SDK setup app crashed while decoding a PNG during testing. ARM64 ABI agreement
+does not guarantee that every app works under this software emulator.
+Use the documented full APK transfer (`--no-incremental`). Restart this target
+by exiting and rerunning its launcher; an in-guest reboot does not rerun the
+host's runtime-configuration step.
+
+This is a generic Google APIs Android image, not BOOX firmware: ARM64 support
+does not supply BOOX framework classes, native libraries, or hardware services.
+E Ink refresh, color rendering, and stylus latency/pressure still need hardware
+validation. See [ADR 0015](docs/adr/0015-arm64-android-emulator.md).
+
 For automated testing, launch in a separate terminal or background process:
 
 ```sh
@@ -77,6 +136,17 @@ Linux acceleration requires access to `/dev/kvm` (usually membership in the
 a working graphical session is required; headless mode supports CLI testing.
 The initial `nix-shell` downloads a large SDK and system image.
 
+The Phenom II server cannot run this Android 16 image with KVM. Its CPU lacks
+SSSE3 and SSE4.x; the guest `init` process hits an illegal instruction and the
+kernel panics. An Android 8.0 / API 26 x86 image also requires SSSE3 and its
+core services repeatedly exit with illegal instructions. Software CPU
+emulation reached Android service startup but had not completed boot after
+more than an hour, so it is not a practical server target. A bare NVIDIA X
+server on display `:99` did let the emulator use the GTX 1060 for OpenGL ES;
+Plasma or GNOME is unnecessary. GPU support does not resolve the CPU
+requirement. Keep Android emulator runs on a newer host or use the physical
+tablet. See [ADR 0016](docs/adr/0016-phenom-android-vm.md).
+
 References: [Nixpkgs Android tooling](https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/android.section.md),
 [BOOX Note Air6 C specifications](https://shop.boox.com/products/noteair6c).
 
@@ -91,12 +161,47 @@ details and decompilation limitations when extraction is complete.
 
 ## Applications
 
-The repository has three applications and a shared Java core:
+The repository has three applications and a shared Rust core (a one-to-one
+port of the former Java implementation, last Java commit `0534499`):
 
-- `apps/android`: native Android 16 note-taking app for BOOX Note Air6 C.
+- `apps/android`: native Android 16 note-taking app for BOOX Note Air6 C, the
+  Rust crate `notemaker_android` (`libnotemaker.so`) behind a thin Java shim in
+  `apps/android/shim`. See [docs/design/android-port-plan.md](docs/design/android-port-plan.md).
 - `apps/server`: local HTTP server, durable SQLite operation log, and live browser viewer.
-- `apps/cli`: agent-facing CLI compiled for NixOS/JVM and Android.
+- `apps/cli`: agent-facing CLI, now the Rust crate `notemaker_cli` (native
+  binary for NixOS and Android).
+  See [apps/cli/RUST.md](apps/cli/RUST.md).
 - `packages/core`: shared local replica, atomic actions, replay, and rendering.
+  Rust crate `notemaker_core`. See [packages/core/README.md](packages/core/README.md)
+  and [docs/design/rust-port.md](docs/design/rust-port.md).
+
+Build and test the Rust core, cross-compile it for the tablet ABI, and run the
+Java/Rust parity harness:
+
+```sh
+nix-shell --run 'cargo build -p notemaker_core && cargo test -p notemaker_core'
+nix-shell --run 'cargo ndk -t arm64-v8a -P 26 build -p notemaker_core'
+packages/core/tests/parity.sh
+```
+
+`apps/cli/build.sh` runs `cargo build --release -p notemaker_cli` (CLI plus the
+probe binaries `stroke_svg_raster`, `coverage_parity`, `latency_probe` and
+`cache_footprint_probe` in `target/release`); `--android` also cross-builds them
+for arm64-v8a and x86_64 with cargo ndk (`target/<triple>/release`).
+`apps/cli/notemaker` runs `target/release/notemaker`. Both scripts, and
+`apps/android/build.sh`, honor `CARGO_TARGET_DIR` in place of `target`.
+
+The per-stroke save benchmark (ADR 0027) appends strokes to an offline replica
+through the in-process proxy and prints per-100-stroke write and read times,
+which should stay flat; `objects` measures object commits instead:
+
+```sh
+nix-shell --run 'cargo run --release -p notemaker_cli --example append_bench -- 1000'
+nix-shell --run 'cargo run --release -p notemaker_cli --example append_bench -- 1000 objects'
+```
+
+Debug builds, and any build run with `NOTEMAKER_VERIFY_APPEND=1`, check every
+store action edit against the full journal difference (slower; for tests).
 
 Build and run everything inside the Nix environment:
 
@@ -247,7 +352,7 @@ For file browsing, creation, deletion, search and offline restart checks on an i
 emulator, run `nix-shell --run 'apps/android/build.sh && python3 tests/files_android.py'`.
 This uses emulator port 5594 and saves artifacts in `.test-artifacts/files-android/`.
 
-For live CLI control of a running app session, build the JVM CLI and APK, then
+For live CLI control of a running app session, build the CLI and APK, then
 run `nix-shell --run 'python3 tests/ui_sessions_android.py'`. The isolated test
 uses emulator port 5592 and actual CLI calls through the app's local proxy.
 Run `nix-shell --run 'python3 tests/ui_topology_android.py'` to verify discovery
@@ -310,14 +415,14 @@ placement JSON specifies `x`, `y`, `w`, `h`, `layer`, `page`, and `object` ID.
 Each SVG remains a vector asset embedded in one movable, resizable, undoable
 object, available offline on both CLI runtimes. See the [SVG import profile and
 examples](apps/cli/README.md#place-a-generated-svg), including the Matplotlib
-chart generator. Nix fetches the hash-pinned
-JSVG and AndroidSVG libraries, which are bundled into the CLI/APK. Rebuild and
+chart generator. The CLI renders SVG
+objects with resvg on every platform, including the app. Rebuild and
 upgrade the app, CLI, and server together before synchronizing SVG objects.
 
 The installed Android APK includes the CLI. `MainActivity.startCli(args)` launches
 it as a child process under the app's UID and supplies its private state directory
-and current document. Server agent chats use the same local-state CLI workflow. The standalone Android
-DEX jar is also built for diagnostics. See [CLI usage and schema](apps/cli/README.md)
+and current document. Server agent chats use the same local-state CLI workflow. `apps/cli/build.sh
+--android` also builds the native Android CLI binaries for diagnostics. See [CLI usage and schema](apps/cli/README.md)
 and [ADR 0003](docs/adr/0003-local-replicas-and-cli.md).
 
 ```sh
@@ -547,8 +652,8 @@ app; omit it for ordinary Wi-Fi access or an existing mapping. Upgrade checks
 compare every saved file before/after installation, verify the installed APK
 hash, and check the active document's action contents, server identity and actor
 histories. They retain private backups and reports in `.test-artifacts/tablet/`.
-Verification uses the desktop JVM CLI through a temporary ADB forward, cleaned
-up afterward; it does not depend on standalone BOOX `app_process` shutdown.
+Verification uses the desktop CLI through a temporary ADB forward, cleaned
+up afterward.
 This does not measure physical pen latency or E Ink refresh/ghosting.
 
 For multiple computers, first provision and connect the desired proxy tree.
@@ -670,7 +775,7 @@ nix-shell --run 'python3 tests/tablet_erase_latency.py --archive .test-artifacts
 nix-shell --run 'python3 tests/tablet_erase_latency.py --interaction-suite --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/interaction-run'
 nix-shell --run 'python3 tests/tablet_erase_latency.py --cold-start --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --output .test-artifacts/latency/cold-start-run'
 # Coverage retention memory or exact old/new geometry parity on a disposable replica:
-nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --android-jar apps/cli/build/notemaker-android.jar --probe CacheFootprintProbe --output .test-artifacts/latency/memory-run'
+nix-shell --run 'python3 tests/drawing_latency.py --archive .test-artifacts/latency/tablet-files.tar --document "Drawing object protocol." --serial SERIAL --probe CacheFootprintProbe --output .test-artifacts/latency/memory-run'
 # Replace CacheFootprintProbe with CoverageParity to compare hit-test signatures.
 # Regenerate published charts from sanitized measurements; matplotlib comes from shell.nix.
 nix-shell --run 'python3 tests/plot_drawing_latency.py'
@@ -715,8 +820,8 @@ median/nearest-rank p95 timings, geometry restoration, and APK hashes.
 
 See the [latency experiment report](docs/design/latency/report.md) for measured
 tradeoffs, retained experiment branches and the remaining gap to 30 ms.
-Omit `--serial` for JVM measurements; `--android-jar` tests a candidate CLI dex jar
-without installing it. Build the JVM CLI first. Captures and reports may contain
+Omit `--serial` for host measurements; `--android-bin` tests a candidate native
+probe binary without installing it. Build the CLI first. Captures and reports may contain
 private note data and stay under `.test-artifacts/`.
 
 ### Agent chats on BOOX
@@ -753,7 +858,7 @@ python3 apps/server/server.py --port 8765 --database notemaker.sqlite3 \
 ```
 
 Use the existing primary database when restarting the primary server. The CLI
-JAR must be built before Pi can edit notes. The Nix shell supplies Node.js and
+(`apps/cli/build.sh`) must be built before Pi can edit notes. The Nix shell supplies Node.js and
 Bubblewrap; Pi is the already installed `@earendil-works/pi-coding-agent` CLI
 (tested with its RPC `agent_settled` and extension hook APIs). `--pi-command`
 can select another installation. The mock needs no provider credentials.

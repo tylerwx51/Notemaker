@@ -38,3 +38,10 @@ Build JVM CLI and APK in the Nix shell. Run `tests/ui_sessions_android.py` to
 exercise CLI session discovery, Files navigation, document and page changes,
 tool controls, and session renewal after Activity restart on API 36. Physical
 E Ink refresh and BOOX-specific behavior still need hardware checks.
+
+## Update 2026-11-02
+
+The Java implementation described here was ported one-to-one to Rust and
+removed (ADR 0026 CLI, ADR 0029 Android app, `docs/design/rust-port.md`).
+The decision stands; JVM, `app_process`, jsvg/androidsvg and `.java` details
+now refer to their Rust equivalents (native CLI binary, resvg).

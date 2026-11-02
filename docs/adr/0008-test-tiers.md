@@ -78,3 +78,10 @@ pixel contracts. The performance tier additionally requires every measured
 stroke input to finish canvas drawing in under 30 ms, with dense self-crossing
 strokes included in the workload. This remains a software timing gate rather
 than a claim about physical E Ink latency.
+
+## Update 2026-11-02
+
+The Java implementation described here was ported one-to-one to Rust and
+removed (ADR 0026 CLI, ADR 0029 Android app, `docs/design/rust-port.md`).
+The decision stands; JVM, `app_process`, jsvg/androidsvg and `.java` details
+now refer to their Rust equivalents (native CLI binary, resvg).

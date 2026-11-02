@@ -1,0 +1,20 @@
+[package]
+name = "notemaker_android"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "notemaker"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+notemaker_core = { path = "../../packages/core" }
+notemaker_cli = { path = "../cli" }
+# Same version and features as apps/cli; used for the tiny-skia/usvg types in
+# the notemaker_cli::canvas::Canvas trait (resvg re-exports both).
+resvg = { version = "0.45", default-features = false, features = ["text"] }
+jni = "0.21.1"
+libc = "0.2"
+indexmap = "2"
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

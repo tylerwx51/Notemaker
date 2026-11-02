@@ -54,11 +54,12 @@ def main():
     with (ROOT/'apps/android/build/notemaker.apk').open('rb') as source_apk:
         metadata['source_apk_sha256']=hashlib.file_digest(source_apk,'sha256').hexdigest()
     (out/'metadata.json').write_text(json.dumps(metadata,indent=2))
-    classes=out/'classes';shutil.copytree(ROOT/'apps/android/build/classes',classes)
-    source=(ROOT/'apps/android/src/com/notemaker/ReplicaService.java').read_text()
-    assert 'new LocalProxy(context.getFilesDir(),8766)' in source
-    (out/'ReplicaService.java').write_text(source.replace('new LocalProxy(context.getFilesDir(),8766)','new LocalProxy(context.getFilesDir(),0)'))
-    subprocess.run(['javac','-source','8','-target','8','-cp',str(platform)+':'+str(classes),'-d',str(classes),str(out/'ReplicaService.java')],check=True)
+    # Rebuild the native app with an ephemeral replica port (Java patched
+    # ReplicaService.java here); the shim classes.dex is reused unchanged.
+    native=out/'lib'
+    subprocess.run(['cargo','ndk','-t','arm64-v8a','-P','26','-o',str(native),'build','--release','-p','notemaker_android','-p','notemaker_cli'],
+                   cwd=ROOT,check=True,env=dict(os.environ,NOTEMAKER_REPLICA_PORT='0',CARGO_TARGET_DIR=str(ROOT/'target/latency')))
+    shutil.copy(ROOT/'target/latency/aarch64-linux-android/release/notemaker',native/'arm64-v8a/libnotemaker_cli.so')
     manifest=ET.parse(ROOT/'apps/android/AndroidManifest.xml');root=manifest.getroot();root.set('package',PACKAGE)
     ns='{http://schemas.android.com/apk/res/android}'
     for element in root.iter():
@@ -68,12 +69,10 @@ def main():
     root.find('application').set(ns+'label','NoteMaker latency test')
     manifest.write(out/'AndroidManifest.xml',encoding='utf-8')
     subprocess.run([str(build/'aapt2'),'link','-o',str(out/'base.apk'),'--manifest',str(out/'AndroidManifest.xml'),'-I',str(platform)],check=True)
-    dex=out/'dex';dex.mkdir()
-    listing=out/'classes.list';listing.write_text('\n'.join(map(str,classes.rglob('*.class'))))
-    subprocess.run([str(build/'d8'),'--min-api','26','--lib',str(platform),'--output',str(dex),'@'+str(listing),str(ROOT/'apps/android/build/androidsvg.jar')],check=True)
-    subprocess.run(['zip','-q',str(out/'base.apk'),'classes.dex'],cwd=dex,check=True)
+    subprocess.run(['zip','-q',str(out/'base.apk'),'classes.dex'],cwd=ROOT/'apps/android/build/dex',check=True)
+    subprocess.run(['zip','-q','-0','-r',str(out/'base.apk'),'lib'],cwd=out,check=True)
     apk=out/'latency.apk'
-    subprocess.run([str(build/'zipalign'),'-f','4',str(out/'base.apk'),str(apk)],check=True)
+    subprocess.run([str(build/'zipalign'),'-f','-P','16','4',str(out/'base.apk'),str(apk)],check=True)
     subprocess.run([str(build/'apksigner'),'sign','--ks',str(ROOT/'apps/android/build/debug.keystore'),'--ks-pass','pass:android',str(apk)],check=True)
     with apk.open('rb') as isolated_apk:
         metadata['isolated_apk_sha256']=hashlib.file_digest(isolated_apk,'sha256').hexdigest()

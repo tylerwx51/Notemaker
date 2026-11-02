@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
+# Build the Rust CLI (crate notemaker_cli) and its probe binaries.
+# --android also cross-builds the CLI for arm64-v8a and x86_64 with cargo ndk.
 set -euo pipefail
-cd "$(dirname "$0")"
-rm -rf build/classes build/dex
-mkdir -p build/classes build/dex
-javac --release 8 -cp "$NOTEMAKER_JSVG" -d build/classes ../../packages/core/src/com/notemaker/core/*.java src/com/notemaker/cli/*.java jvm/com/notemaker/cli/*.java
-(cd build/classes && jar xf "$NOTEMAKER_JSVG" && rm -f META-INF/MANIFEST.MF module-info.class)
-jar cfe build/notemaker.jar com.notemaker.cli.Main -C build/classes .
+cd "$(dirname "$0")/../.."
+cargo build --release -p notemaker_cli
 if [ "${1:-}" = --android ]; then
-  rm -rf build/android
-  mkdir -p build/android
-  unzip -p "$NOTEMAKER_ANDROIDSVG" classes.jar > build/androidsvg.jar
-  javac -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-36/android.jar:build/androidsvg.jar" -d build/android ../../packages/core/src/com/notemaker/core/*.java src/com/notemaker/cli/*.java android/com/notemaker/cli/*.java
-  find build/android -name '*.class' > build/android.list
-  "$ANDROID_HOME/build-tools/36.0.0/d8" --min-api 26 --lib "$ANDROID_HOME/platforms/android-36/android.jar" --output build/dex @build/android.list build/androidsvg.jar
-  mkdir -p build/dex/assets/licenses
-  cp ../android/licenses/androidsvg.txt build/dex/assets/licenses/androidsvg.txt
-  (cd build/dex && zip -q ../notemaker-android.jar classes.dex assets/licenses/androidsvg.txt)
+  cargo ndk -t arm64-v8a -t x86_64 -P 26 build --release -p notemaker_cli
 fi

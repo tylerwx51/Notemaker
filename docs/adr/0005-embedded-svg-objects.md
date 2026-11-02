@@ -27,7 +27,8 @@ preserving viewBox origin and aspect-ratio behavior. Parsed Java render assets
 use small bounded caches to avoid reparsing on tablet redraws.
 
 Bundle hash-pinned JSVG 1.4.0 for Java2D export and AndroidSVG 1.4 for Android
-canvas, thumbnails, and PNG export. Dependency declarations live with their apps;
+canvas, thumbnails, and PNG export. (The Rust CLI renders SVG objects with resvg
+instead of JSVG; see ADR 0026.) Dependency declarations live with their apps;
 the root Nix shell fetches the immutable artifacts. SVG export embeds an isolated
 SVG data image, avoiding ID/CSS collisions. The browser uses an SVG image rather
 than inserting source into the page DOM.
@@ -61,3 +62,10 @@ DTD and RDF metadata are removed by the chart generator before import; arbitrary
 DTDs and external resources remain rejected. Raster image artists such as
 `imshow` remain outside this vector profile. A CLI integration gallery covers ten
 chart types, PNG rendering, offline placement, and synchronization.
+
+## Update 2026-11-02
+
+The Java implementation described here was ported one-to-one to Rust and
+removed (ADR 0026 CLI, ADR 0029 Android app, `docs/design/rust-port.md`).
+The decision stands; JVM, `app_process`, jsvg/androidsvg and `.java` details
+now refer to their Rust equivalents (native CLI binary, resvg).

@@ -103,3 +103,10 @@ drain time, checks the incremental model against a complete replay, and reads
 all 1,000 strokes from a fresh process. Measured results belong in
 `docs/verification.md`; emulator timing does not measure E Ink scanout or pen
 hardware latency.
+
+## Update 2026-11-02
+
+The Java implementation described here was ported one-to-one to Rust and
+removed (ADR 0026 CLI, ADR 0029 Android app, `docs/design/rust-port.md`).
+The decision stands; JVM, `app_process`, jsvg/androidsvg and `.java` details
+now refer to their Rust equivalents (native CLI binary, resvg).
