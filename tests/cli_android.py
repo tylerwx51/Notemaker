@@ -80,12 +80,15 @@ def object_snapshot(object_id):
     return result
 
 def tap(value):
-    node=None
-    for _ in range(15):
+    # Tap only once the control is in the same place in two consecutive UI
+    # dumps, so a dialog or popup still opening cannot move it from under us.
+    node=None;previous=None
+    for _ in range(30):
         nodes=bridge.ui_nodes()
         node=next((n for n in nodes if n.get('content-desc')==value or n.get('text','').casefold()==value.casefold()),None)
-        if node is not None:break
-        time.sleep(.4)
+        if node is not None and previous is not None and node['bounds']==previous['bounds']:break
+        previous=node;node=None
+        time.sleep(.2)
     if node is None:
         (OUT/'missing-ui.json').write_text(json.dumps(nodes,indent=2))
         (OUT/'missing-ui.png').write_bytes(subprocess.check_output(['adb','-s',SERIAL,'exec-out','screencap','-p']))
@@ -122,6 +125,8 @@ try:
         env=dict(os.environ,ANDROID_AVD_HOME=temp+'/avd')
         emulator=subprocess.Popen(['boox-emulator-headless','-port','5584','-memory','1536','-cores','2','-gpu',os.environ.get('NOTEMAKER_TEST_GPU','host'),'-feature','-Vulkan','-wipe-data'],env=env,stdout=(OUT/'emulator.log').open('w'),stderr=subprocess.STDOUT)
         wait(lambda:adb('shell','getprop','sys.boot_completed').strip()=='1',240)
+        for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
+            adb('shell','settings','put','global',setting,'0')  # taps must not land on animating dialogs
         adb('install','-r',str(ROOT/'apps/android/build/notemaker.apk'))
         instrument('configure',document='drawing-ui',host='')
         tap('Shape tools')

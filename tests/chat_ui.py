@@ -49,15 +49,22 @@ def tree():
 
 
 def tap(value):
+    # Tap only once the control is in the same place in two consecutive UI
+    # dumps, so a dialog or popup still opening cannot move it from under us.
     deadline = time.monotonic() + 15
+    previous = None
     while True:
         nodes = tree()
         node = next((n for n in nodes.iter('node') if n.attrib.get('content-desc') == value), None)
         if node is None:
             node = next((n for n in nodes.iter('node') if n.attrib.get('text', '').casefold() == value.casefold()), None)
-        if node is not None or time.monotonic() >= deadline:
+        if node is not None and previous is not None and node.attrib['bounds'] == previous:
             break
-        time.sleep(.3)
+        previous = None if node is None else node.attrib['bounds']
+        if time.monotonic() >= deadline:
+            node = None
+            break
+        time.sleep(.2)
     if node is None:
         (OUT / 'missing.xml').write_bytes(ET.tostring(nodes))
         raise AssertionError('Missing ' + value)
@@ -103,6 +110,8 @@ try:
         emulator = subprocess.Popen(['boox-emulator-headless', '-port', '5586', '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'],
             env=env, stdout=(OUT / 'emulator.log').open('w'), stderr=subprocess.STDOUT)
         wait(lambda: adb('shell', 'getprop', 'sys.boot_completed').strip() == '1', 240)
+        for setting in ('window_animation_scale', 'transition_animation_scale', 'animator_duration_scale'):
+            adb('shell', 'settings', 'put', 'global', setting, '0')  # taps must not land on animating dialogs
         adb('install', '-r', str(ROOT / 'apps/android/build/notemaker.apk'))
         adb('shell', 'settings', 'put', 'secure', 'show_ime_with_hard_keyboard', '1')
         bridge.command('configure',document='chat-ui',host=f'http://10.0.2.2:{check.port}')

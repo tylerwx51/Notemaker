@@ -46,8 +46,8 @@ def encoded(value):
     return base64.b64encode(json.dumps(value).encode()).decode()
 
 
-def instrument(action, relaunch=True, timeout=90, **kwargs):
-    result = bridge.command(action, **kwargs)['stream']
+def instrument(action, relaunch=True, timeout=120, **kwargs):
+    result = bridge.command(action, timeout=timeout, **kwargs)['stream']
     (OUT / f'{action}.txt').write_text(result)
     if action == 'viewport' and 'PASS viewport' not in result:
         for name in ('viewport-edge-cached.png', 'viewport-edge-reference.png', 'viewport-edge-debug.txt',

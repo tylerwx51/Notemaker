@@ -47,12 +47,17 @@ class AndroidBridge:
                 time.sleep(.1)
         raise TimeoutError(f'Android instrumentation bridge did not start; see {self.log.name}')
 
-    def command(self, action, **args):
+    def command(self, action, timeout=120, **args):
+        """Runs one action; `timeout` bounds the wait for its reply (seconds)."""
         self.start()
         value = dict(action=action, **{key: str(item) for key, item in args.items()})
-        self.stream.write((json.dumps(value) + '\n').encode())
-        self.stream.flush()
-        line = self.stream.readline()
+        self.socket.settimeout(timeout)
+        try:
+            self.stream.write((json.dumps(value) + '\n').encode())
+            self.stream.flush()
+            line = self.stream.readline()
+        finally:
+            self.socket.settimeout(120)
         if not line:
             raise RuntimeError(f'Android instrumentation bridge closed during {action}; see {self.log.name}')
         result = json.loads(line)
