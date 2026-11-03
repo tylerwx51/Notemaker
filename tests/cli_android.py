@@ -15,7 +15,8 @@ import hashlib
 import shlex
 import uuid
 from browser import check_browser
-from replica import read_replica
+from replica import cli_command, read_replica
+import threading
 from topology_support import Proxy
 from android_bridge import AndroidBridge
 
@@ -167,6 +168,25 @@ try:
         state=instrument('state')
         assert len(state['model']['objects'])==11
         print('PASS Android shape/text creation, cancellation, signed lines, atomic history and offline restart',flush=True)
+        # Relaunch while another process still owns proxy.lock, as a killed
+        # predecessor does while it exits (ADR 0031): the app waits for it.
+        bridge.close();adb('shell','am','force-stop','com.notemaker')
+        holder=subprocess.Popen(cli_command(SERIAL)+['--state','/data/user/0/com.notemaker/files','--document','drawing-tools','serve','8799'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+        assert 'descriptor' in holder.stdout.readline()
+        released=[]
+        def release():
+            # Let go 1 s after the relaunched app process appears.
+            deadline=time.monotonic()+30
+            while time.monotonic()<deadline and not subprocess.run(['adb','-s',SERIAL,'shell','pidof','com.notemaker'],capture_output=True,text=True).stdout.strip():
+                time.sleep(.1)
+            time.sleep(1)
+            released.append(holder.poll() is None)
+            adb('shell','run-as','com.notemaker','pkill','-f','libnotemaker_cli');holder.wait(10)
+        threading.Thread(target=release,daemon=True).start()
+        state=instrument('state')
+        assert released==[True],released
+        assert len(state['model']['objects'])==11
+        print('PASS relaunch waits for the previous replica owner to exit',flush=True)
         instrument('configure',document='drawing-order',host='')
         state=instrument('mixed-drawing')
         objects=state['model']['objects'];strokes=state['model']['strokes']

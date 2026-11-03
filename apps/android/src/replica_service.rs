@@ -39,9 +39,36 @@ pub fn ensure(context: &Obj) -> AppResult<Arc<LocalProxy>> {
     // 8766 as in Java. Isolated latency builds (tests/tablet_erase_latency.py)
     // compile with NOTEMAKER_REPLICA_PORT=0, replacing the Java source patch.
     let port = option_env!("NOTEMAKER_REPLICA_PORT").and_then(|v| v.parse().ok()).unwrap_or(8766);
-    let p = LocalProxy::new(&dir, port)?;
+    let p = open_proxy(&dir, port)?;
     PROXY.set(Some(p.clone()));
     Ok(p)
+}
+
+/// How long a relaunched process waits for its killed predecessor to release
+/// `proxy.lock` and the proxy port.
+const TAKEOVER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `new LocalProxy(dir, port)`, retried while another process holds the
+/// replica or its port. When Android kills the app (force-stop, instrumentation
+/// restart, low memory) and immediately starts a replacement, the old process
+/// can still be exiting, so its `fcntl` lock and listening socket have not been
+/// released yet. Java tried once and crashed with "Cannot read saved document"
+/// (ADR 0031). A genuine second owner still fails, after `TAKEOVER_WAIT`.
+fn open_proxy(dir: &std::path::Path, port: i32) -> AppResult<Arc<LocalProxy>> {
+    let deadline = std::time::Instant::now() + TAKEOVER_WAIT;
+    loop {
+        match LocalProxy::new(dir, port) {
+            Ok(p) => return Ok(p),
+            Err(e) if held_by_another_process(&e) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn held_by_another_process(e: &notemaker_core::Error) -> bool {
+    e.kind.is_io() && matches!(e.message(), "A proxy already owns this replica" | "Address already in use")
 }
 
 /// Routes the shim's `onStartCommand` / `onDestroy`.

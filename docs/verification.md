@@ -1,5 +1,53 @@
 # Verification
 
+## Relaunch waits for the previous replica owner (ADR 0031) — 2026-11-03
+
+Intermittent emulator-tier failures in `cli_android` and `chat_ui` under the
+pre-commit hook were `MainActivity` crashing on relaunch with "Cannot read
+saved document". With the cause restored in the thrown exception (commit
+`35d7024e`), a dedicated emulator reproduced it two ways. Holding
+`files/proxy.lock` from another process (CLI `serve`) gives "A proxy already
+owns this replica". Listening on `127.0.0.1:8766` gives "Address already in
+use". A plain force-stop and relaunch loop (40 cycles) did not reproduce it.
+
+- With `replica_service::ensure` retrying for up to 5 s, the same emulator
+  starts normally when the lock or the port is released 1.5 s after launch. A
+  holder that never lets go still crashes after 5.3 s with the cause shown.
+- `tests/cli_android.py` adds a check: relaunch while CLI `serve` holds the
+  lock, and release it 1 s after the app process appears. It fails without
+  the retry (same crash) and passes with it.
+- `python3 tests/run.py --tier local --tier emulator`: three consecutive runs,
+  22/22 each (`.test-artifacts/runs/20261103-141750-832532/`,
+  `20261103-142210-245424/`, `20261103-142623-976551/`).
+
+Not verified: the physical tablet. The race also applies to Android
+low-memory kills followed by a relaunch.
+
+## Pre-commit hook flakes — 2026-11-03
+
+Three more intermittent failures blocked commits through the hook. None came
+from the relaunch fix above.
+
+- `selection_checks` `test_cross_proxy_preview_clears_on_deselect_and_commit`
+  failed 1 in 15 runs on its own. A trace of the child proxy's coordination
+  state showed the cause. Right after `selection deselect` removed a lease, the
+  `proxy-sync` thread restored it from the parent's not-yet-updated copy.
+  `forward_selection_change` then saw the lease present, so it never forwarded
+  the removal. The parent kept the old session's lease, and the next `select`
+  was skipped. The Java `LocalProxy` had the same check. A successful
+  deselect/disconnect now drops such restored copies and always forwards the
+  removal. 40 runs with tracing: 0 failures. The restored-lease path ran in
+  16 of them.
+- `viewport_android` timed out because `tests/drawing_android.py` passed
+  `timeout=600` for the `viewport` action, but `instrument()` ignored it and
+  the bridge socket always waited 120 s (the action normally takes about
+  100 s). `AndroidBridge.command` now takes a per-command `timeout`.
+- `cli_android` failed to find the text dialog's "Continue": the dialog was
+  gone after the field tap. `cli_android` and `chat_ui` ran with window
+  animations on (unlike `integration`), and their `tap` helpers tapped the
+  first bounds they saw. Both now turn animations off and tap only after a
+  control has the same bounds in two consecutive UI dumps.
+
 ## Rust port, final tree with Java removed — 2026-11-02
 
 All Java application sources were removed (last Java commit `0534499`; ADR
