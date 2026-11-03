@@ -12,3 +12,6 @@ __pycache__/
 boox-notes-decompiled/
 apps/cli/build/
 /target/
+# JVM font caches written under a literal "?" HOME, and Kate swap files
+/?/
+*.kate-swp
