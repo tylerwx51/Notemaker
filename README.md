@@ -575,7 +575,19 @@ nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --too
 The repository pre-commit hook runs both local and emulator tiers, excluding
 the external network and physical-tablet tiers. Enable it for this checkout with
 `git config core.hooksPath .githooks`. It runs through `nix-shell` and blocks a
-commit if a check fails. Chat proxy-routing checks verify forwarding through a
+commit if a check fails. Jujutsu has no hooks, so `.githooks/bin/jj` wraps `jj`:
+for `jj commit` and `jj ci` it runs the same hook first, and `--no-verify` skips
+it. Other subcommands pass straight through. `nix-shell` puts the wrapper first
+on `PATH`. To use it outside the shell, add this function to your zsh or bash
+startup:
+
+```sh
+jj() { if [ -x "$(git rev-parse --show-toplevel 2>/dev/null)/.githooks/bin/jj" ]; then "$(git rev-parse --show-toplevel)/.githooks/bin/jj" "$@"; else command jj "$@"; fi; }
+```
+
+The hook checks the whole working copy, even for `jj commit PATHS` or `-i`.
+
+Chat proxy-routing checks verify forwarding through a
 two-proxy chain and guard Android against using the upstream URL directly.
 
 The runner builds the required artifacts once, then schedules suites in parallel

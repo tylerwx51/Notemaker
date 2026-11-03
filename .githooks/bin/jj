@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# jj wrapper that runs the Git pre-commit hook before `jj commit` (or `jj ci`).
+#
+# Jujutsu has no hook support and does not allow an alias to override a
+# built-in command, so this script stands in for `jj` on PATH (shell.nix adds
+# .githooks/bin) or behind a shell function. It finds the hook the way Git does
+# (`git rev-parse --git-path hooks/pre-commit`, which honors core.hooksPath),
+# runs it from the workspace root, and only then hands every argument to the
+# real jj. Other subcommands, and repositories without a Git pre-commit hook,
+# pass straight through.
+#
+# Like `git commit --no-verify`, `jj commit --no-verify` skips the hook. The
+# hook checks the whole working copy, as Git's checks the whole working tree,
+# even when only some paths are committed (`jj commit PATHS` or `-i`).
+set -euo pipefail
+
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+real="${NOTEMAKER_REAL_JJ:-}"
+if [[ -z $real ]]; then
+  IFS=: read -ra dirs <<<"$PATH"
+  for dir in "${dirs[@]}"; do
+    candidate="$dir/jj"
+    if [[ -x $candidate && ! -d $candidate && "$(readlink -f "$candidate")" != "$self" ]]; then
+      real="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z $real ]]; then
+  echo "jj wrapper: no jj found on PATH besides $self" >&2
+  exit 127
+fi
+
+# Find the subcommand, skipping global options (and the values of those that
+# take one) and noting -R/--repository.
+argv=("$@")
+repo=""
+sub=""
+i=0
+while ((i < ${#argv[@]})); do
+  arg="${argv[i]}"
+  case "$arg" in
+    -R | --repository) repo="${argv[i + 1]:-}"; i=$((i + 2)); continue ;;
+    --repository=*) repo="${arg#*=}" ;;
+    -R?*) repo="${arg#-R}" ;;
+    --at-op | --at-operation | --color | --config | --config-file) i=$((i + 2)); continue ;;
+    --) break ;;
+    -*) ;;
+    *) sub="$arg"; break ;;
+  esac
+  i=$((i + 1))
+done
+
+if [[ $sub != commit && $sub != ci ]]; then
+  exec "$real" "$@"
+fi
+
+# Drop --no-verify (jj does not know it) from the subcommand's options.
+verify=1
+args=("${argv[@]:0:i+1}")
+for ((j = i + 1; j < ${#argv[@]}; j++)); do
+  if [[ ${argv[j]} == -- ]]; then
+    args+=("${argv[@]:j}")
+    break
+  elif [[ ${argv[j]} == --no-verify ]]; then
+    verify=0
+  elif [[ ${argv[j]} == -h || ${argv[j]} == --help ]]; then
+    verify=0
+    args+=("${argv[j]}")
+  else
+    args+=("${argv[j]}")
+  fi
+done
+
+if ((verify)); then
+  root="$(cd "${repo:-.}" && "$real" --ignore-working-copy root 2>/dev/null)" || root=""
+  if [[ -n $root ]] && hook="$(git -C "$root" rev-parse --git-path hooks/pre-commit 2>/dev/null)"; then
+    [[ $hook == /* ]] || hook="$root/$hook"
+    if [[ -x $hook ]]; then
+      if ! (cd "$root" && "$hook"); then
+        echo "jj commit: pre-commit hook failed; nothing was committed (jj commit --no-verify skips it)." >&2
+        exit 1
+      fi
+    fi
+  fi
+fi
+
+exec "$real" "${args[@]}"

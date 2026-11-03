@@ -106,6 +106,8 @@ pkgs.mkShell {
   shellHook = ''
     export XDG_RUNTIME_DIR="''${XDG_RUNTIME_DIR:-$HOME/.cache/notemaker/docker-runtime}"
     export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/docker.sock"
+    # `jj commit` runs the Git pre-commit hook first (Jujutsu has no hooks).
+    export PATH="${toString ./.}/.githooks/bin:$PATH"
     echo "Android 16 ready: boox-emulator (GUI), boox-emulator-headless (automated testing), adb"
     echo "ARM64 Android 16: boox-emulator-arm64, boox-emulator-arm64-headless (software CPU emulation)"
     echo "Rootless Docker: start notemaker-dockerd in another shell; socket is $DOCKER_HOST"
