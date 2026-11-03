@@ -1946,7 +1946,7 @@ impl LocalProxy {
         cli::PROXY_INPUT.with(|p| *p.borrow_mut() = None);
         cli::IN_PROXY.with(|p| p.set(false));
         if cmd == "selection" {
-            let _ = self.forward_selection_change(&local, &doc, &actor, &args, &previous_leases);
+            let _ = self.forward_selection_change(&local, &doc, &actor, &args, &previous_leases, result.is_ok());
         }
         let action = uploads_changes(&cmd, &args);
         let after_state = local.read()?;
@@ -1963,6 +1963,7 @@ impl LocalProxy {
         actor: &str,
         args: &[String],
         previous_leases: &Map,
+        succeeded: bool,
     ) -> Result<()> {
         let mut session = if args.len() > 1 {
             args[args.len() - 1].clone()
@@ -2000,18 +2001,36 @@ impl LocalProxy {
         for old in jutil::hash_order(cleared.iter()) {
             self.clear_preview(doc, &old, actor);
         }
-        let current = leases_of(&local.read()?.map)?;
-        let mut removed = Vec::new();
+        // A successful deselect/disconnect released these leases even if the
+        // sync thread has since restored them from the upstream's stale copy
+        // (it fetched before this removal was forwarded). Drop restored copies
+        // again and forward the removal; otherwise the upstream keeps the old
+        // session's lease and this actor's next selection is skipped.
+        let released = succeeded && args.len() > 1 && (args[1] == "deselect" || args[1] == "disconnect");
+        let same_holder = |a: &Map, b: &Value| json::map(b).is_ok_and(|b| a.get("session") == b.get("session") && a.get("actor") == b.get("actor"));
+        let mut owned = Vec::new();
         for (key, value) in previous_leases {
             let lease = json::map(value)?;
-            if (session.is_empty()
-                || lease.get("session").and_then(Value::as_str) == Some(session.as_str()))
+            if (session.is_empty() || lease.get("session").and_then(Value::as_str) == Some(session.as_str()))
                 && lease.get("actor").and_then(Value::as_str) == Some(actor)
-                && !current.contains_key(key)
             {
-                removed.push(Value::from(key.clone()));
+                owned.push((key.clone(), lease.clone()));
             }
         }
+        if released {
+            local.edit_transient(&mut |s| {
+                let mut leases = leases_of(s)?;
+                for (key, lease) in &owned {
+                    if leases.get(key).is_some_and(|now| same_holder(lease, now)) {
+                        leases.shift_remove(key);
+                    }
+                }
+                s.insert("leases".into(), Value::Object(leases));
+                Ok(())
+            })?;
+        }
+        let current = leases_of(&local.read()?.map)?;
+        let removed: Vec<Value> = owned.iter().filter(|(key, _)| !current.contains_key(key)).map(|(key, _)| Value::from(key.clone())).collect();
         let mut changed_leases = Map::new();
         for (key, value) in &current {
             if previous_leases.get(key) != Some(value) {
