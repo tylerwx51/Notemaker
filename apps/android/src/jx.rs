@@ -558,8 +558,29 @@ pub fn throw_to_java(error: &JavaError) {
         let _ = env.throw(unsafe { JThrowable::from_raw(t.raw()) });
     } else {
         let class = if find_class(&error.class.replace('.', "/")).is_ok() { error.class.replace('.', "/") } else { "java/lang/RuntimeException".into() };
-        let _ = env.throw_new(class, error.message.clone().unwrap_or_else(|| error.text.clone()));
+        let message = error.message.clone().unwrap_or_else(|| error.text.clone());
+        // `new RuntimeException(message, cause)`: keep the cause in the Java
+        // stack trace ("Caused by: ...") as the Java implementation did.
+        if let Some(cause) = error.stack.strip_prefix("Caused by: ") {
+            match chained(&mut env, &class, &message, cause.trim_end()) {
+                Some(t) => {
+                    let _ = env.throw(t);
+                    return;
+                }
+                None => {
+                    let _ = env.exception_clear();
+                }
+            }
+        }
+        let _ = env.throw_new(class, message);
     }
+}
+fn chained(env: &mut JNIEnv<'static>, class: &str, message: &str, cause: &str) -> Option<JThrowable<'static>> {
+    let cause_text = env.new_string(cause).ok()?;
+    let cause = env.new_object("java/lang/RuntimeException", "(Ljava/lang/String;)V", &[(&cause_text).into()]).ok()?;
+    let text = env.new_string(message).ok()?;
+    let t = env.new_object(class, "(Ljava/lang/String;Ljava/lang/Throwable;)V", &[(&text).into(), (&cause).into()]).ok()?;
+    Some(JThrowable::from(t))
 }
 
 /// Java string → Rust.
