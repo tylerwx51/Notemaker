@@ -1,0 +1,23 @@
+[package]
+name = "notemaker_lints"
+version = "0.1.0"
+description = "NoteMaker Dylint lints"
+edition = "2024"
+publish = false
+license = "UNLICENSED"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dylint_linting = "6.3.2"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+dylint_testing = "6.3.2"
+
+# Built with its own nightly toolchain, outside the root workspace.
+[workspace]
+
+[package.metadata.rust-analyzer]
+rustc_private = true

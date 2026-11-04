@@ -1,0 +1,7 @@
+# Dylint lint libraries link against rustc internals, so they need a pinned
+# nightly with rustc-dev. This is the nightly dylint 6.3.2 targets. The
+# NoteMaker crates themselves stay on the root stable toolchain.
+[toolchain]
+channel = "nightly-2026-08-20"
+components = ["llvm-tools-preview", "rustc-dev", "rustfmt"]
+profile = "minimal"

@@ -10,3 +10,11 @@ license = "UNLICENSED"
 [profile.release]
 debug = 1
 panic = "unwind"
+
+# Dylint sets `--cfg dylint_lib=".."`, used to allow its lints per item.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(dylint_lib, values(any()))'] }
+
+# Project lints run with `cargo dylint --all` (see README "Lints").
+[workspace.metadata.dylint]
+libraries = [{ path = "tools/lints/notemaker_lints" }]

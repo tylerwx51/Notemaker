@@ -1,0 +1,139 @@
+warning: `u32` in the signature of a non-private function
+  --> $DIR/main.rs:12:24
+   |
+LL | pub fn primitive(page: u32) -> bool {
+   |                        ^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+   = note: `#[warn(raw_type_in_signature)]` on by default
+
+warning: `bool` in the signature of a non-private function
+  --> $DIR/main.rs:12:32
+   |
+LL | pub fn primitive(page: u32) -> bool {
+   |                                ^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `str` in the signature of a non-private function
+  --> $DIR/main.rs:15:35
+   |
+LL | pub(crate) fn crate_visible(name: &str) {}
+   |                                   ^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `[PageNumber; 2]` in the signature of a non-private function
+  --> $DIR/main.rs:16:22
+   |
+LL | pub fn array(points: [PageNumber; 2]) {}
+   |                      ^^^^^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `[PageNumber]` in the signature of a non-private function
+  --> $DIR/main.rs:17:21
+   |
+LL | pub fn slice(pages: &[PageNumber]) {}
+   |                     ^^^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `(PageNumber, Title)` in the signature of a non-private function
+  --> $DIR/main.rs:18:19
+   |
+LL | pub fn tuple() -> (PageNumber, Title) {
+   |                   ^^^^^^^^^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `std::string::String` in the signature of a non-private function
+  --> $DIR/main.rs:21:21
+   |
+LL | pub fn alias(title: Alias) {}
+   |                     ^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `std::vec::Vec<PageNumber>` in the signature of a non-private function
+  --> $DIR/main.rs:22:19
+   |
+LL | pub fn vec(pages: Vec<PageNumber>) {}
+   |                   ^^^^^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `u32` in the signature of a non-private function
+  --> $DIR/main.rs:23:28
+   |
+LL | pub fn inside_option(page: Option<u32>) {}
+   |                            ^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `std::string::String` in the signature of a non-private function
+  --> $DIR/main.rs:24:27
+   |
+LL | pub fn inside_result() -> Result<Title, String> {
+   |                           ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `i64` in the signature of a non-private function
+  --> $DIR/main.rs:27:36
+   |
+LL | pub fn inside_local_generic(value: Wrapper<i64>) {}
+   |                                    ^^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `u8` in the signature of a non-private function
+  --> $DIR/main.rs:28:29
+   |
+LL | pub fn fn_pointer(callback: fn(u8)) {}
+   |                             ^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `i64` in the signature of a non-private function
+  --> $DIR/main.rs:29:45
+   |
+LL | pub extern "system" fn exported_jni(handle: i64) {}
+   |                                             ^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `usize` in the signature of a non-private function
+  --> $DIR/main.rs:33:30
+   |
+LL |     pub fn nested_pub(count: usize) {}
+   |                              ^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `std::path::PathBuf` in the signature of a non-private function
+  --> $DIR/main.rs:34:39
+   |
+LL |     pub(super) fn super_visible(path: std::path::PathBuf) {}
+   |                                       ^^^^^^^^^^^^^^^^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `u32` in the signature of a non-private function
+  --> $DIR/main.rs:41:32
+   |
+LL |     pub fn method(&self, page: u32) {}
+   |                                ^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: `f32` in the signature of a non-private function
+  --> $DIR/main.rs:49:29
+   |
+LL |     fn render(&self, scale: f32);
+   |                             ^^^
+   |
+   = help: wrap it in a descriptive newtype defined in this crate
+
+warning: 17 warnings emitted
+

@@ -32,3 +32,6 @@ rcgen = "0.13"
 [[example]]
 name = "parity"
 path = "tests/parity/parity.rs"
+
+[lints]
+workspace = true

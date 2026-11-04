@@ -48,6 +48,32 @@ from the relaunch fix above.
   first bounds they saw. Both now turn animations off and tap only after a
   control has the same bounds in two consecutive UI dumps.
 
+## Newtype signature lint (ADR 0030) — 2026-11-03
+
+- `cargo-dylint` and `dylint-link` 6.3.2 build from `tools/nix/dylint.nix`.
+  `nix-shell --run 'cargo dylint --version'` reports 6.3.2.
+- `cargo test` in `tools/lints/notemaker_lints` (nightly-2026-08-20) passes.
+  The UI test `ui/main.rs` covers:
+  - flagged: primitives, `str`, arrays, slices, tuples, aliases, `Vec`,
+    contents of `Option`/`Result`, generic arguments of local types, function
+    pointers, `pub extern "system"`, `pub` in a private module, `pub(super)`,
+    `pub(crate)` at the crate root, inherent methods, and methods of public
+    traits.
+  - not flagged: newtypes, `()`, generics, `impl Trait`, `dyn Trait`, private
+    and `pub(self)` functions, private traits, private `#[no_mangle]`
+    `extern "system"` functions, trait impls, and `#[allow]`.
+- `cargo dylint --all -- --workspace` on the workspace: 537, 173 and 1,294
+  warnings for core, CLI and Android. The build succeeds (warn level).
+  `cargo check --workspace` on stable 1.95 has no warnings.
+- A temporary probe function in `notemaker_cli` with
+  `#[cfg_attr(dylint_lib = "notemaker_lints", allow(raw_type_in_signature))]`
+  was not reported by Dylint. With `[workspace.lints.rust]` registering the
+  `dylint_lib` cfg, the stable build had no `unexpected_cfgs` warning. The
+  probe was removed.
+
+Not verified: an offline first run. The nightly and the Dylint driver are
+downloaded on first use.
+
 ## Rust port, final tree with Java removed — 2026-11-02
 
 All Java application sources were removed (last Java commit `0534499`; ADR

@@ -18,3 +18,6 @@ jni = "0.21.1"
 libc = "0.2"
 indexmap = "2"
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+
+[lints]
+workspace = true

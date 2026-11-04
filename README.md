@@ -150,6 +150,34 @@ tablet. See [ADR 0016](docs/adr/0016-phenom-android-vm.md).
 References: [Nixpkgs Android tooling](https://github.com/NixOS/nixpkgs/blob/master/doc/languages-frameworks/android.section.md),
 [BOOX Note Air6 C specifications](https://shop.boox.com/products/noteair6c).
 
+## Lints
+
+Project lints are [Dylint](https://github.com/trailofbits/dylint) libraries in
+`tools/lints/`. `shell.nix` provides `cargo-dylint` and `dylint-link`
+(packaged in `tools/nix/dylint.nix`). Each lint library pins its own nightly
+in its `rust-toolchain.toml`. rustup installs that nightly on first use, and
+Dylint downloads and builds a matching driver from crates.io into
+`~/.dylint_drivers`, so the first run needs network access.
+
+```sh
+# Lint every workspace crate (warnings only; the build does not fail).
+nix-shell --run 'cargo dylint --all -- --workspace'
+# Test the lint library itself (UI test in tools/lints/notemaker_lints/ui).
+nix-shell --run 'cd tools/lints/notemaker_lints && cargo test'
+```
+
+`raw_type_in_signature` (ADR 0030) warns when a non-private function (any
+written `pub`, including `pub(crate)`) has a parameter or return type that is a
+primitive, array, slice, tuple, or a type from another crate. `Option` and
+`Result` are allowed when their contents pass, and types from crates listed in
+`dylint.toml` (`notemaker_core`) count as local. Wrap the value in a descriptive
+newtype instead. To silence one function without upsetting the stable build,
+which does not know the lint, use:
+
+```rust
+#[cfg_attr(dylint_lib = "notemaker_lints", allow(raw_type_in_signature))]
+```
+
 ## Inspecting the BOOX Notes APK
 
 The Nix shell includes `jadx` (Java decompilation) and `apktool` (decoded

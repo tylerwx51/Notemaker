@@ -50,3 +50,6 @@ png = "0.17"
 gif = "0.13"
 jpeg-decoder = { version = "0.3", default-features = false }
 i_overlay = "9.1.0"
+
+[lints]
+workspace = true
