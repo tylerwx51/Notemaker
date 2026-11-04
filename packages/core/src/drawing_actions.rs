@@ -5,7 +5,8 @@ use crate::actions;
 use crate::coverage::CoverageFactory;
 use crate::draw_item::DrawItem;
 use crate::error::{require, Error, Result};
-use crate::geometry::{self, Polygon};
+use crate::geometry::{DocPoint, Erasures, Polygon, Radius, Segment};
+use crate::ids::{self, EntityId, EntityKind, LayerId, LayerPosition};
 use crate::image_asset;
 use crate::jfmt;
 use crate::jmath;
@@ -41,8 +42,8 @@ fn checked(result: Vec<Value>) -> Result<Vec<Value>> {
     Ok(result)
 }
 
-fn layer_or_base(input: &Map) -> Result<String> {
-    Ok(json::string_or(input, "layer", "base")?.ok_or_else(Error::null_pointer)?.to_string())
+fn layer_or_base(input: &Map) -> Result<LayerId> {
+    Ok(LayerId::from(json::string_or(input, "layer", "base")?.ok_or_else(Error::null_pointer)?))
 }
 
 /// `copySelection(model, entities)`: clipboard snapshot; detached connectors keep their geometry.
@@ -68,10 +69,10 @@ pub fn copy_selection(model: &Model, entities: &[Value]) -> Result<Vec<Value>> {
         let mut next = clone_op(original);
         if kind == "object" && (original.contains_key("from") || original.contains_key("to")) && (!node(original.get("from")) || !node(original.get("to"))) {
             let ends = render::endpoints(model, original)?;
-            next.insert("x".into(), json::double(ends[0]));
-            next.insert("y".into(), json::double(ends[1]));
-            next.insert("w".into(), json::double(ends[2] - ends[0]));
-            next.insert("h".into(), json::double(ends[3] - ends[1]));
+            next.insert("x".into(), json::double(ends.start.x));
+            next.insert("y".into(), json::double(ends.start.y));
+            next.insert("w".into(), json::double(ends.end.x - ends.start.x));
+            next.insert("h".into(), json::double(ends.end.y - ends.start.y));
             next.shift_remove("from");
             next.shift_remove("to");
             next.insert("rotation".into(), Value::from(0));
@@ -91,7 +92,7 @@ pub fn paste(model: &Model, input: &Map) -> Result<Vec<Value>> {
     let dy = opt(input, "dy", 24.0)?;
     require(dx.is_finite() && dy.is_finite() && dx.abs() <= 1000000.0 && dy.abs() <= 1000000.0, "Invalid paste offset")?;
     let layer = layer_or_base(input)?;
-    require(model.layers.contains_key(&layer), "Unknown paste layer")?;
+    require(model.layers.contains_key(layer.as_ref()), "Unknown paste layer")?;
     let mut ids: HashMap<String, String> = HashMap::new();
     for value in entities {
         let source = json::map(value)?;
@@ -100,7 +101,7 @@ pub fn paste(model: &Model, input: &Map) -> Result<Vec<Value>> {
         Model::validate(source)?;
         let key = format!("{}:{}", kind, json::string(source, kind)?);
         require(!ids.contains_key(&key), "Duplicate clipboard entity")?;
-        ids.insert(key, actions::id());
+        ids.insert(key, String::from(ids::Uuid::random()));
     }
     let mut out = Vec::new();
     for value in entities {
@@ -109,7 +110,7 @@ pub fn paste(model: &Model, input: &Map) -> Result<Vec<Value>> {
         let kind = json::string(source, "kind")?;
         let new_id = ids.get(&format!("{}:{}", kind, json::string(source, kind)?)).cloned();
         next.insert(kind.to_string(), new_id.map(Value::String).unwrap_or(Value::Null));
-        next.insert("layer".into(), Value::String(layer.clone()));
+        next.insert("layer".into(), Value::from(&layer));
         if input.contains_key("page") {
             next.insert("page".into(), input.get("page").cloned().unwrap_or(Value::Null));
         }
@@ -141,9 +142,10 @@ pub fn paste(model: &Model, input: &Map) -> Result<Vec<Value>> {
 }
 
 /// `duplicateLayer(m, id)`: a copy of the layer and its active content.
-pub fn duplicate_layer(m: &Model, id: &str) -> Result<Vec<Value>> {
+pub fn duplicate_layer(m: &Model, id: &LayerId) -> Result<Vec<Value>> {
+    let id: &str = id;
     require(m.layers.contains_key(id), "Unknown layer")?;
-    let target = actions::id();
+    let target = String::from(ids::Uuid::random());
     let mut result = Vec::new();
     let mut layer = clone_op(&m.layers[id]);
     layer.insert("layer".into(), Value::String(target.clone()));
@@ -154,7 +156,7 @@ pub fn duplicate_layer(m: &Model, id: &str) -> Result<Vec<Value>> {
     for o in m.objects.values() {
         let object_id = json::key_of(o.get("object"));
         if o.get("layer").and_then(Value::as_str) == Some(id) && object_id.and_then(|k| m.object_active.get(k)) != Some(&false) {
-            ids.insert(json::string(o, "object")?.to_string(), actions::id());
+            ids.insert(json::string(o, "object")?.to_string(), String::from(ids::Uuid::random()));
         }
     }
     for o in m.objects.values() {
@@ -175,7 +177,7 @@ pub fn duplicate_layer(m: &Model, id: &str) -> Result<Vec<Value>> {
         if s.get("layer").and_then(Value::as_str) == Some(id) && stroke_id.and_then(|k| m.active.get(k)) != Some(&false) {
             let mut n = clone_op(s);
             n.insert("layer".into(), Value::String(target.clone()));
-            n.insert("stroke".into(), Value::String(actions::id()));
+            n.insert("stroke".into(), Value::String(String::from(ids::Uuid::random())));
             result.push(Value::Object(n));
         }
     }
@@ -183,7 +185,8 @@ pub fn duplicate_layer(m: &Model, id: &str) -> Result<Vec<Value>> {
 }
 
 /// `mergeLayer(m, source, target)`: move content to `target` and hide `source`.
-pub fn merge_layer(m: &Model, source: &str, target: &str) -> Result<Vec<Value>> {
+pub fn merge_layer(m: &Model, source: &LayerId, target: &LayerId) -> Result<Vec<Value>> {
+    let (source, target): (&str, &str) = (source, target);
     require(source != target && source != "base", "Select a non-base source and a different target")?;
     require(m.layers.contains_key(source) && m.layers.contains_key(target), "Unknown layer")?;
     require(m.layer_active.get(target) != Some(&false), "Target layer is hidden")?;
@@ -202,7 +205,8 @@ pub fn merge_layer(m: &Model, source: &str, target: &str) -> Result<Vec<Value>> 
 }
 
 /// `reorderLayer(m, id, index)`: renumber every layer's `order`.
-pub fn reorder_layer(m: &Model, id: &str, index: i32) -> Result<Vec<Value>> {
+pub fn reorder_layer(m: &Model, id: &LayerId, index: LayerPosition) -> Result<Vec<Value>> {
+    let (id, index) = (&**id, index.0);
     require(m.layers.contains_key(id) && index >= 0 && (index as usize) < m.layers.len(), "Invalid layer position")?;
     let mut layers: Vec<&Map> = m.layers.values().map(|l| &**l).collect();
     let mut indices: HashMap<String, i32> = HashMap::new();
@@ -266,7 +270,7 @@ pub fn template(m: &Model, input: &Map) -> Result<Vec<Value>> {
             }
         }
         let mut result = Vec::new();
-        if !json::is_false(input.get("background")) {
+        if !is_false(input.get("background")) {
             let layer = format!("template-{}", layer_editor::page(input)?);
             let mut order = -1.0f64;
             for existing in m.layers.values() {
@@ -288,7 +292,7 @@ pub fn template(m: &Model, input: &Map) -> Result<Vec<Value>> {
         None => -3355444,
         v => json::as_int(v)?,
     };
-    let hex = jfmt::hex_color(color);
+    let hex = crate::style::ArgbColor(color).to_hex();
     let scale = jmath::max(1.0, jmath::max(w, h) / 1000.0);
     let f = jfmt::double;
     let mut svg = format!(
@@ -340,7 +344,7 @@ pub fn template(m: &Model, input: &Map) -> Result<Vec<Value>> {
         }
     }
     let mut result = Vec::new();
-    if !json::is_false(input.get("background")) {
+    if !is_false(input.get("background")) {
         let layer = format!("template-{}", layer_editor::page(input)?);
         let mut order = -1.0f64;
         for existing in m.layers.values() {
@@ -374,7 +378,7 @@ pub fn fill(m: &Model, input: &Map) -> Result<Vec<Value>> {
     let layer = layer_or_base(input)?;
     if input.contains_key("object") {
         let editor = LayerEditor::new(m, &layer, layer_editor::page(input)?)?;
-        let old = &editor.resolve("object", json::string(input, "object")?)?.content;
+        let old = &editor.resolve(&EntityKind::object(), &EntityId::from(json::string(input, "object")?))?.content;
         require(
             !matches!(old.get("shape").and_then(Value::as_str), Some("svg" | "image" | "text" | "line" | "arrow" | "wave" | "curve" | "polyline")),
             "Object has no enclosed native fill",
@@ -384,7 +388,7 @@ pub fn fill(m: &Model, input: &Map) -> Result<Vec<Value>> {
         return checked(vec![Value::Object(o)]);
     }
     let editor = LayerEditor::new(m, &layer, layer_editor::page(input)?)?;
-    let s = editor.resolve("stroke", json::string(input, "stroke")?)?.content.clone();
+    let s = editor.resolve(&EntityKind::stroke(), &EntityId::from(json::string(input, "stroke")?))?.content.clone();
     let p = json::list_at(&s, "points")?;
     require(p.len() >= 3, "Fill needs a closed outline")?;
     let first = point(&p[0])?;
@@ -414,9 +418,9 @@ pub fn fill(m: &Model, input: &Map) -> Result<Vec<Value>> {
         f(w / scale),
         f(h / scale),
         polygon,
-        jfmt::hex_color(json::as_int(s.get("color"))?),
+        crate::style::ArgbColor(json::as_int(s.get("color"))?).to_hex(),
         f(json::number(&s, "width")? / scale),
-        jfmt::hex_color(color),
+        crate::style::ArgbColor(color).to_hex(),
         f(((color as u32) >> 24) as f64 / 255.0)
     );
     let mut filled = actions::drawing(
@@ -424,7 +428,7 @@ pub fn fill(m: &Model, input: &Map) -> Result<Vec<Value>> {
             "shape" => "svg", "svg" => svg, "x" => json::double(b[0] - pad), "y" => json::double(b[1] - pad),
             "w" => json::double(w), "h" => json::double(h), "page" => s.get("page").cloned().unwrap_or(Value::Null),
         },
-        json::string(&s, "layer")?,
+        &LayerId::from(json::string(&s, "layer")?),
     )?;
     if s.contains_key("erasures") {
         filled = DrawItem::from_map(m, filled)?.erase(&DrawItem::erasures(&s)?)?;
@@ -461,11 +465,11 @@ pub fn erase(m: &Model, input: &Map, factory: &dyn CoverageFactory) -> Result<Ve
     let editor = LayerEditor::for_erase(m, &layer_or_base(input)?, layer_editor::page(input)?)?;
     let radius = opt(input, "radius", 12.0)?;
     require(radius.is_finite() && (1.0..=10000.0).contains(&radius), "Invalid eraser radius")?;
-    let regions = if mode == "page" { Vec::new() } else { erase_regions(input)? };
-    let mut hits: Vec<(&DrawItem, Vec<Polygon>)> = Vec::new();
+    let regions = if mode == "page" { Erasures::default() } else { erase_regions(input)? };
+    let mut hits: Vec<(&DrawItem, Erasures)> = Vec::new();
     for item in editor.items() {
         let mut hit = mode == "page";
-        let mut touching = Vec::new();
+        let mut touching = Erasures::default();
         for region in &regions {
             if item.intersects(region, factory)? {
                 hit = true;
@@ -493,10 +497,10 @@ pub fn erase(m: &Model, input: &Map, factory: &dyn CoverageFactory) -> Result<Ve
 }
 
 /// `eraseRegions(input)`: exact swept capsules for feedback and durable erasing.
-pub fn erase_regions(input: &Map) -> Result<Vec<Polygon>> {
+pub fn erase_regions(input: &Map) -> Result<Erasures> {
     let radius = opt(input, "radius", 12.0)?;
     require(radius.is_finite() && (1.0..=10000.0).contains(&radius), "Invalid eraser radius")?;
-    let mut regions = Vec::new();
+    let mut regions = Erasures::default();
     let path = json::list_at(input, "points")?;
     require(!path.is_empty() && path.len() <= 2000, "Eraser needs 1–2000 points")?;
     let mut distinct: Vec<[f64; 3]> = Vec::new();
@@ -524,11 +528,18 @@ pub fn erase_regions(input: &Map) -> Result<Vec<Polygon>> {
     }
     let mut prior = distinct[0];
     if distinct.len() == 1 {
-        regions.push(geometry::capsule([prior[0], prior[1]], [prior[0], prior[1]], radius));
+        let at = DocPoint { x: prior[0], y: prior[1] };
+        regions.push(Polygon::capsule(Segment { start: at, end: at }, Radius(radius)));
     }
     for next in distinct.iter().skip(1) {
-        regions.push(geometry::capsule([prior[0], prior[1]], [next[0], next[1]], radius));
+        regions.push(Polygon::capsule(Segment { start: DocPoint { x: prior[0], y: prior[1] }, end: DocPoint { x: next[0], y: next[1] } }, Radius(radius)));
         prior = *next;
     }
     Ok(regions)
+}
+
+/// `Boolean.FALSE.equals(value)`.
+#[inline]
+fn is_false(value: Option<&Value>) -> bool {
+    matches!(value, Some(Value::Bool(false)))
 }

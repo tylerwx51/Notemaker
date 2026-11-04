@@ -4,12 +4,87 @@
 //! `CLASS_FIELD` (nested classes joined with `_`). Enum-like objects
 //! (`Paint.Style.FILL`, `Path.Op.UNION`, `Bitmap.Config.ARGB_8888`, …) are not
 //! constants: read them with `jsget!`.
+//!
+//! Constants that a typed helper takes ([`Visibility`], [`Gravity`],
+//! [`Orientation`], [`ToastDuration`]) have that type; the others stay `int`.
 #![allow(dead_code)]
+
+use crate::jx::Arg;
+
+/// `View.setVisibility` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Visibility {
+    /// `View.VISIBLE`
+    Visible,
+    /// `View.GONE`
+    Gone,
+}
+impl<'a> From<Visibility> for Arg<'a> {
+    fn from(v: Visibility) -> Self {
+        Arg::Int(match v {
+            Visibility::Visible => 0,
+            Visibility::Gone => 8,
+        })
+    }
+}
+
+/// `android.view.Gravity` bits; combine with `|`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gravity(pub i32);
+impl std::ops::BitOr for Gravity {
+    type Output = Gravity;
+    fn bitor(self, other: Gravity) -> Gravity {
+        Gravity(self.0 | other.0)
+    }
+}
+impl<'a> From<Gravity> for Arg<'a> {
+    fn from(g: Gravity) -> Self {
+        Arg::Int(g.0)
+    }
+}
+
+/// A `MotionEvent.getActionMasked()` value (`MOTIONEVENT_ACTION_*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MotionAction(pub i32);
+
+/// `LinearLayout.setOrientation` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Orientation {
+    /// `LinearLayout.HORIZONTAL`
+    Horizontal,
+    /// `LinearLayout.VERTICAL`
+    Vertical,
+}
+impl<'a> From<Orientation> for Arg<'a> {
+    fn from(o: Orientation) -> Self {
+        Arg::Int(match o {
+            Orientation::Horizontal => 0,
+            Orientation::Vertical => 1,
+        })
+    }
+}
+
+/// `Toast.makeText` durations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastDuration {
+    /// `Toast.LENGTH_SHORT`
+    Short,
+    /// `Toast.LENGTH_LONG`
+    Long,
+}
+impl<'a> From<ToastDuration> for Arg<'a> {
+    fn from(d: ToastDuration) -> Self {
+        Arg::Int(match d {
+            ToastDuration::Short => 0,
+            ToastDuration::Long => 1,
+        })
+    }
+}
 
 /// `android.graphics.Color.BLACK`
 pub const COLOR_BLACK: i32 = 0xff000000u32 as i32;
 /// `android.widget.Toast.LENGTH_LONG`
-pub const TOAST_LENGTH_LONG: i32 = 1;
+pub const TOAST_LENGTH_LONG: ToastDuration = ToastDuration::Long;
 /// `android.graphics.Paint.ANTI_ALIAS_FLAG`
 pub const PAINT_ANTI_ALIAS_FLAG: i32 = 1;
 /// `android.view.MotionEvent.ACTION_MOVE`
@@ -27,25 +102,25 @@ pub const COLOR_TRANSPARENT: i32 = 0;
 /// `android.util.Base64.DEFAULT`
 pub const BASE64_DEFAULT: i32 = 0;
 /// `android.widget.Toast.LENGTH_SHORT`
-pub const TOAST_LENGTH_SHORT: i32 = 0;
+pub const TOAST_LENGTH_SHORT: ToastDuration = ToastDuration::Short;
 /// `android.view.InputDevice.SOURCE_STYLUS`
 pub const INPUTDEVICE_SOURCE_STYLUS: i32 = 16386;
 /// `android.view.Gravity.CENTER_VERTICAL`
-pub const GRAVITY_CENTER_VERTICAL: i32 = 16;
+pub const GRAVITY_CENTER_VERTICAL: Gravity = Gravity(16);
 /// `android.view.Gravity.CENTER`
-pub const GRAVITY_CENTER: i32 = 17;
+pub const GRAVITY_CENTER: Gravity = Gravity(17);
 /// `android.graphics.Color.RED`
 pub const COLOR_RED: i32 = 0xffff0000u32 as i32;
 /// `android.content.DialogInterface.BUTTON_POSITIVE`
 pub const DIALOGINTERFACE_BUTTON_POSITIVE: i32 = -1;
 /// `android.view.View.VISIBLE`
-pub const VIEW_VISIBLE: i32 = 0;
+pub const VIEW_VISIBLE: Visibility = Visibility::Visible;
 /// `android.view.View.GONE`
-pub const VIEW_GONE: i32 = 8;
+pub const VIEW_GONE: Visibility = Visibility::Gone;
 /// `android.view.MotionEvent.ACTION_CANCEL`
 pub const MOTIONEVENT_ACTION_CANCEL: i32 = 3;
 /// `android.widget.LinearLayout.VERTICAL`
-pub const LINEARLAYOUT_VERTICAL: i32 = 1;
+pub const LINEARLAYOUT_VERTICAL: Orientation = Orientation::Vertical;
 /// `android.text.InputType.TYPE_CLASS_TEXT`
 pub const INPUTTYPE_TYPE_CLASS_TEXT: i32 = 1;
 /// `android.content.DialogInterface.BUTTON_NEUTRAL`
@@ -67,13 +142,13 @@ pub const MOTIONEVENT_ACTION_POINTER_INDEX_SHIFT: i32 = 8;
 /// `android.view.MotionEvent.ACTION_POINTER_DOWN`
 pub const MOTIONEVENT_ACTION_POINTER_DOWN: i32 = 5;
 /// `android.widget.LinearLayout.HORIZONTAL`
-pub const LINEARLAYOUT_HORIZONTAL: i32 = 0;
+pub const LINEARLAYOUT_HORIZONTAL: Orientation = Orientation::Horizontal;
 /// `android.text.InputType.TYPE_TEXT_VARIATION_URI`
 pub const INPUTTYPE_TYPE_TEXT_VARIATION_URI: i32 = 16;
 /// `android.view.InputDevice.SOURCE_TOUCHSCREEN`
 pub const INPUTDEVICE_SOURCE_TOUCHSCREEN: i32 = 4098;
 /// `android.view.Gravity.TOP`
-pub const GRAVITY_TOP: i32 = 48;
+pub const GRAVITY_TOP: Gravity = Gravity(48);
 /// `android.view.FrameMetrics.TOTAL_DURATION`
 pub const FRAMEMETRICS_TOTAL_DURATION: i32 = 8;
 /// `android.view.FrameMetrics.DRAW_DURATION`
@@ -139,11 +214,11 @@ pub const GRIDVIEW_STRETCH_COLUMN_WIDTH: i32 = 2;
 /// `android.widget.GridView.AUTO_FIT`
 pub const GRIDVIEW_AUTO_FIT: i32 = -1;
 /// `android.view.Gravity.RIGHT`
-pub const GRAVITY_RIGHT: i32 = 5;
+pub const GRAVITY_RIGHT: Gravity = Gravity(5);
 /// `android.view.Gravity.LEFT`
-pub const GRAVITY_LEFT: i32 = 3;
+pub const GRAVITY_LEFT: Gravity = Gravity(3);
 /// `android.view.Gravity.CENTER_HORIZONTAL`
-pub const GRAVITY_CENTER_HORIZONTAL: i32 = 1;
+pub const GRAVITY_CENTER_HORIZONTAL: Gravity = Gravity(1);
 /// `android.view.FrameMetrics.UNKNOWN_DELAY_DURATION`
 pub const FRAMEMETRICS_UNKNOWN_DELAY_DURATION: i32 = 0;
 /// `android.view.FrameMetrics.SYNC_DURATION`

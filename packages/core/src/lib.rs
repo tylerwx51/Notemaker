@@ -7,12 +7,13 @@
 
 pub mod error;
 pub mod ids;
-pub mod jfmt;
-pub mod jmath;
-pub mod json;
+#[cfg_attr(dylint_lib = "notemaker_lints", allow(raw_type_in_signature))]
+pub mod java_port;
+pub use java_port::{jfmt, jmath, json};
 
 pub mod actions;
 pub mod checkpoint_point_prefixes;
+pub mod clock;
 pub mod collaboration;
 pub mod coverage;
 pub mod draw_item;
@@ -29,6 +30,7 @@ pub mod region_fill;
 pub mod render;
 pub mod shape_catalog;
 pub mod store;
+pub mod style;
 pub mod svg_asset;
 pub mod timing;
 pub mod tls;

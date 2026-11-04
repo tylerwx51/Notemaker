@@ -10,7 +10,10 @@
 //! Conventions (see docs/design/android-port-plan.md):
 //! - `throws Exception` / unchecked exceptions that escape → `AppResult<T>`
 //!   propagated with `?`. Errors reaching a native callback are rethrown into
-//!   Java by `jx::guard`, so uncaught failures still crash like Java did.
+//!   Java by the JNI shims in `lib.rs`, so uncaught failures still crash like
+//!   Java did.
+//! - The Java exception accessors (`class`, `message`, `is`, `stack_trace`)
+//!   and `require` live in `java_port::exception`.
 //! - `catch (IllegalArgumentException e)` → `Err(e) if e.is("java.lang.IllegalArgumentException")`.
 //! - `e.toString()` → `e.to_string()`; `e.getMessage()` → `e.message()`.
 
@@ -60,53 +63,6 @@ impl AppError {
     pub fn io(message: impl Into<String>) -> AppError {
         AppError::Core(CoreError::io(message))
     }
-    /// A Java exception of an arbitrary class (`java.lang.AssertionError`, …).
-    pub fn java(class: &str, message: impl Into<String>) -> AppError {
-        AppError::Java(JavaError::new(class, message))
-    }
-
-    /// Binary Java class name of the exception (`java.io.IOException`).
-    pub fn class(&self) -> &str {
-        match self {
-            AppError::Java(e) => &e.class,
-            AppError::Core(e) => e.kind.java_class(),
-            AppError::Json(_) => "org.json.JSONException",
-        }
-    }
-    /// `getMessage()` (`None` = Java `null`).
-    pub fn message(&self) -> Option<String> {
-        match self {
-            AppError::Java(e) => e.message.clone(),
-            AppError::Core(e) => e.message.clone(),
-            AppError::Json(e) => Some(e.0.clone()),
-        }
-    }
-    /// `String.valueOf(e.getMessage())`.
-    pub fn message_or_null(&self) -> String {
-        self.message().unwrap_or_else(|| "null".into())
-    }
-    /// Java `catch (Class e)` test, including the superclasses the Java code
-    /// caught (`Exception`, `RuntimeException`, `IOException`,
-    /// `IllegalArgumentException`, …).
-    pub fn is(&self, class: &str) -> bool {
-        if class == "java.lang.Throwable" || class == "java.lang.Exception" {
-            return true;
-        }
-        match self {
-            AppError::Java(e) => e.is(class),
-            AppError::Core(e) => {
-                let own = e.kind.java_class();
-                own == class
-                    || match class {
-                        "java.lang.RuntimeException" => !e.kind.is_io(),
-                        "java.lang.IllegalArgumentException" => e.kind.is_illegal_argument(),
-                        "java.io.IOException" => e.kind.is_io(),
-                        _ => false,
-                    }
-            }
-            AppError::Json(_) => class == "org.json.JSONException",
-        }
-    }
     /// The core error, when this is one (`Endpoint.HttpError` status etc.).
     pub fn core(&self) -> Option<&CoreError> {
         match self {
@@ -116,19 +72,6 @@ impl AppError {
     }
     pub fn kind(&self) -> Option<ErrorKind> {
         self.core().map(|e| e.kind)
-    }
-    /// `Log.getStackTraceString(e)` approximation for `FAIL:` reports.
-    pub fn stack_trace(&self) -> String {
-        match self {
-            AppError::Java(e) if !e.stack.is_empty() => {
-                if e.stack.starts_with(&e.text) {
-                    e.stack.clone()
-                } else {
-                    format!("{}\n{}", e.text, e.stack)
-                }
-            }
-            other => format!("{other}\n"),
-        }
     }
 }
 
@@ -214,11 +157,4 @@ impl From<AppError> for CoreError {
     }
 }
 
-/// `Model.require(condition, message)` returning `AppResult`.
-pub fn require(condition: bool, message: &str) -> AppResult<()> {
-    if condition {
-        Ok(())
-    } else {
-        Err(AppError::illegal_argument(message))
-    }
-}
+pub use crate::java_port::exception::require;

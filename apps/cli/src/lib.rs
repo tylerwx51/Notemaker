@@ -15,7 +15,9 @@ pub mod main;
 mod area;
 pub mod canvas;
 pub mod item_coverage;
-mod jutil;
+#[cfg_attr(dylint_lib = "notemaker_lints", allow(raw_type_in_signature))]
+mod java_port;
+use java_port::jutil;
 pub mod local_proxy;
 pub mod png;
 pub mod probe;

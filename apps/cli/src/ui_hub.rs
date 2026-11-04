@@ -1,7 +1,7 @@
 //! Port of `UiHub.java` (package-private in Java): in-memory UI rendezvous
 //! for a proxy that is the reachable root of a tree.
 
-use notemaker_core::collaboration::now_millis;
+use notemaker_core::clock::EpochMillis;
 use notemaker_core::error::require;
 use notemaker_core::{json, object, Error, Map, Result, Value};
 use std::collections::{HashMap, HashSet};
@@ -30,6 +30,11 @@ struct Pending {
     action: String,
     input: Map,
     result: Option<Map>,
+}
+
+/// `System.currentTimeMillis()`.
+fn now_millis() -> i64 {
+    EpochMillis::now().0
 }
 
 fn id<'a>(value: Option<&'a Value>, name: &str) -> Result<&'a str> {
@@ -208,7 +213,7 @@ impl UiHub {
             Error::illegal_argument(format!("App session is not connected: {}", session))
         })?;
         let proxy = json::java_string(owner.get("proxyId"));
-        let key = notemaker_core::ids::random_uuid();
+        let key = String::from(notemaker_core::ids::Uuid::random());
         state.pending.insert(
             key.clone(),
             Pending {

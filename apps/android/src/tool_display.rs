@@ -4,6 +4,16 @@
 use crate::org_json::{value_to_java_string, JSONObject, JV};
 use std::collections::HashSet;
 
+notemaker_core::string_newtype! {
+    /// The name of an agent tool call (`bash`, `read`, `mock.inspect`, …).
+    pub struct ToolName;
+}
+
+notemaker_core::string_newtype! {
+    /// The raw JSON text of an agent tool call's arguments, as streamed.
+    pub struct ToolArguments;
+}
+
 /// `final class ToolDisplay`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolDisplay {
@@ -73,7 +83,8 @@ fn label_for(key: &str) -> String {
 
 impl ToolDisplay {
     /// `ToolDisplay(String name, String raw)` (parses `raw` with org.json).
-    pub fn new(name: &str, raw: &str) -> ToolDisplay {
+    pub fn new(name: &ToolName, raw: &ToolArguments) -> ToolDisplay {
+        let (name, raw): (&str, &str) = (name, raw);
         let args = match JSONObject::parse(raw) {
             Ok(args) => args,
             Err(_) => {
@@ -156,39 +167,39 @@ mod tests {
 
     #[test]
     fn unparsable_arguments() {
-        assert_eq!(ToolDisplay::new("bash", ""), ToolDisplay { summary: "bash".into(), details: "No arguments".into() });
-        assert_eq!(ToolDisplay::new("bash", "nope"), ToolDisplay { summary: "bash".into(), details: "nope".into() });
+        assert_eq!(ToolDisplay::new(&ToolName::from("bash"), &ToolArguments::from("")), ToolDisplay { summary: "bash".into(), details: "No arguments".into() });
+        assert_eq!(ToolDisplay::new(&ToolName::from("bash"), &ToolArguments::from("nope")), ToolDisplay { summary: "bash".into(), details: "nope".into() });
     }
 
     #[test]
     fn read_and_edit() {
-        let d = ToolDisplay::new("edit", r#"{"path":"a/b.txt","oldText":"x","newText":"y","maxLines":3,"some_key":true}"#);
+        let d = ToolDisplay::new(&ToolName::from("edit"), &ToolArguments::from(r#"{"path":"a/b.txt","oldText":"x","newText":"y","maxLines":3,"some_key":true}"#));
         assert_eq!(d.summary, "edit a/b.txt");
         assert_eq!(d.details, "a/b.txt\n\nReplace:\nx\n\nWith:\ny\n\nMax Lines: 3\n\nSome key: true");
-        let d = ToolDisplay::new("read", "{}");
+        let d = ToolDisplay::new(&ToolName::from("read"), &ToolArguments::from("{}"));
         assert_eq!(d.summary, "read");
         assert_eq!(d.details, ".");
     }
 
     #[test]
     fn grep_and_bash() {
-        let d = ToolDisplay::new("grep", r#"{"pattern":"foo","path":"src"}"#);
+        let d = ToolDisplay::new(&ToolName::from("grep"), &ToolArguments::from(r#"{"pattern":"foo","path":"src"}"#));
         assert_eq!(d.summary, "grep foo in src");
         assert_eq!(d.details, "Pattern: foo\nIn: src");
-        let d = ToolDisplay::new("bash", "{\"command\":\"ls\\n  -la\",\"timeout\":5}");
+        let d = ToolDisplay::new(&ToolName::from("bash"), &ToolArguments::from("{\"command\":\"ls\\n  -la\",\"timeout\":5}"));
         assert_eq!(d.summary, "bash ls -la");
         assert_eq!(d.details, "ls\n  -la\n\nTimeout (seconds): 5");
-        let d = ToolDisplay::new("other", "{}");
+        let d = ToolDisplay::new(&ToolName::from("other"), &ToolArguments::from("{}"));
         assert_eq!(d, ToolDisplay { summary: "other".into(), details: "No arguments".into() });
     }
 
     #[test]
     fn nested_and_long() {
-        let d = ToolDisplay::new("mock.inspect", r#"{"document":"notes","opts":{"a":1}}"#);
+        let d = ToolDisplay::new(&ToolName::from("mock.inspect"), &ToolArguments::from(r#"{"document":"notes","opts":{"a":1}}"#));
         assert_eq!(d.summary, "mock.inspect notes");
         assert_eq!(d.details, "Document: notes\n\nOpts:\n{\n  \"a\": 1\n}");
         let long = "x".repeat(200);
-        let d = ToolDisplay::new("bash", &format!("{{\"command\":\"{long}\"}}"));
+        let d = ToolDisplay::new(&ToolName::from("bash"), &ToolArguments::from(format!("{{\"command\":\"{long}\"}}")));
         assert_eq!(d.summary, format!("bash {}…", "x".repeat(157)));
     }
 }

@@ -169,9 +169,12 @@ nix-shell --run 'cd tools/lints/notemaker_lints && cargo test'
 `raw_type_in_signature` (ADR 0030) warns when a non-private function (any
 written `pub`, including `pub(crate)`) has a parameter or return type that is a
 primitive, array, slice, tuple, or a type from another crate. `Option` and
-`Result` are allowed when their contents pass, and types from crates listed in
-`dylint.toml` (`notemaker_core`) count as local. Wrap the value in a descriptive
-newtype instead. To silence one function without upsetting the stable build,
+`Result` are allowed when their contents pass, std wrappers such as `Box`,
+`Arc`, `Rc`, `Mutex` and `RefCell` are checked through to their contents,
+`bool` return types are allowed, and types from crates listed in `dylint.toml`
+(`notemaker_core`, `notemaker_cli`) count as local. Wrap the value in a
+descriptive newtype instead. Java library ports live in each crate's
+unchecked `java_port` module. To silence one function without upsetting the stable build,
 which does not know the lint, use:
 
 ```rust

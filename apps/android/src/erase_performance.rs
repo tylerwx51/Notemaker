@@ -7,7 +7,7 @@ use crate::concurrent::CountDownLatch;
 use crate::coverage_check;
 use crate::error::{self, AppError, AppResult};
 use crate::field::Field;
-use crate::integration::Integration;
+use crate::integration::{GestureDrag, GestureEnd, Integration};
 use crate::jx;
 use crate::main_activity::MainActivity;
 use crate::performance::{drain_writes, sleep, window, write_file_output};
@@ -55,7 +55,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         app.eraser_radius.set(12.0);
         Ok(())
     })??;
-    let editor = LayerEditor::new(&original, &app.selected.get(), app.page.get())?;
+    let editor = LayerEditor::new(&original, &notemaker_core::ids::LayerId::from(app.selected.get()), notemaker_core::ids::PageNumber(app.page.get()))?;
     for item in editor.items() {
         if item.kind != "stroke" {
             continue;
@@ -64,7 +64,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         let point = json::list(&pts[pts.len() / 2])?;
         let x = json::as_double(point.first())? as f32;
         let y = json::as_double(point.get(1))? as f32;
-        if !item.intersects(&geometry::capsule([x as f64, y as f64], [x as f64, y as f64], 12.0), &notemaker_cli::item_coverage::FACTORY)? {
+        if !item.intersects(&geometry::Polygon::capsule(geometry::Segment { start: geometry::DocPoint { x: x as f64, y: y as f64 }, end: geometry::DocPoint { x: x as f64, y: y as f64 } }, geometry::Radius(12.0)), &notemaker_cli::item_coverage::FACTORY)? {
             continue;
         }
         let drawn = Arc::new(CountDownLatch::new(1));
@@ -85,16 +85,16 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                     let Some(app) = weak.upgrade() else { return };
                     let canvas = app.canvas();
                     if feedback.load(Ordering::SeqCst) == 0 && !canvas.erase_previews.with(|p| p.is_empty()) {
-                        feedback.store(jx::nano_time() - start.load(Ordering::SeqCst), Ordering::SeqCst);
+                        feedback.store(jx::nano_time().0 - start.load(Ordering::SeqCst), Ordering::SeqCst);
                         // ConcurrentHashMap.put(key, null) threw NullPointerException.
                         let draw_start = trace.with(|t| t.get("draw_start").copied()).unwrap_or_else(|| panic!("java.lang.NullPointerException"));
                         trace.with_mut(|t| t.insert("feedback_draw_start".into(), draw_start));
-                        trace.with_mut(|t| t.insert("feedback_draw_done".into(), jx::nano_time()));
+                        trace.with_mut(|t| t.insert("feedback_draw_done".into(), jx::nano_time().0));
                     }
                     let model = app.model();
                     if let Some(current) = model.strokes.get(&id) {
                         if !json::objects_equal(old_masks.as_ref(), current.get("erasures")) || model.active.get(&id) == Some(&false) {
-                            elapsed.store(jx::nano_time() - start.load(Ordering::SeqCst), Ordering::SeqCst);
+                            elapsed.store(jx::nano_time().0 - start.load(Ordering::SeqCst), Ordering::SeqCst);
                             if feedback.load(Ordering::SeqCst) == 0 {
                                 feedback.store(elapsed.load(Ordering::SeqCst), Ordering::SeqCst);
                             }
@@ -104,8 +104,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                     }
                 })));
             }
-            start.store(jx::nano_time(), Ordering::SeqCst);
-            Integration::gesture(app, x, y, 0.0, 0.0, false)
+            start.store(jx::nano_time().0, Ordering::SeqCst);
+            Integration::gesture(app, GestureDrag { x, y, width: 0.0, height: 0.0 }, GestureEnd::Up)
         })??;
         error::require(drawn.await_timeout(Duration::from_secs(15)), "Updated content was not drawn")?;
         let mut phases = Map::new();
@@ -122,7 +122,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         test.run_on_main_sync(|| app.erase_timings.set(None))?;
         drain_writes()?;
         test.wait_for_idle_sync()?;
-        app.replica().command(&["undo"], None)?;
+        app.replica().command(crate::app_replica::CliArgs(&["undo"]), None)?;
         let restored = app.replica().read()?;
         test.run_on_main_sync(|| -> AppResult<()> {
             (|| -> AppResult<()> {
@@ -132,7 +132,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
             .map_err(|e| AppError::runtime_cause(&e))
         })??;
         test.wait_for_idle_sync()?;
-        sleep(100);
+        sleep(jx::DelayMillis(100));
     }
     let decor = jcall!(window(app)?, "android/view/Window", "getDecorView", "()Landroid/view/View;")?.some();
     let display = jcall!(decor, "android/view/View", "getDisplay", "()Landroid/view/Display;")?.some();

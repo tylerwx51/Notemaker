@@ -8,13 +8,18 @@
 //! `proxy.lock` fcntl lock, exactly like Java.
 
 use crate::jutil::{self, FileLock, Monitor};
-use crate::main as cli;
+use crate::main::{self as cli, CommandArgs};
 use crate::ui_hub::UiHub;
-use notemaker_core::collaboration::{self, now_millis, LEASE_MILLIS};
+use notemaker_core::clock::EpochMillis;
+use notemaker_core::collaboration::{self, LEASE_MILLIS};
 use notemaker_core::endpoint::{Disconnector, Endpoint};
 use notemaker_core::error::require;
-use notemaker_core::layer_editor::{self, LayerEditor};
-use notemaker_core::store::{self, State, Store};
+use notemaker_core::ids::{
+    ActorId, DocumentName, EntityId, EntityKind, LayerId, PageNumber, SessionId,
+};
+use notemaker_core::layer_editor::{self, ItemFilter, LayerEditor};
+use notemaker_core::store::{self, HistoryDirection, ReplicaCursor, State, Store, SyncMode};
+use notemaker_core::timing::TimingPhase;
 use notemaker_core::{actions, json, object, timing, Error, ErrorKind, Map, Result, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -25,6 +30,37 @@ use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
+
+notemaker_core::string_newtype! {
+    /// The ID of a live app screen registered with
+    /// [`LocalProxy::register_ui_session`].
+    pub struct UiSessionId;
+}
+
+notemaker_core::string_newtype! {
+    /// A UI session request kind: `state`, `actions` or `action`.
+    pub struct UiVerb;
+}
+
+notemaker_core::string_newtype! {
+    /// The name of a semantic UI action (`UiActions`), `""` unless the verb
+    /// is `action`.
+    pub struct UiActionName;
+}
+
+/// What [`LocalProxy::release`] does with a session's selection leases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeaseUpdate {
+    /// Extend the leases (`selection heartbeat`).
+    Renew,
+    /// Drop the leases and the actor's active session.
+    Release,
+}
+
+/// `System.currentTimeMillis()`.
+fn now_millis() -> i64 {
+    EpochMillis::now().0
+}
 
 /// Error type returned by [`UiSession::request`]. Its `Display` is used where
 /// Java called `error.toString()` (core [`notemaker_core::Error`] already
@@ -37,7 +73,7 @@ pub trait UiSession: Send + Sync {
     /// `Object request(String verb, String action, Map<String,Object> input)`.
     /// `verb` is `state`, `actions` or `action`; `action` is `""` unless
     /// `verb == "action"`.
-    fn request(&self, verb: &str, action: &str, input: Map) -> std::result::Result<Value, UiError>;
+    fn request(&self, verb: &UiVerb, action: &UiActionName, input: Map) -> std::result::Result<Value, UiError>;
 }
 
 /// A `UiError` as a core error: core errors pass through; other errors keep
@@ -185,7 +221,7 @@ fn offline(e: &Error, endpoint: &Endpoint) -> bool {
 
 struct SelectionScope {
     layer: String,
-    page: i32,
+    page: PageNumber,
 }
 
 impl LocalProxy {
@@ -208,7 +244,7 @@ impl LocalProxy {
         })?;
         let held = FileLock::try_lock(&directory.join("proxy.lock"))?
             .ok_or_else(|| Error::io("A proxy already owns this replica"))?;
-        timing::mark("proxy_lock_done");
+        timing::mark(TimingPhase("proxy_lock_done"));
         let mut ownership = Some(held);
         let result = LocalProxy::open(directory, port, &mut ownership);
         if result.is_err() {
@@ -235,11 +271,11 @@ impl LocalProxy {
             })?;
             json::map(&json::parse(&String::from_utf8_lossy(&bytes))?)?.clone()
         } else {
-            object! {"id" => notemaker_core::ids::random_uuid(), "token" => format!("{}{}", notemaker_core::ids::random_uuid(), notemaker_core::ids::random_uuid())}
+            object! {"id" => String::from(notemaker_core::ids::Uuid::random()), "token" => format!("{}{}", String::from(notemaker_core::ids::Uuid::random()), String::from(notemaker_core::ids::Uuid::random()))}
         };
         let id = json::string(&settings, "id")?.to_string();
         let token = json::string(&settings, "token")?.to_string();
-        timing::mark("proxy_config_read");
+        timing::mark(TimingPhase("proxy_config_read"));
         let upstream = match settings.get("upstream") {
             Some(v) => Some(Arc::new(Endpoint::new(map_value(Some(v))?))),
             None => None,
@@ -308,7 +344,7 @@ impl LocalProxy {
                     .ok_or_else(|| Error::class_cast("documents entry is not a String"))?,
             )?;
         }
-        timing::mark("proxy_known_documents");
+        timing::mark(TimingPhase("proxy_known_documents"));
         let known: HashSet<PathBuf> = lock(&proxy.documents)
             .values()
             .map(|s| s.file.clone())
@@ -341,7 +377,7 @@ impl LocalProxy {
                 proxy.store(json::string(state, "document")?)?;
             }
         }
-        timing::mark("proxy_document_scan");
+        timing::mark(TimingPhase("proxy_document_scan"));
         for local in proxy.document_stores() {
             if let Some(root) = local
                 .read()?
@@ -357,23 +393,23 @@ impl LocalProxy {
                 settings.insert("rootId".into(), root);
             }
         }
-        timing::mark("proxy_root_validation");
+        timing::mark(TimingPhase("proxy_root_validation"));
         {
             let keys = proxy.document_names();
             lock(&proxy.settings).insert("documents".into(), str_list(&keys));
         }
         proxy.save_settings()?;
         proxy.initialized.store(true, Ordering::SeqCst);
-        timing::mark("proxy_config_synced");
-        timing::mark("proxy_bound");
+        timing::mark(TimingPhase("proxy_config_synced"));
+        timing::mark(TimingPhase("proxy_bound"));
         proxy.durable(&directory.join("proxy.json"), &Value::Object(object! {"url" => format!("http://127.0.0.1:{}", proxy.port()), "token" => proxy.token.clone(), "id" => proxy.id.clone()}))?;
-        timing::mark("proxy_descriptor_synced");
+        timing::mark(TimingPhase("proxy_descriptor_synced"));
         *lock(&proxy.ownership) = ownership.take();
         {
             let pending = proxy.has_pending();
             lock(&proxy.changes).upload_due = if pending { now() + 500 } else { i64::MAX };
         }
-        timing::mark("proxy_pending_checked");
+        timing::mark(TimingPhase("proxy_pending_checked"));
         LocalProxy::start(&proxy);
         Ok(proxy)
     }
@@ -461,12 +497,12 @@ impl LocalProxy {
     }
 
     fn document_names(&self) -> Vec<String> {
-        jutil::hash_order(lock(&self.documents).keys())
+        hash_order(lock(&self.documents).keys())
     }
 
     fn document_stores(&self) -> Vec<Arc<Store>> {
         let docs = lock(&self.documents);
-        jutil::hash_order(docs.keys())
+        hash_order(docs.keys())
             .into_iter()
             .filter_map(|k| docs.get(&k).cloned())
             .collect()
@@ -512,7 +548,7 @@ impl LocalProxy {
         let ordered = {
             let settings = lock(&self.settings);
             let mut out = Map::new();
-            for key in jutil::hash_order(settings.keys()) {
+            for key in hash_order(settings.keys()) {
                 out.insert(key.clone(), settings[&key].clone());
             }
             out
@@ -527,7 +563,7 @@ impl LocalProxy {
         if let Some(found) = lock(&self.documents).get(document) {
             return Ok(found.clone());
         }
-        let created = Arc::new(Store::writer(&self.directory, document)?);
+        let created = Arc::new(Store::writer(&self.directory, &DocumentName::from(document))?);
         let (store, fresh) = {
             let mut docs = lock(&self.documents);
             match docs.get(document) {
@@ -589,7 +625,8 @@ impl LocalProxy {
     }
 
     /// `registerUiSession(session, handler)`; `"Session ID is required"`.
-    pub fn register_ui_session(&self, session: &str, handler: Arc<dyn UiSession>) -> Result<()> {
+    pub fn register_ui_session(&self, session: &UiSessionId, handler: Arc<dyn UiSession>) -> Result<()> {
+        let session: &str = session;
         require(!session.is_empty(), "Session ID is required")?;
         lock(&self.ui_sessions).insert(session.to_string(), handler);
         self.wake_ui();
@@ -597,7 +634,8 @@ impl LocalProxy {
     }
 
     /// `unregisterUiSession(session)`.
-    pub fn unregister_ui_session(&self, session: &str) {
+    pub fn unregister_ui_session(&self, session: &UiSessionId) {
+        let session: &str = session;
         lock(&self.ui_sessions).shift_remove(session);
         self.wake_ui();
     }
@@ -686,7 +724,8 @@ impl LocalProxy {
 
     /// `synchronized configure(document, target)`: `target` is an upstream
     /// URL, a descriptor file, or `None`/`""` to disconnect.
-    pub fn configure(&self, document: &str, target: Option<&str>) -> Result<()> {
+    pub fn configure(&self, document: &DocumentName, target: Option<&str>) -> Result<()> {
+        let document: &str = document;
         let _sync = self.this.enter();
         self.store(document)?;
         let candidate = match target {
@@ -779,7 +818,7 @@ impl LocalProxy {
         let mut lineage: Vec<String> = if trail.is_empty() {
             Vec::new()
         } else {
-            jutil::split(trail, ",")
+            split(trail, ",")
         };
         require(!lineage.contains(&self.id), "Proxy cycle rejected")?;
         require(lineage.len() < 64, "Proxy chain exceeds 64 hops")?;
@@ -962,7 +1001,7 @@ impl LocalProxy {
         let priority = lock(&self.active_document).clone();
         let mut sync_documents: Vec<(String, Arc<Store>)> = {
             let docs = lock(&self.documents);
-            jutil::hash_order(docs.keys())
+            hash_order(docs.keys())
                 .into_iter()
                 .map(|k| (k.clone(), docs[&k].clone()))
                 .collect()
@@ -1000,7 +1039,8 @@ impl LocalProxy {
                 Ok(())
             };
             let epoch = self.preview_epoch.load(Ordering::SeqCst);
-            let synced = local.sync(peer, &remote, upload, &mut gate)?;
+            let mode = if upload { SyncMode::Upload } else { SyncMode::DownloadOnly };
+            let synced = local.sync(peer, &remote, mode, &mut gate)?;
             let raced = {
                 let mut previews = lock(&self.ephemeral_previews);
                 // Deviation from Java: a preview set/cleared locally while this
@@ -1135,7 +1175,7 @@ impl LocalProxy {
 
     fn ui_sessions_ordered(&self) -> Vec<(String, Arc<dyn UiSession>)> {
         let sessions = lock(&self.ui_sessions);
-        jutil::hash_order(sessions.keys())
+        hash_order(sessions.keys())
             .into_iter()
             .map(|k| (k.clone(), sessions[&k].clone()))
             .collect()
@@ -1147,14 +1187,14 @@ impl LocalProxy {
             let attempt = (|| -> Result<()> {
                 let mut states = Vec::new();
                 for (_, handler) in self.ui_sessions_ordered() {
-                    if let Ok(state) = handler.request("state", "", Map::new()) {
+                    if let Ok(state) = handler.request(&UiVerb::from("state"), &UiActionName::from(""), Map::new()) {
                         states.push(state);
                     }
                     // The Activity will unregister or recover.
                 }
                 let results: Vec<Value> = {
                     let r = lock(&self.ui_results);
-                    jutil::hash_order(r.keys())
+                    hash_order(r.keys())
                         .into_iter()
                         .map(|k| Value::Object(r[&k].clone()))
                         .collect()
@@ -1189,8 +1229,8 @@ impl LocalProxy {
                                 let input = map_value(command.get("input"))?;
                                 handler
                                     .request(
-                                        json::string(&command, "verb")?,
-                                        json::string(&command, "action")?,
+                                        &UiVerb::from(json::string(&command, "verb")?),
+                                        &UiActionName::from(json::string(&command, "action")?),
                                         input,
                                     )
                                     .map_err(ui_error)
@@ -1216,7 +1256,7 @@ impl LocalProxy {
 
     fn sync_command(&self, document: &str, target: Option<&str>) -> Result<Value> {
         if let Some(target) = target {
-            self.configure(document, Some(target))?;
+            self.configure(&DocumentName::from(document), Some(target))?;
         }
         require(self.upstream().is_some(), "No upstream configured")?;
         let (sender, receiver) = mpsc::channel();
@@ -1258,7 +1298,7 @@ impl LocalProxy {
         lock(&self.ui_sessions).clear();
         let docs: Vec<(String, Arc<Store>)> = {
             let d = lock(&self.documents);
-            jutil::hash_order(d.keys())
+            hash_order(d.keys())
                 .into_iter()
                 .map(|k| (k.clone(), d[&k].clone()))
                 .collect()
@@ -1266,7 +1306,7 @@ impl LocalProxy {
         for (doc, store) in docs {
             let _ = (|| -> Result<()> {
                 self.release_owned(&store, &doc, None)?;
-                let keys: Vec<String> = jutil::hash_order(lock(&self.ephemeral_previews).keys());
+                let keys: Vec<String> = hash_order(lock(&self.ephemeral_previews).keys());
                 for key in keys {
                     if key.starts_with(&format!("{}:", doc)) {
                         let preview = lock(&self.ephemeral_previews).get(&key).cloned();
@@ -1392,7 +1432,7 @@ impl LocalProxy {
                 authorization == format!("Bearer {}", self.token),
                 "Unauthorized proxy request",
             )?;
-            let parts = jutil::split(&request, " ");
+            let parts = split(&request, " ");
             let method = parts.first().cloned().unwrap_or_default();
             let target = parts.get(1).ok_or_else(|| {
                 Error::new(
@@ -1439,8 +1479,8 @@ impl LocalProxy {
                 *lock(&self.active_document) = doc.clone();
                 let fresh = !lock(&self.documents).contains_key(&doc);
                 let r = self.store(&doc)?.replica(
-                    jutil::parse_int(&get("after", "0"))?,
-                    jutil::parse_int(&get("pendingAfter", "0"))?,
+                    ReplicaCursor(jutil::parse_int(&get("after", "0"))?),
+                    ReplicaCursor(jutil::parse_int(&get("pendingAfter", "0"))?),
                 )?;
                 if fresh {
                     self.wake_fetch();
@@ -1700,6 +1740,7 @@ impl LocalProxy {
         };
         let doc = string_field("document", "notes")?;
         let actor = string_field("actor", "cli")?;
+        let actor_id = ActorId::from(&actor);
         let cmd = args[0].clone();
         let input = || map_value(body.get("input"));
         if cmd == "ui" {
@@ -1717,7 +1758,7 @@ impl LocalProxy {
                     if !sessions.iter().any(|item| {
                         item.get("session").and_then(Value::as_str) == Some(session.as_str())
                     }) {
-                        match handler.request("state", "", Map::new()) {
+                        match handler.request(&UiVerb::from("state"), &UiActionName::from(""), Map::new()) {
                             Ok(state) => sessions.push(state),
                             Err(unavailable) => sessions.push(Value::Object(object! {"session" => session.clone(), "error" => ui_error(unavailable).to_string()})),
                         }
@@ -1732,7 +1773,7 @@ impl LocalProxy {
             if verb == "state" || verb == "actions" {
                 require_msg(args.len() == 3, format!("ui {} SESSION", verb))?;
                 return match handler {
-                    Some(h) => h.request(verb, "", Map::new()).map_err(ui_error),
+                    Some(h) => h.request(&UiVerb::from(verb), &UiActionName::from(""), Map::new()).map_err(ui_error),
                     None => Ok(self.ui_relay("/api/ui/command", Some(&object! {"session" => session, "verb" => verb, "action" => "", "input" => empty_map()}))?.get("result").cloned().unwrap_or(Value::Null)),
                 };
             }
@@ -1741,7 +1782,7 @@ impl LocalProxy {
                 "ui action SESSION NAME FILE|-",
             )?;
             return match handler {
-                Some(h) => h.request("action", &args[3], input()?).map_err(ui_error),
+                Some(h) => h.request(&UiVerb::from("action"), &UiActionName::from(&args[3]), input()?).map_err(ui_error),
                 None => Ok(self
                     .ui_relay("/api/ui/command", Some(&object! {"session" => session, "verb" => "action", "action" => args[3].clone(), "input" => Value::Object(input()?)}))?
                     .get("result")
@@ -1760,7 +1801,7 @@ impl LocalProxy {
             return Ok(Value::Object(finish_snapshot(&mut state)?));
         }
         if cmd == "append" && args.len() == 3 && args[1] == "snapshot" && args[2] == "-" {
-            let mut state = local.append(&input()?, &actor)?;
+            let mut state = local.append(&input()?, &actor_id)?;
             let operation = last_pending_id(&state)?;
             let snapshot = finish_snapshot(&mut state)?;
             self.changed(true);
@@ -1773,7 +1814,7 @@ impl LocalProxy {
             let settings = map_value(request.get("settings"))?;
             let state = local.append_with_settings(
                 &map_value(request.get("operation"))?,
-                &actor,
+                &actor_id,
                 Some(&settings),
             )?;
             let operation = last_pending_id(&state)?;
@@ -1783,7 +1824,8 @@ impl LocalProxy {
             ));
         }
         if (cmd == "undo" || cmd == "redo") && args.len() == 2 && args[1] == "snapshot" {
-            let (mut result, mut state) = local.history_with_state(&actor, cmd == "redo")?;
+            let direction = if cmd == "redo" { HistoryDirection::Redo } else { HistoryDirection::Undo };
+            let (mut result, mut state) = local.history_with_state(&actor_id, direction)?;
             result.insert(
                 "snapshot".into(),
                 Value::Object(finish_snapshot(&mut state)?),
@@ -1797,19 +1839,19 @@ impl LocalProxy {
             && args[2] == "snapshot"
             && args[3] == "-"
         {
-            let mut drawing = actions::drawing(&input()?, "base")?;
+            let mut drawing = actions::drawing(&input()?, &LayerId::base())?;
             drawing.insert("kind".into(), Value::from("object"));
             drawing.shift_remove("id");
-            let (mut result, mut state) = local.commit_with_state(&actor, &mut |model| {
+            let (mut result, mut state) = local.commit_with_state(&actor_id, &mut |model| {
                 if let Some(id) = json::key_of(drawing.get("object")) {
                     if model.objects.contains_key(id) {
-                        LayerEditor::with_inactive(
+                        LayerEditor::with_filter(
                             model,
-                            json::string(&drawing, "layer")?,
-                            int_of(drawing.get("page"))?,
-                            true,
+                            &LayerId::from(json::string(&drawing, "layer")?),
+                            PageNumber(int_of(drawing.get("page"))?),
+                            ItemFilter::IncludeInactive,
                         )?
-                        .resolve("object", json::string(&drawing, "object")?)?;
+                        .resolve(&EntityKind::object(), &EntityId::from(json::string(&drawing, "object")?))?;
                     }
                 }
                 Ok(vec![Value::Object(drawing.clone())])
@@ -1826,7 +1868,7 @@ impl LocalProxy {
                 args.len() == 2,
                 "configure UPSTREAM_URL_OR_DESCRIPTOR (empty to disconnect)",
             )?;
-            self.configure(&doc, Some(&args[1]))?;
+            self.configure(&DocumentName::from(&doc), Some(&args[1]))?;
             return Ok(Value::Object(object! {"configured" => true}));
         }
         if cmd == "sync" {
@@ -1925,7 +1967,7 @@ impl LocalProxy {
             }
         };
         let result = (|| -> Result<Value> {
-            let mut result = cli::run(&local_args)?.unwrap_or(Value::Null);
+            let mut result = cli::run(&CommandArgs(local_args.clone()))?.unwrap_or(Value::Null);
             if cmd == "transform" && args.len() > 1 && args[1] == "commit" {
                 let request = input()?;
                 self.clear_preview(&doc, json::string(&request, "session")?, &actor);
@@ -1998,7 +2040,7 @@ impl LocalProxy {
         } else if args.len() > 1 && args[1] == "deselect" {
             add(session.clone(), &mut cleared);
         }
-        for old in jutil::hash_order(cleared.iter()) {
+        for old in hash_order(cleared.iter()) {
             self.clear_preview(doc, &old, actor);
         }
         // A successful deselect/disconnect released these leases even if the
@@ -2049,11 +2091,12 @@ impl LocalProxy {
     /// Java `null`). `input` `None` sends JSON `null`.
     pub fn request(
         descriptor: &Map,
-        document: &str,
-        actor: &str,
-        args: &[String],
+        document: &DocumentName,
+        actor: &ActorId,
+        args: &CommandArgs,
         input: Option<&Value>,
     ) -> Result<Value> {
+        let (document, actor): (&str, &str) = (document, actor);
         let body = object! {"document" => document, "actor" => actor, "args" => str_list(args), "input" => input.cloned().unwrap_or(Value::Null)};
         Ok(Endpoint::new(descriptor.clone())
             .request("/command", Some(&Value::Object(body)))?
@@ -2063,7 +2106,7 @@ impl LocalProxy {
     }
 
     fn lock_state(&self, state: &mut State) -> Result<Map> {
-        collaboration::expire(state, now_millis())?;
+        collaboration::expire(state, EpochMillis(now_millis()))?;
         let document = json::string(state, "document")?.to_string();
         Ok(
             object! {"leases" => Value::Object(leases_of(state)?), "previews" => Value::Object(self.preview_snapshot(&document, state)?)},
@@ -2077,8 +2120,8 @@ impl LocalProxy {
     /// `effectiveModel` (see `cli::snapshot_state_in_process`).
     fn finish_snapshot(&self, doc: &str, state: &mut State) -> Result<State> {
         let now = now_millis();
-        if collaboration::expire_changes(state, now)? {
-            collaboration::expire(state, now)?;
+        if collaboration::expire_changes(state, EpochMillis(now))? {
+            collaboration::expire(state, EpochMillis(now))?;
         }
         let captured = CAPTURED_SNAPSHOT.with(|c| c.borrow().is_some());
         let mut snapshot = if captured { cli::snapshot_state_in_process(state)? } else { cli::snapshot_state(state)? };
@@ -2111,13 +2154,14 @@ impl LocalProxy {
     /// kept its model without parsing `effectiveModel`; this returns the same
     /// reply as a [`State`] that carries the model. Unlike the JSON reply it
     /// has no `effectiveModel` key (see `cli::snapshot_state_in_process`).
-    pub fn snapshot_state(&self, document: &str) -> Result<State> {
+    pub fn snapshot_state(&self, document: &DocumentName) -> Result<State> {
+        let document: &str = document;
         require(self.running(), "Proxy is closed")?;
         *lock(&self.active_document) = document.to_string();
         let local = self.store(document)?;
         let mut state = local.read()?;
         let now = now_millis();
-        if collaboration::expire_changes(&state, now)? {
+        if collaboration::expire_changes(&state, EpochMillis(now))? {
             return self.finish_snapshot(document, &mut state);
         }
         // Same reply as `finish_snapshot` when nothing expires. The editor
@@ -2143,7 +2187,7 @@ impl LocalProxy {
         let leases = leases_of(state)?;
         let prefix = format!("{}:", document);
         let mut previews = lock(&self.ephemeral_previews);
-        for key in jutil::hash_order(previews.keys()) {
+        for key in hash_order(previews.keys()) {
             let Some(preview) = previews.get(&key).cloned() else {
                 continue;
             };
@@ -2188,7 +2232,8 @@ impl LocalProxy {
     }
 
     /// Static `select(store, actor, request)`.
-    pub fn select(store: &Store, actor: &str, request: &Map) -> Result<Map> {
+    pub fn select(store: &Store, actor: &ActorId, request: &Map) -> Result<Map> {
+        let actor: &str = actor;
         let scope = selection_scope(store, request)?;
         select_validated(store, actor, request, &scope)
     }
@@ -2209,7 +2254,7 @@ impl LocalProxy {
             &request
                 .get("session")
                 .cloned()
-                .unwrap_or_else(|| Value::from(notemaker_core::ids::random_uuid())),
+                .unwrap_or_else(|| Value::from(String::from(notemaker_core::ids::Uuid::random()))),
         ));
         let page = request.get("page").cloned().unwrap_or(Value::from(0));
         let entities = json::list(request.get("entities").unwrap_or(&Value::Null))?.clone();
@@ -2218,12 +2263,12 @@ impl LocalProxy {
         for value in &entities {
             let e = json::map(value)?;
             let key = collaboration::key(
-                json::string(e, "kind")?,
-                json::string(e, "id")?,
+                &EntityKind::from(json::string(e, "kind")?),
+                &EntityId::from(json::string(e, "id")?),
                 Some(&page),
             );
             candidates.insert(
-                key,
+                String::from(key),
                 Value::Object(object! {"layer" => scope.layer.clone(), "session" => session.clone(), "actor" => actor, "owner" => self.id.clone(), "page" => page.clone(), "expires" => expires, "created" => now_millis()}),
             );
         }
@@ -2249,17 +2294,17 @@ impl LocalProxy {
         for value in &entities {
             let e = json::map(value)?;
             let key = collaboration::key(
-                json::string(e, "kind")?,
-                json::string(e, "id")?,
+                &EntityKind::from(json::string(e, "kind")?),
+                &EntityId::from(json::string(e, "id")?),
                 Some(&page),
             );
-            if keys.contains(&key) {
+            if keys.contains(&*key) {
                 filtered.push(value.clone());
             } else {
                 let mut remote: Option<Map> = None;
                 if let Some(d) = &decision {
                     for item in json::list(json::get_or_default(d, "skipped", &empty))? {
-                        if item.get("key").and_then(Value::as_str) == Some(key.as_str()) {
+                        if item.get("key").and_then(Value::as_str) == Some(&*key) {
                             remote = Some(json::map(item)?.clone());
                         }
                     }
@@ -2327,8 +2372,8 @@ impl LocalProxy {
     /// Static `assertSession(store, actor, session, entities)`.
     pub fn assert_session(
         store: &Store,
-        actor: &str,
-        session: &str,
+        actor: &ActorId,
+        session: &SessionId,
         entities: &[Value],
     ) -> Result<()> {
         let mut state = store.read()?;
@@ -2337,9 +2382,10 @@ impl LocalProxy {
     }
 
     /// Static `selected(store, actor, session)`: `[{page, kind, id}]`.
-    pub fn selected(store: &Store, actor: &str, session: &str) -> Result<Vec<Value>> {
+    pub fn selected(store: &Store, actor: &ActorId, session: &SessionId) -> Result<Vec<Value>> {
+        let (actor, session): (&str, &str) = (actor, session);
         let mut state = store.read()?;
-        collaboration::expire(&mut state, now_millis())?;
+        collaboration::expire(&mut state, EpochMillis(now_millis()))?;
         let mut entities = Vec::new();
         for (key, value) in &leases_of(&state)? {
             let lease = json::map(value)?;
@@ -2375,11 +2421,13 @@ impl LocalProxy {
     }
 
     /// Static `release(store, actor, session, heartbeat)`.
-    pub fn release(store: &Store, actor: &str, session: &str, heartbeat: bool) -> Result<Map> {
+    pub fn release(store: &Store, actor: &ActorId, session: &SessionId, update: LeaseUpdate) -> Result<Map> {
+        let (actor, session): (&str, &str) = (actor, session);
+        let heartbeat = update == LeaseUpdate::Renew;
         let now = now_millis();
         let mut count = 0;
         store.edit_transient(&mut |s| {
-            collaboration::expire(s, now)?;
+            collaboration::expire(s, EpochMillis(now))?;
             let mut leases = leases_of(s)?;
             for key in leases.keys().cloned().collect::<Vec<_>>() {
                 let mut lease = json::map(&leases[&key])?.clone();
@@ -2413,7 +2461,8 @@ impl LocalProxy {
     }
 
     /// Static `releaseActor(store, actor)`.
-    pub fn release_actor(store: &Store, actor: &str) -> Result<Map> {
+    pub fn release_actor(store: &Store, actor: &ActorId) -> Result<Map> {
+        let actor: &str = actor;
         let mut released = 0;
         store.edit_transient(&mut |s| {
             let mut leases = leases_of(s)?;
@@ -2478,7 +2527,7 @@ impl LocalProxy {
                 self.clear_preview(document, session, actor);
             }
         }
-        for key in jutil::hash_order(by_actor.keys()) {
+        for key in hash_order(by_actor.keys()) {
             self.forward_locks(document, &Map::new(), &by_actor[&key], "", &key);
         }
         Ok(object! {"released" => released})
@@ -2558,7 +2607,7 @@ impl LocalProxy {
                 .map(|v| Value::from(json::java_string(v.get("key"))))
                 .collect();
             let mut subset = Map::new();
-            for key in jutil::hash_order(accepted.iter()) {
+            for key in hash_order(accepted.iter()) {
                 if let Some(v) = candidates.get(&key) {
                     subset.insert(key, v.clone());
                 }
@@ -2571,7 +2620,7 @@ impl LocalProxy {
     }
 
     /// `preview(document, actor, session, entities, transform)`.
-    pub fn preview(
+    fn preview(
         &self,
         document: &str,
         actor: &str,
@@ -2582,8 +2631,8 @@ impl LocalProxy {
         let store = self.store(document)?;
         let mut state = store.read()?;
         let now = now_millis();
-        collaboration::expire(&mut state, now)?;
-        let blocked = collaboration::conflicts(&state, actor, entities)?;
+        collaboration::expire(&mut state, EpochMillis(now))?;
+        let blocked = collaboration::conflicts(&state, &ActorId::from(actor), entities)?;
         require_msg(
             blocked.is_empty(),
             format!(
@@ -2595,12 +2644,12 @@ impl LocalProxy {
         for value in entities {
             let e = json::map(value)?;
             let key = collaboration::key(
-                json::string(e, "kind")?,
-                json::string(e, "id")?,
+                &EntityKind::from(json::string(e, "kind")?),
+                &EntityId::from(json::string(e, "id")?),
                 Some(json::get_or_default(e, "page", &Value::from(0))),
             );
             let lease = leases
-                .get(&key)
+                .get(&*key)
                 .map(json::map)
                 .transpose()?
                 .cloned()
@@ -2615,11 +2664,11 @@ impl LocalProxy {
         for value in entities {
             let e = json::map(value)?;
             let key = collaboration::key(
-                json::string(e, "kind")?,
-                json::string(e, "id")?,
+                &EntityKind::from(json::string(e, "kind")?),
+                &EntityId::from(json::string(e, "id")?),
                 Some(json::get_or_default(e, "page", &Value::from(0))),
             );
-            let lease = map_value(leases.get(&key))?;
+            let lease = map_value(leases.get(&*key))?;
             lease_limit = lease_limit.min(json::as_long(lease.get("expires"))?);
         }
         let expiry = (now + LEASE_MILLIS).min(lease_limit);
@@ -2643,7 +2692,7 @@ impl LocalProxy {
         let mut previews = Map::new();
         {
             let all = lock(&self.ephemeral_previews);
-            for key in jutil::hash_order(all.keys()) {
+            for key in hash_order(all.keys()) {
                 if key.starts_with(&format!("{}:", document)) {
                     let value = all[&key].clone();
                     previews.insert(
@@ -2828,11 +2877,11 @@ impl Uri {
     fn query(&self) -> Result<HashMap<String, String>> {
         let mut out = HashMap::new();
         if let Some(raw) = &self.raw_query {
-            for part in jutil::split(raw, "&") {
+            for part in split(raw, "&") {
                 let mut pair = part.splitn(2, '=');
-                let key = jutil::url_decode(pair.next().unwrap_or(""))?;
+                let key = url_decode(pair.next().unwrap_or(""))?;
                 let value = match pair.next() {
-                    Some(v) => jutil::url_decode(v)?,
+                    Some(v) => url_decode(v)?,
                     None => String::new(),
                 };
                 out.insert(key, value);
@@ -2860,12 +2909,12 @@ fn normalize_preview(preview: &Map, leases: &Map) -> Result<Option<Map>> {
     for value in entities {
         let entity = json::map(value)?;
         let key = collaboration::key(
-            &json::java_string(entity.get("kind")),
-            &json::java_string(entity.get("id")),
+            &EntityKind::from(json::java_string(entity.get("kind"))),
+            &EntityId::from(json::java_string(entity.get("id"))),
             Some(json::get_or_default(entity, "page", &Value::from(0))),
         );
         let lease = leases
-            .get(&key)
+            .get(&*key)
             .map(json::map)
             .transpose()?
             .cloned()
@@ -2900,7 +2949,7 @@ fn apply_remote_leases(store: &Store, body: &Map) -> Result<Map> {
     let mut skipped: Vec<Value> = Vec::new();
     store.edit_transient(&mut |s| {
         let mut current = leases_of(s)?;
-        collaboration::expire(s, now_millis())?;
+        collaboration::expire(s, EpochMillis(now_millis()))?;
         let empty = Value::Array(Vec::new());
         for key in json::list(json::get_or_default(body, "remove", &empty))? {
             let k = json::key_of(Some(key));
@@ -2947,7 +2996,7 @@ fn require_session_scope(state: &Map, session: Option<&str>, scope: &SelectionSc
             )));
             require(
                 scope.layer == layer
-                    && scope.page
+                    && scope.page.0
                         == int_of(Some(json::get_or_default(lease, "page", &Value::from(0))))?,
                 "Selection session belongs to another layer/page",
             )?;
@@ -2976,7 +3025,7 @@ fn selection_scope(store: &Store, request: &Map) -> Result<SelectionScope> {
     let scope = requested_selection_scope(request)?;
     LayerEditor::require_references(
         &store.model()?,
-        &scope.layer,
+        &LayerId::from(&scope.layer),
         scope.page,
         json::list(request.get("entities").unwrap_or(&Value::Null))?,
     )?;
@@ -3003,7 +3052,7 @@ fn select_validated(
         &request
             .get("session")
             .cloned()
-            .unwrap_or_else(|| Value::from(notemaker_core::ids::random_uuid())),
+            .unwrap_or_else(|| Value::from(String::from(notemaker_core::ids::Uuid::random()))),
     ));
     let now = now_millis();
     let page = request.get("page").cloned().unwrap_or(Value::from(0));
@@ -3017,8 +3066,8 @@ fn select_validated(
         "Selection needs 1–200 entities",
     )?;
     store.edit_transient(&mut |s| {
-        LayerEditor::require_references(&store::model(s)?, &scope.layer, scope.page, &entities)?;
-        collaboration::expire(s, now)?;
+        LayerEditor::require_references(&store::model(s)?, &LayerId::from(&scope.layer), scope.page, &entities)?;
+        collaboration::expire(s, EpochMillis(now))?;
         require_session_scope(s, Some(&session), scope)?;
         let mut leases = leases_of(s)?;
         let mut sessions = json::map(json::get_or_default(s, "activeSessions", &empty_map()))?.clone();
@@ -3026,7 +3075,7 @@ fn select_validated(
             let e = json::map(value)?;
             let kind = json::string(e, "kind")?;
             let id = json::string(e, "id")?;
-            let key = collaboration::key(kind, id, Some(&page));
+            let key = String::from(collaboration::key(&EntityKind::from(kind), &EntityId::from(id), Some(&page)));
             let prior = leases.get(&key).map(json::map).transpose()?.cloned().unwrap_or_default();
             if !prior.is_empty() && (prior.get("actor").and_then(Value::as_str) != Some(actor) || prior.get("session").and_then(Value::as_str) != Some(session.as_str())) {
                 skipped.push(Value::Object(object! {"kind" => kind, "id" => id, "page" => page.clone(), "actor" => prior.get("actor").cloned().unwrap_or(Value::Null)}));
@@ -3049,4 +3098,68 @@ fn select_validated(
     Ok(
         object! {"session" => session, "selected" => selected, "skipped" => skipped, "expires" => now + LEASE_MILLIS},
     )
+}
+
+// Java library semantics used only by this module.
+
+/// `s.split(regex_literal)` for a literal separator: trailing empty strings
+/// are removed; `""` gives `[""]`.
+fn split(s: &str, sep: &str) -> Vec<String> {
+    let mut parts: Vec<String> = s.split(sep).map(str::to_string).collect();
+    if s.is_empty() {
+        return vec![String::new()];
+    }
+    while parts.len() > 1 && parts.last().is_some_and(|p| p.is_empty()) {
+        parts.pop();
+    }
+    if parts.len() == 1 && parts[0].is_empty() && !s.is_empty() {
+        parts.clear();
+    }
+    parts
+}
+
+/// `URLDecoder.decode(s, "UTF-8")`.
+fn url_decode(s: &str) -> Result<String> {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' => {
+                while i < bytes.len() && bytes[i] == b'%' {
+                    if i + 2 >= bytes.len() {
+                        return Err(Error::illegal_argument(
+                            "URLDecoder: Incomplete trailing escape (%) pattern",
+                        ));
+                    }
+                    let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
+                        .ok()
+                        .and_then(|h| u8::from_str_radix(h, 16).ok());
+                    match hex {
+                        Some(b) => out.push(b),
+                        None => {
+                            return Err(Error::illegal_argument(
+                                "URLDecoder: Illegal hex characters in escape (%) pattern",
+                            ))
+                        }
+                    }
+                    i += 3;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Iteration order of a `HashMap`/`ConcurrentHashMap` with these keys.
+fn hash_order<'a>(keys: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+    json::java_hash_set_order(keys.into_iter().cloned())
 }

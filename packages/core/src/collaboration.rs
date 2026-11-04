@@ -1,7 +1,9 @@
 //! Port of `Collaboration.java`: selection lease and transform rules.
 
 use crate::error::{require, require_with, Error, Result};
-use crate::geometry;
+use crate::clock::EpochMillis;
+use crate::geometry::Polygon;
+use crate::ids::{ActorId, EntityId, EntityKey, EntityKind, LayerId, PageNumber, SessionId};
 use crate::jmath;
 use crate::json::{self, Map, Value};
 use crate::layer_editor::LayerEditor;
@@ -14,9 +16,12 @@ use std::collections::HashSet;
 /// `Collaboration.LEASE_MILLIS`.
 pub const LEASE_MILLIS: i64 = 15000;
 
-/// `System.currentTimeMillis()`.
-pub fn now_millis() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+/// A uniform scale about the selection centre followed by a translation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SelectionTransform {
+    pub scale: f64,
+    pub dx: f64,
+    pub dy: f64,
 }
 
 fn leases_of(state: &Map) -> Result<Map> {
@@ -28,8 +33,9 @@ fn leases_of(state: &Map) -> Result<Map> {
 
 /// `requireSelection(state, model, actor, session, entities)`: resolve a
 /// session's entire batch inside its layer before generating changes.
-pub fn require_selection(state: &mut Map, model: &Model, actor: &str, session: &str, entities: &[Value]) -> Result<()> {
-    expire(state, now_millis())?;
+pub fn require_selection(state: &mut Map, model: &Model, actor: &ActorId, session: &SessionId, entities: &[Value]) -> Result<()> {
+    let (actor, session): (&str, &str) = (actor, session);
+    expire(state, EpochMillis::now())?;
     let leases = leases_of(state)?;
     let mut editor: Option<LayerEditor> = None;
     require(!entities.is_empty(), "Selection needs entities")?;
@@ -37,7 +43,7 @@ pub fn require_selection(state: &mut Map, model: &Model, actor: &str, session: &
     let empty = Value::Object(Map::new());
     for value in entities {
         let r = json::map(value)?;
-        let k = key(json::string(r, "kind")?, json::string(r, "id")?, Some(json::get_or_default(r, "page", &zero)));
+        let k = key_str(json::string(r, "kind")?, json::string(r, "id")?, Some(json::get_or_default(r, "page", &zero)));
         let lease = json::map(json::get_or_default(&leases, &k, &empty))?;
         require(
             lease.get("session").and_then(Value::as_str) == Some(session) && lease.get("actor").and_then(Value::as_str) == Some(actor),
@@ -46,8 +52,8 @@ pub fn require_selection(state: &mut Map, model: &Model, actor: &str, session: &
         let layer = json::string_or(lease, "layer", "base")?.ok_or_else(Error::null_pointer)?.to_string();
         let page = json::as_int(Some(json::get_or_default(lease, "page", &zero)))?;
         match &editor {
-            None => editor = Some(LayerEditor::new(model, &layer, page)?),
-            Some(e) => require(e.layer == layer && e.page == page, "Selection spans layers/pages")?,
+            None => editor = Some(LayerEditor::new(model, &LayerId::from(&layer), PageNumber(page))?),
+            Some(e) => require(e.layer == layer.as_str() && e.page == PageNumber(page), "Selection spans layers/pages")?,
         }
     }
     editor.unwrap().resolve_refs(entities)?;
@@ -55,7 +61,11 @@ pub fn require_selection(state: &mut Map, model: &Model, actor: &str, session: &
 }
 
 /// `Collaboration.key(kind, id, page)`: `page:kind:id` (page `0` when null).
-pub fn key(kind: &str, id: &str, page: Option<&Value>) -> String {
+pub fn key(kind: &EntityKind, id: &EntityId, page: Option<&Value>) -> EntityKey {
+    EntityKey::from(key_str(kind.as_ref(), id.as_ref(), page))
+}
+
+fn key_str(kind: &str, id: &str, page: Option<&Value>) -> String {
     let page = match page {
         None | Some(Value::Null) => "0".to_string(),
         Some(p) => json::java_string(Some(p)),
@@ -66,7 +76,8 @@ pub fn key(kind: &str, id: &str, page: Option<&Value>) -> String {
 /// Whether [`expire`] would change `state` (a missing `leases` key or an
 /// expired lease). Lets copy-on-write readers skip the mutable borrow, since
 /// `expire` otherwise rewrites `leases` with an equal value in place.
-pub fn expire_changes(state: &Map, now: i64) -> Result<bool> {
+pub fn expire_changes(state: &Map, now: EpochMillis) -> Result<bool> {
+    let now = now.0;
     let Some(leases) = state.get("leases") else {
         return Ok(true);
     };
@@ -80,7 +91,8 @@ pub fn expire_changes(state: &Map, now: i64) -> Result<bool> {
 }
 
 /// `Collaboration.expire(state, now)`: drop expired leases.
-pub fn expire(state: &mut Map, now: i64) -> Result<()> {
+pub fn expire(state: &mut Map, now: EpochMillis) -> Result<()> {
+    let now = now.0;
     let mut leases = leases_of(state)?;
     let keys: Vec<String> = leases.keys().cloned().collect();
     let zero = Value::from(0);
@@ -95,7 +107,8 @@ pub fn expire(state: &mut Map, now: i64) -> Result<()> {
 }
 
 /// `Collaboration.conflicts(state, actor, entities)`: leases held by others.
-pub fn conflicts(state: &Map, actor: &str, entities: &[Value]) -> Result<Vec<Value>> {
+pub fn conflicts(state: &Map, actor: &ActorId, entities: &[Value]) -> Result<Vec<Value>> {
+    let actor: &str = actor;
     let mut blocked = Vec::new();
     let leases = leases_of(state)?;
     let sessions = match state.get("activeSessions") {
@@ -106,7 +119,7 @@ pub fn conflicts(state: &Map, actor: &str, entities: &[Value]) -> Result<Vec<Val
     let zero = Value::from(0);
     for value in entities {
         let entity = json::map(value)?;
-        let k = key(json::string(entity, "kind")?, json::string(entity, "id")?, entity.get("page"));
+        let k = key_str(json::string(entity, "kind")?, json::string(entity, "id")?, entity.get("page"));
         let suffix = format!(":{}:{}", json::java_string(entity.get("kind")), json::java_string(entity.get("id")));
         for (entry_key, entry_value) in &leases {
             if *entry_key != k && !entry_key.ends_with(&suffix) {
@@ -164,7 +177,7 @@ fn add(out: &mut Map, op: &Map) {
         if op.contains_key("page") {
             r.insert("page".into(), op.get("page").cloned().unwrap_or(Value::Null));
         }
-        json::put_if_absent(out, &key(&entity, &id, op.get("page")), Value::Object(r));
+        json::put_if_absent(out, &key_str(&entity, &id, op.get("page")), Value::Object(r));
     }
 }
 
@@ -207,7 +220,7 @@ fn to_maps(values: Vec<Value>) -> Vec<Map> {
 }
 
 /// `requireUnlocked(state, actor, operations, now)`.
-pub fn require_unlocked(state: &mut State, actor: &str, operations: &[Value], now: i64) -> Result<()> {
+pub fn require_unlocked(state: &mut State, actor: &ActorId, operations: &[Value], now: EpochMillis) -> Result<()> {
     expire(state, now)?;
     let model = store::model(state)?;
     let mut expanded = to_maps(affected(operations)?);
@@ -228,7 +241,7 @@ pub fn require_unlocked(state: &mut State, actor: &str, operations: &[Value], no
 }
 
 /// `requireIncomingUnlocked(state, operation, now)`: guard a child's raw ingress.
-pub fn require_incoming_unlocked(state: &mut State, operation: &Map, now: i64) -> Result<()> {
+pub fn require_incoming_unlocked(state: &mut State, operation: &Map, now: EpochMillis) -> Result<()> {
     expire(state, now)?;
     let operations: Vec<Value> = if operation.get("kind").and_then(Value::as_str) == Some("batch") {
         json::list(operation.get("actions").unwrap_or(&Value::Null))?.clone()
@@ -248,7 +261,7 @@ pub fn require_incoming_unlocked(state: &mut State, operation: &Map, now: i64) -
     let leases = leases_of(state)?;
     let refs: Vec<String> = expanded
         .iter()
-        .map(|e| key(&json::java_string(e.get("kind")), &json::java_string(e.get("id")), e.get("page")))
+        .map(|e| key_str(&json::java_string(e.get("kind")), &json::java_string(e.get("id")), e.get("page")))
         .collect();
     // Java iterated a HashSet<String> here; reproduce its order for the message.
     let mut blocked = Vec::new();
@@ -302,7 +315,8 @@ fn expand_layer(model: &Model, op: &Map, out: &mut Vec<Map>) {
 }
 
 /// `transform(model, entities, scale, dx, dy)`.
-pub fn transform_simple(model: &Model, entities: &[Value], scale: f64, dx: f64, dy: f64) -> Result<Vec<Value>> {
+pub fn transform_simple(model: &Model, entities: &[Value], transform_by: SelectionTransform) -> Result<Vec<Value>> {
+    let SelectionTransform { scale, dx, dy } = transform_by;
     transform(model, entities, &object! {"scale" => json::double(scale), "dx" => json::double(dx), "dy" => json::double(dy)})
 }
 
@@ -365,10 +379,10 @@ pub fn transform(model: &Model, entities: &[Value], spec: &Map) -> Result<Vec<Va
             let (mut x, mut y, mut w, mut h) = (num(old, "x")?, num(old, "y")?, num(old, "w")?, num(old, "h")?);
             if attached {
                 let ends = render::endpoints(model, old)?;
-                x = ends[0];
-                y = ends[1];
-                w = ends[2] - ends[0];
-                h = ends[3] - ends[1];
+                x = ends.start.x;
+                y = ends.start.y;
+                w = ends.end.x - ends.start.x;
+                h = ends.end.y - ends.start.y;
             }
             min_x = jmath::min(min_x, jmath::min(x, x + w));
             max_x = jmath::max(max_x, jmath::max(x, x + w));
@@ -404,7 +418,7 @@ pub fn transform(model: &Model, entities: &[Value], spec: &Map) -> Result<Vec<Va
         let e = json::map(value)?;
         let kind = json::string(e, "kind")?;
         let id = json::string(e, "id")?;
-        require(seen.insert(key(kind, id, e.get("page"))), "Duplicate transform entity")?;
+        require(seen.insert(key_str(kind, id, e.get("page"))), "Duplicate transform entity")?;
         if kind == "object" {
             let old = model.objects.get(id);
             require_with(old.is_some(), || format!("Unknown object: {}", id))?;
@@ -416,10 +430,10 @@ pub fn transform(model: &Model, entities: &[Value], spec: &Map) -> Result<Vec<Va
             let mut next: Map = (**old).clone();
             if attached {
                 let ends = render::endpoints(model, old)?;
-                next.insert("x".into(), json::double(ends[0]));
-                next.insert("y".into(), json::double(ends[1]));
-                next.insert("w".into(), json::double(ends[2] - ends[0]));
-                next.insert("h".into(), json::double(ends[3] - ends[1]));
+                next.insert("x".into(), json::double(ends.start.x));
+                next.insert("y".into(), json::double(ends.start.y));
+                next.insert("w".into(), json::double(ends.end.x - ends.start.x));
+                next.insert("h".into(), json::double(ends.end.y - ends.start.y));
                 next.shift_remove("from");
                 next.shift_remove("to");
             }
@@ -457,14 +471,14 @@ pub fn transform(model: &Model, entities: &[Value], spec: &Map) -> Result<Vec<Va
             if old.contains_key("erasures") {
                 let mut masks = Vec::new();
                 for raw in json::list_at(old, "erasures")? {
-                    let mut polygon = geometry::polygon(raw)?;
+                    let mut polygon = Polygon::from_json(raw)?;
                     for v in polygon.iter_mut() {
-                        let x = v[0] * fx * scale;
-                        let y = v[1] * fy * scale;
-                        v[0] = x * cos - y * sin;
-                        v[1] = x * sin + y * cos;
+                        let x = v.x * fx * scale;
+                        let y = v.y * fy * scale;
+                        v.x = x * cos - y * sin;
+                        v.y = x * sin + y * cos;
                     }
-                    masks.push(geometry::json(&polygon));
+                    masks.push(polygon.to_json());
                 }
                 next.insert("erasures".into(), Value::Array(masks));
             }

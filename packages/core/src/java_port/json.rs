@@ -25,12 +25,6 @@ macro_rules! object {
     }};
 }
 
-/// Number value from a Java `long`/`int`.
-#[inline]
-pub fn long(v: i64) -> Value {
-    Value::from(v)
-}
-
 /// Number value from a Java `double`. Non-finite values become `null`
 /// (Java kept them in memory and later rejected them as non-finite).
 #[inline]
@@ -65,10 +59,6 @@ pub fn map_at<'a>(m: &'a Map, key: &str) -> Result<&'a Map> {
 /// `Json.list(value)`.
 pub fn list(value: &Value) -> Result<&List> {
     value.as_array().ok_or_else(|| Error::illegal_argument("Expected JSON array"))
-}
-/// `Json.list(value)` for mutation.
-pub fn list_mut(value: &mut Value) -> Result<&mut List> {
-    value.as_array_mut().ok_or_else(|| Error::illegal_argument("Expected JSON array"))
 }
 /// `Json.list(m.get(key))` where a missing key is `null`.
 pub fn list_at<'a>(m: &'a Map, key: &str) -> Result<&'a List> {
@@ -167,7 +157,7 @@ pub fn number_int(n: &serde_json::Number) -> i32 {
 }
 
 /// `Number.longValue()`.
-pub fn number_long(n: &serde_json::Number) -> i64 {
+fn number_long(n: &serde_json::Number) -> i64 {
     if let Some(i) = n.as_i64() {
         i
     } else if let Some(u) = n.as_u64() {
@@ -205,18 +195,6 @@ pub fn is_number(value: Option<&Value>) -> bool {
 #[inline]
 pub fn is_true(value: Option<&Value>) -> bool {
     matches!(value, Some(Value::Bool(true)))
-}
-
-/// `Boolean.FALSE.equals(value)`.
-#[inline]
-pub fn is_false(value: Option<&Value>) -> bool {
-    matches!(value, Some(Value::Bool(false)))
-}
-
-/// `m.getOrDefault(key, default)` returning a reference.
-#[inline]
-pub fn get_or<'a>(m: &'a Map, key: &str, default: &'a Value) -> &'a Value {
-    m.get(key).unwrap_or(default)
 }
 
 /// `Objects.equals(a, b)` for optional values, where Java `null` and a
@@ -333,7 +311,7 @@ impl Decimal {
 }
 
 /// Java `Number.toString()` of a JSON number.
-pub fn number_string(n: &serde_json::Number) -> String {
+fn number_string(n: &serde_json::Number) -> String {
     if let Some(i) = n.as_i64() {
         i.to_string()
     } else if let Some(u) = n.as_u64() {
@@ -409,7 +387,7 @@ pub fn write_list(value: &[Value]) -> String {
 }
 
 /// Append the JSON encoding of a string (exact Java escaping rules).
-pub fn append_string(out: &mut String, text: &str) {
+fn append_string(out: &mut String, text: &str) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     out.push('"');
     let mut start = 0;
@@ -798,14 +776,6 @@ pub fn put_if_absent(m: &mut Map, key: &str, value: Value) {
 pub fn get_or_default<'a>(m: &'a Map, key: &str, default: &'a Value) -> &'a Value {
     match m.get(key) {
         Some(v) => v,
-        None => default,
-    }
-}
-
-/// Owned `Map.getOrDefault(key, default)`.
-pub fn get_or_default_owned(m: &Map, key: &str, default: Value) -> Value {
-    match m.get(key) {
-        Some(v) => v.clone(),
         None => default,
     }
 }

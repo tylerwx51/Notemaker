@@ -141,8 +141,8 @@ impl AgentUi {
         self.app().this.clone()
     }
     /// `private int dp(int v)`.
-    pub fn dp(&self, v: i32) -> AppResult<i32> {
-        Ok(crate::ui::dp(&self.context(), v as f32)?)
+    fn dp(&self, v: i32) -> AppResult<i32> {
+        Ok(crate::ui::dp(&self.context(), crate::ui::Dp(v as f32))?.0)
     }
     /// `private LinearLayout column()`.
     pub fn column(&self) -> AppResult<Obj> {
@@ -157,24 +157,24 @@ impl AgentUi {
     fn post(&self, f: impl FnOnce() -> AppResult<()> + Send + 'static) {
         let r = jx::try_once_runnable(move || f().map_err(Into::into));
         if let Err(e) = ui::post(&self.ui, &r) {
-            jx::log::e_err("NoteMaker", "Handler.post failed", &e);
+            jx::log::e_err(crate::jx::log::NOTEMAKER, "Handler.post failed", &e);
         }
     }
     /// `private TextView text(String value, int size)`.
-    pub fn text(&self, value: &str, size: i32) -> AppResult<Obj> {
+    fn text(&self, value: &str, size: i32) -> AppResult<Obj> {
         let v = ui::text_view(&self.context())?;
-        ui::set_text(&v, value)?;
+        ui::set_text(&v, &ui::UiText::from(value))?;
         jcall!(v, "android/widget/TextView", "setTextSize", "(F)V", size as f32)?;
         jcall!(v, "android/widget/TextView", "setTextColor", "(I)V", 0xff202521u32 as i32)?;
-        ui::set_padding(&v, self.dp(4)?, self.dp(6)?, self.dp(4)?, self.dp(6)?)?;
+        ui::set_padding(&v, ui::PxInsets { left: self.dp(4)?, top: self.dp(6)?, right: self.dp(4)?, bottom: self.dp(6)? })?;
         Ok(v)
     }
     /// `private Button button(String title, Runnable action)`.
-    pub fn button(self: &Arc<Self>, title: &str, action: Arc<dyn Fn(&Arc<AgentUi>) -> AppResult<()> + Send + Sync>) -> AppResult<Obj> {
+    fn button(self: &Arc<Self>, title: &str, action: Arc<dyn Fn(&Arc<AgentUi>) -> AppResult<()> + Send + Sync>) -> AppResult<Obj> {
         let v = jnew!("android/widget/Button", "(Landroid/content/Context;)V", &self.context())?;
-        ui::set_text(&v, title)?;
+        ui::set_text(&v, &ui::UiText::from(title))?;
         jcall!(v, "android/widget/TextView", "setAllCaps", "(Z)V", false)?;
-        ui::set_content_description(&v, title)?;
+        ui::set_content_description(&v, &ui::UiText::from(title))?;
         let weak = Arc::downgrade(self);
         ui::on_click(&v, move |_| match weak.upgrade() {
             Some(me) => action(&me).map_err(Into::into),
@@ -194,22 +194,22 @@ impl AgentUi {
         self.incoming.with_mut(|i| i.clear());
     }
     /// `private String draftKey()`.
-    pub fn draft_key(&self) -> String {
+    fn draft_key(&self) -> String {
         format!("agent-draft:{}:{}", s(&self.base.get()), s(&self.chat.get()))
     }
     /// `private String pendingKey()`.
-    pub fn pending_key(&self) -> String {
+    fn pending_key(&self) -> String {
         format!("agent-pending:{}:{}", s(&self.base.get()), s(&self.chat.get()))
     }
     /// `private void saveDraft()`.
     pub fn save_draft(&self) -> AppResult<()> {
         if let (Some(_), Some(input)) = (self.chat.get(), self.input.get()) {
             let context = self.context();
-            if self.pending.get().is_some() && !ui::pref_contains(&context, &self.pending_key())? {
+            if self.pending.get().is_some() && !ui::pref_contains(&context, &ui::PrefKey::from(&self.pending_key()))? {
                 return Ok(());
             }
             let editor = ui::edit(&context)?;
-            ui::put_string(&editor, &self.draft_key(), &ui::text_of(&input)?)?;
+            ui::put_string(&editor, &ui::PrefKey::from(&self.draft_key()), &ui::PrefText::from(&String::from(ui::text_of(&input)?)))?;
             ui::apply(&editor)?;
         }
         Ok(())
@@ -256,7 +256,7 @@ impl AgentUi {
         }
         let app = self.app();
         if let Err(e) = self.configure_proxy(&app) {
-            ui::toast(&app.this, &format!("Cannot connect to the configured proxy: {}", e.message_or_null()), TOAST_LENGTH_LONG)?;
+            ui::toast(&app.this, &ui::UiText::from(&format!("Cannot connect to the configured proxy: {}", e.message_or_null())), TOAST_LENGTH_LONG)?;
             return Ok(());
         }
         let ctx = app.this.clone();
@@ -266,15 +266,15 @@ impl AgentUi {
         jcall!(dialog, "android/app/Dialog", "setTitle", "(Ljava/lang/CharSequence;)V", &title)?;
         let body = self.column()?;
         self.body.set(Some(body.clone()));
-        ui::set_padding(&body, self.dp(16)?, self.dp(12)?, self.dp(16)?, self.dp(12)?)?;
-        ui::set_background_color(&body, COLOR_WHITE)?;
+        ui::set_padding(&body, ui::PxInsets { left: self.dp(16)?, top: self.dp(12)?, right: self.dp(16)?, bottom: self.dp(12)? })?;
+        ui::set_background_color(&body, notemaker_core::style::ArgbColor(COLOR_WHITE))?;
         // A full-window transparent host receives IME insets even on BOOX. Only
         // the centered white panel is visible, and it fits the remaining space.
         let frame = ui::frame_layout(&ctx)?;
         let panel = body.clone();
         jcall!(panel, "android/view/View", "setClickable", "(Z)V", true)?;
-        ui::set_padding(&frame, self.dp(12)?, self.dp(12)?, self.dp(12)?, self.dp(12)?)?;
-        ui::add_view_params(&frame, &panel, &ui::frame_params_gravity(-1, -1, GRAVITY_CENTER)?)?;
+        ui::set_padding(&frame, ui::PxInsets { left: self.dp(12)?, top: self.dp(12)?, right: self.dp(12)?, bottom: self.dp(12)? })?;
+        ui::add_view_params(&frame, &panel, &ui::frame_params_gravity(ui::LayoutSize { width: -1, height: -1 }, GRAVITY_CENTER)?)?;
         let weak = Arc::downgrade(self);
         ui::on_click(&frame, move |_| match weak.upgrade() {
             Some(me) => me.dismiss().map_err(Into::into),
@@ -302,7 +302,7 @@ impl AgentUi {
                     let right = jget!(safe, "android/graphics/Insets", "right", "I")?.int();
                     let bottom = jget!(safe, "android/graphics/Insets", "bottom", "I")?.int();
                     let pad = me.dp(12)?;
-                    ui::set_padding(&frame, left + pad, top + pad, right + pad, bottom + pad)?;
+                    ui::set_padding(&frame, ui::PxInsets { left: left + pad, top: top + pad, right: right + pad, bottom: bottom + pad })?;
                     me.resize_popup(&frame, &panel)?;
                 }
                 Ok(Reply::Obj(insets))
@@ -340,7 +340,7 @@ impl AgentUi {
     }
     /// `private void resizePopup(FrameLayout frame, LinearLayout panel)`.
     pub fn resize_popup(&self, frame: &Obj, panel: &Obj) -> AppResult<()> {
-        let frame_height = ui::height(frame)?;
+        let frame_height = ui::height(frame)?.0;
         if frame_height == 0 {
             return Ok(());
         }
@@ -352,7 +352,7 @@ impl AgentUi {
                 _ => jcall!(frame, "android/view/View", "getPaddingBottom", "()I")?.int(),
             })
         };
-        let width = 1.max(self.dp(640)?.min(ui::width(frame)? - pad("left")? - pad("right")?));
+        let width = 1.max(self.dp(640)?.min(ui::width(frame)?.0 - pad("left")? - pad("right")?));
         let height = 1.max(((frame_height as f64 * 0.85) as i32).min(frame_height - pad("top")? - pad("bottom")?));
         let params = jcall!(panel, "android/view/View", "getLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;")?.some();
         let current_width = jget!(params, "android/view/ViewGroup$LayoutParams", "width", "I")?.int();
@@ -365,7 +365,7 @@ impl AgentUi {
         Ok(())
     }
     /// `private void clear(String heading)`.
-    pub fn clear(self: &Arc<Self>, heading: &str) -> AppResult<()> {
+    fn clear(self: &Arc<Self>, heading: &str) -> AppResult<()> {
         self.save_draft()?;
         self.cancel_stream();
         self.chat.set(None);
@@ -374,7 +374,7 @@ impl AgentUi {
         let body = self.body();
         jcall!(body, "android/view/ViewGroup", "removeAllViews", "()V")?;
         let row = jnew!("android/widget/LinearLayout", "(Landroid/content/Context;)V", &self.context())?;
-        ui::add_view_params(&row, &self.text(heading, 22)?, &ui::linear_params_weight(0, -2, 1.0)?)?;
+        ui::add_view_params(&row, &self.text(heading, 22)?, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -2 }, ui::LayoutWeight(1.0))?)?;
         ui::add_view(&row, &self.button("Close", action(|me| me.dismiss()))?)?;
         ui::add_view(&body, &row)?;
         let status = self.text("", 13)?;
@@ -394,7 +394,7 @@ impl AgentUi {
                     let me = ui_me;
                     if token == me.generation.get() && me.dialog.get().is_some() {
                         if let Err(e) = done(&me, result) {
-                            ui::set_text(&me.status_view(), &e.message().unwrap_or_default())?;
+                            ui::set_text(&me.status_view(), &ui::UiText::from(&e.message().unwrap_or_default()))?;
                         }
                     }
                     Ok(())
@@ -402,11 +402,11 @@ impl AgentUi {
                 Err(e) => me.post(move || {
                     let me = ui_me;
                     if token == me.generation.get() && me.dialog.get().is_some() {
-                        ui::set_text(&me.status_view(), &format!("Connection/request failed: {}", e.message_or_null()))?;
+                        ui::set_text(&me.status_view(), &ui::UiText::from(&format!("Connection/request failed: {}", e.message_or_null())))?;
                         if let (Some(send), Some(_)) = (me.send.get(), me.chat.get()) {
                             set_enabled(&send, true)?;
                             if me.pending.get().is_some() {
-                                ui::set_text(&send, "Retry send")?;
+                                ui::set_text(&send, &ui::UiText::from("Retry send"))?;
                             }
                         }
                     }
@@ -417,7 +417,7 @@ impl AgentUi {
     }
     /// `private JSONObject http(String url, JSONObject data) throws Exception`
     /// (`HttpURLConnection` → `notemaker_core::endpoint::HttpConnection`).
-    pub fn http(&self, url: &str, data: Option<&JSONObject>) -> AppResult<JSONObject> {
+    fn http(&self, url: &str, data: Option<&JSONObject>) -> AppResult<JSONObject> {
         let mut c = HttpConnection::new(url)?;
         c.set_connect_timeout(5000);
         c.set_read_timeout(10000);
@@ -445,15 +445,15 @@ impl AgentUi {
         result
     }
     /// `private void hub(int offset, boolean recent)`.
-    pub fn hub(self: &Arc<Self>, offset: i32, recent: bool) -> AppResult<()> {
+    fn hub(self: &Arc<Self>, offset: i32, recent: bool) -> AppResult<()> {
         self.clear(if recent { "Agent" } else { "All chats" })?;
         let body = self.body();
         ui::add_view(&body, &self.button("New chat", action(|me| me.new_chat()))?)?;
         let list_scroll = jnew!("android/widget/ScrollView", "(Landroid/content/Context;)V", &self.context())?;
         let list = self.column()?;
         ui::add_view(&list_scroll, &list)?;
-        ui::add_view_params(&body, &list_scroll, &ui::linear_params_weight(-1, 0, 1.0)?)?;
-        ui::set_text(&self.status_view(), if recent { "Five most recent chats" } else { "Chat history" })?;
+        ui::add_view_params(&body, &list_scroll, &ui::linear_params_weight(ui::LayoutSize { width: -1, height: 0 }, ui::LayoutWeight(1.0))?)?;
+        ui::set_text(&self.status_view(), &ui::UiText::from(if recent { "Five most recent chats" } else { "Chat history" }))?;
         let url = format!("{}/api/chats?limit={}&offset={}", s(&self.base.get()), if recent { 5 } else { 20 }, offset);
         let me = self.clone();
         self.request(
@@ -487,10 +487,10 @@ impl AgentUi {
         Ok(())
     }
     /// `private Spinner spinner(String description, String[] values)` (listener `AgentUi$1`).
-    pub fn spinner(&self, description: &str, values: &[String]) -> AppResult<Obj> {
+    fn spinner(&self, description: &str, values: &[String]) -> AppResult<Obj> {
         let ctx = self.context();
         let v = jnew!("android/widget/Spinner", "(Landroid/content/Context;)V", &ctx)?;
-        ui::set_content_description(&v, description)?;
+        ui::set_content_description(&v, &ui::UiText::from(description))?;
         let adapter = string_adapter(&ctx, values)?;
         jcall!(v, "android/widget/Spinner", "setAdapter", "(Landroid/widget/SpinnerAdapter;)V", &adapter)?;
         let body = self.body();
@@ -501,13 +501,13 @@ impl AgentUi {
     /// `private void newChat()`.
     pub fn new_chat(self: &Arc<Self>) -> AppResult<()> {
         self.clear("New chat")?;
-        ui::set_text(&self.status_view(), "Loading available agents…")?;
+        ui::set_text(&self.status_view(), &ui::UiText::from("Loading available agents…"))?;
         let url = format!("{}/api/chats/options", s(&self.base.get()));
         let me = self.clone();
         self.request(
             Box::new(move || me.http(&url, None)),
             Box::new(move |me, result| {
-                ui::set_text(&me.status_view(), "Choose an agent for this conversation")?;
+                ui::set_text(&me.status_view(), &ui::UiText::from("Choose an agent for this conversation"))?;
                 let harnesses = result.get_json_array("harnesses")?;
                 let models = result.get_json_array("models")?;
                 let mut harness_names = Vec::with_capacity(harnesses.length());
@@ -546,7 +546,7 @@ impl AgentUi {
                     Ok(Reply::Void)
                 });
                 jcall!(model, "android/widget/AdapterView", "setOnItemSelectedListener", "(Landroid/widget/AdapterView$OnItemSelectedListener;)V", &selected_listener)?;
-                let identity = notemaker_core::ids::random_uuid();
+                let identity = String::from(notemaker_core::ids::Uuid::random());
                 let (harness_ref, model_ref, effort_ref) = (WeakObj::new(&harness), WeakObj::new(&model), WeakObj::new(&effort));
                 let create = me.button(
                     "Start chat",
@@ -588,18 +588,18 @@ impl AgentUi {
         ui::add_view(&scroll, &messages)?;
         self.scroll.set(Some(scroll.clone()));
         self.messages.set(Some(messages));
-        ui::add_view_params(&body, &scroll, &ui::linear_params_weight(-1, 0, 1.0)?)?;
+        ui::add_view_params(&body, &scroll, &ui::linear_params_weight(ui::LayoutSize { width: -1, height: 0 }, ui::LayoutWeight(1.0))?)?;
         let input = jnew!("android/widget/EditText", "(Landroid/content/Context;)V", &ctx)?;
         let hint = jx::jstr("Message agent");
         jcall!(input, "android/widget/TextView", "setHint", "(Ljava/lang/CharSequence;)V", &hint)?;
-        ui::set_content_description(&input, "Message agent")?;
+        ui::set_content_description(&input, &ui::UiText::from("Message agent"))?;
         jcall!(input, "android/widget/TextView", "setMinLines", "(I)V", 1)?;
         jcall!(input, "android/widget/TextView", "setMaxLines", "(I)V", 4)?;
         jcall!(input, "android/widget/TextView", "setInputType", "(I)V", INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_FLAG_MULTI_LINE | INPUTTYPE_TYPE_TEXT_FLAG_CAP_SENTENCES)?;
-        ui::set_text(&input, &ui::pref_string(&ctx, &self.draft_key(), Some(""))?.unwrap_or_default())?;
+        ui::set_text(&input, &ui::UiText::from(&ui::pref_string(&ctx, &ui::PrefKey::from(&self.draft_key()), Some(&ui::PrefText::from("")))?.map(String::from).unwrap_or_default()))?;
         ui::add_view(&body, &input)?;
         self.input.set(Some(input.clone()));
-        if let Ok(Some(saved)) = ui::pref_string(&ctx, &self.pending_key(), Some("")) {
+        if let Ok(Some(saved)) = ui::pref_string(&ctx, &ui::PrefKey::from(&self.pending_key()), Some(&ui::PrefText::from(""))) {
             if !saved.is_empty() {
                 if let Ok(pending) = JSONObject::parse(&saved) {
                     self.pending.set(Some(pending));
@@ -611,24 +611,24 @@ impl AgentUi {
         let stop = self.button("Stop", action(|me| me.stop()))?;
         self.send.set(Some(send.clone()));
         self.stop.set(Some(stop.clone()));
-        ui::add_view_params(&actions, &send, &ui::linear_params_weight(0, -2, 1.0)?)?;
-        ui::add_view_params(&actions, &stop, &ui::linear_params_weight(0, -2, 1.0)?)?;
+        ui::add_view_params(&actions, &send, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -2 }, ui::LayoutWeight(1.0))?)?;
+        ui::add_view_params(&actions, &stop, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -2 }, ui::LayoutWeight(1.0))?)?;
         ui::add_view(&body, &actions)?;
         self.set_status(&data.opt_string("status"), &data.opt_string("status"))?;
         if let Some(pending) = self.pending.get() {
-            ui::set_text(&input, &pending.opt_string("text"))?;
-            ui::set_text(&send, "Retry send")?;
+            ui::set_text(&input, &ui::UiText::from(&pending.opt_string("text")))?;
+            ui::set_text(&send, &ui::UiText::from("Retry send"))?;
             set_enabled(&send, true)?;
         }
         self.subscribe(self.generation.get(), &s(&self.base.get()), &s(&self.chat.get()));
         Ok(())
     }
     /// `private void setStatus(String state, String detail)`.
-    pub fn set_status(&self, state: &str, detail: &str) -> AppResult<()> {
+    fn set_status(&self, state: &str, detail: &str) -> AppResult<()> {
         let busy = state == "running";
         self.busy.set(busy);
         self.last_status.set(detail.to_string());
-        ui::set_text(&self.status_view(), detail)?;
+        ui::set_text(&self.status_view(), &ui::UiText::from(detail))?;
         set_enabled(&self.stop.get().expect("stop"), busy)?;
         set_enabled(&self.send.get().expect("send"), !busy || self.pending.get().is_some())?;
         Ok(())
@@ -637,20 +637,20 @@ impl AgentUi {
     pub fn send(self: &Arc<Self>) -> AppResult<()> {
         let input = self.input.get().expect("input");
         if self.pending.get().is_none() {
-            let raw = ui::text_of(&input)?;
+            let raw = String::from(ui::text_of(&input)?);
             let value = raw.trim_matches(|c: char| c <= ' ');
             if value.is_empty() {
                 return Ok(());
             }
             let app = self.app();
             let pending = obj(&[
-                ("request", JV::from(notemaker_core::ids::random_uuid())),
+                ("request", JV::from(String::from(notemaker_core::ids::Uuid::random()))),
                 ("text", JV::from(value)),
                 ("document", JV::from(app.document.get())),
                 ("session", JV::from(app.app_session_id.get())),
             ]);
             let editor = ui::edit(&app.this)?;
-            ui::put_string(&editor, &self.pending_key(), &pending.to_string())?;
+            ui::put_string(&editor, &ui::PrefKey::from(&self.pending_key()), &ui::PrefText::from(&pending.to_string()))?;
             ui::apply(&editor)?;
             self.pending.set(Some(pending));
         }
@@ -667,8 +667,8 @@ impl AgentUi {
             Box::new(move || {
                 let result = me.http(&url, Some(&message)).and_then(|result| {
                     let editor = ui::edit(&me.context())?;
-                    ui::remove_pref(&editor, &key)?;
-                    ui::remove_pref(&editor, &draft)?;
+                    ui::remove_pref(&editor, &ui::PrefKey::from(&key))?;
+                    ui::remove_pref(&editor, &ui::PrefKey::from(&draft))?;
                     ui::apply(&editor)?;
                     Ok(result)
                 });
@@ -685,9 +685,9 @@ impl AgentUi {
             }),
             Box::new(|me, _| {
                 me.pending.set(None);
-                ui::set_text(&me.input.get().expect("input"), "")?;
+                ui::set_text(&me.input.get().expect("input"), &ui::UiText::from(""))?;
                 let send = me.send.get().expect("send");
-                ui::set_text(&send, "Send")?;
+                ui::set_text(&send, &ui::UiText::from("Send"))?;
                 set_enabled(&send, !me.busy.get())?;
                 Ok(())
             }),
@@ -701,7 +701,7 @@ impl AgentUi {
         self.request(
             Box::new(move || me.http(&url, Some(&JSONObject::new()))),
             Box::new(|me, result| {
-                ui::set_text(&me.status_view(), if result.opt_boolean("stopping") { "Stopping…" } else { "Finished" })?;
+                ui::set_text(&me.status_view(), &ui::UiText::from(if result.opt_boolean("stopping") { "Stopping…" } else { "Finished" }))?;
                 Ok(())
             }),
         );
@@ -720,7 +720,7 @@ impl AgentUi {
         let me = self.clone();
         self.post(move || {
             if token == me.generation.get() && me.dialog.get().is_some() {
-                ui::set_text(&me.status_view(), &me.last_status.get())?;
+                ui::set_text(&me.status_view(), &ui::UiText::from(&me.last_status.get()))?;
             }
             Ok(())
         });
@@ -756,7 +756,7 @@ impl AgentUi {
                     me.rendering.set(true);
                     let flusher = me.clone();
                     let r = jx::try_once_runnable(move || flusher.flush(token).map_err(Into::into));
-                    ui::post_delayed(&me.ui, &r, 250)?;
+                    ui::post_delayed(&me.ui, &r, crate::jx::DelayMillis(250))?;
                 }
                 Ok(())
             });
@@ -765,10 +765,10 @@ impl AgentUi {
     }
     /// `private void subscribe(int token, String host, String identity)`:
     /// starts the stream reader thread.
-    pub fn subscribe(self: &Arc<Self>, token: i32, host: &str, identity: &str) {
+    fn subscribe(self: &Arc<Self>, token: i32, host: &str, identity: &str) {
         let me = self.clone();
         let (host, identity) = (host.to_string(), identity.to_string());
-        JThread::spawn("agent-chat-stream", move || {
+        JThread::spawn(&crate::jx::ThreadName::from("agent-chat-stream"), move || {
             let mut after: i64 = 0;
             while token == me.generation.get() {
                 let mut connection: Option<Disconnector> = None;
@@ -779,11 +779,11 @@ impl AgentUi {
                         let ui_me = me.clone();
                         me.post(move || {
                             if token == ui_me.generation.get() && ui_me.dialog.get().is_some() {
-                                ui::set_text(&ui_me.status_view(), "Disconnected · reconnecting. Draft kept on device.")?;
+                                ui::set_text(&ui_me.status_view(), &ui::UiText::from("Disconnected · reconnecting. Draft kept on device."))?;
                             }
                             Ok(())
                         });
-                        stop = JThread::sleep(1500).is_err();
+                        stop = JThread::sleep(crate::jx::DelayMillis(1500)).is_err();
                     }
                     stop
                 });
@@ -798,7 +798,7 @@ impl AgentUi {
         });
     }
     /// `private void flush(int token)` (UI thread).
-    pub fn flush(self: &Arc<Self>, token: i32) -> AppResult<()> {
+    fn flush(self: &Arc<Self>, token: i32) -> AppResult<()> {
         self.rendering.set(false);
         if token != self.generation.get() || self.dialog.get().is_none() {
             return Ok(());
@@ -810,7 +810,7 @@ impl AgentUi {
         let scroll = self.scroll.get().expect("scroll");
         let messages = self.messages.get().expect("messages");
         let bottom = jcall!(scroll, "android/view/ViewGroup", "getChildCount", "()I")?.int() == 0
-            || jcall!(scroll, "android/view/View", "getScrollY", "()I")?.int() + ui::height(&scroll)? >= ui::height(&messages)? - self.dp(60)?;
+            || jcall!(scroll, "android/view/View", "getScrollY", "()I")?.int() + ui::height(&scroll)?.0 >= ui::height(&messages)?.0 - self.dp(60)?;
         let mut changed: Vec<Arc<Item>> = Vec::new();
         for event in events {
             let kind = event.opt_string("kind");
@@ -825,11 +825,11 @@ impl AgentUi {
             }
             if kind == "user" && self.pending.get().is_some_and(|p| id == p.opt_string("request")) {
                 self.pending.set(None);
-                ui::set_text(&self.input.get().expect("input"), "")?;
-                ui::set_text(&self.send.get().expect("send"), "Send")?;
+                ui::set_text(&self.input.get().expect("input"), &ui::UiText::from(""))?;
+                ui::set_text(&self.send.get().expect("send"), &ui::UiText::from("Send"))?;
                 let editor = ui::edit(&self.context())?;
-                ui::remove_pref(&editor, &self.pending_key())?;
-                ui::remove_pref(&editor, &self.draft_key())?;
+                ui::remove_pref(&editor, &ui::PrefKey::from(&self.pending_key()))?;
+                ui::remove_pref(&editor, &ui::PrefKey::from(&self.draft_key()))?;
                 ui::apply(&editor)?;
             }
             let mut item = self.items.with(|i| i.get(&id).cloned());
@@ -885,13 +885,13 @@ pub struct Item {
 }
 impl Item {
     /// `Item(String kind, JSONObject event)`.
-    pub fn new(owner: &Arc<AgentUi>, kind: &str, event: &JSONObject) -> AppResult<Arc<Item>> {
+    fn new(owner: &Arc<AgentUi>, kind: &str, event: &JSONObject) -> AppResult<Arc<Item>> {
         let view = owner.column()?;
-        let tool = ToolDisplay::new(&event.opt_string("name"), &event.opt_string("args"));
+        let tool = ToolDisplay::new(&crate::tool_display::ToolName::from(event.opt_string("name")), &crate::tool_display::ToolArguments::from(event.opt_string("args")));
         let heading = owner.text(if kind == "user" { "You" } else { "Agent" }, 14)?;
         let detail = owner.text("", 16)?;
         jcall!(detail, "android/widget/TextView", "setTextIsSelectable", "(Z)V", true)?;
-        ui::set_padding(&view, owner.dp(8)?, owner.dp(6)?, owner.dp(8)?, owner.dp(10)?)?;
+        ui::set_padding(&view, ui::PxInsets { left: owner.dp(8)?, top: owner.dp(6)?, right: owner.dp(8)?, bottom: owner.dp(10)? })?;
         ui::add_view(&view, &heading)?;
         ui::add_view(&view, &detail)?;
         let item = Arc::new(Item {
@@ -910,7 +910,7 @@ impl Item {
             let monospace = jsget!("android/graphics/Typeface", "MONOSPACE", "Landroid/graphics/Typeface;")?.some();
             jcall!(detail, "android/widget/TextView", "setTypeface", "(Landroid/graphics/Typeface;)V", &monospace)?;
             jcall!(detail, "android/widget/TextView", "setTextSize", "(F)V", 13.0f32)?;
-            ui::set_content_description(&heading, "Expand tool activity")?;
+            ui::set_content_description(&heading, &ui::UiText::from("Expand tool activity"))?;
             jcall!(heading, "android/widget/TextView", "setMinHeight", "(I)V", owner.dp(48)?)?;
             let weak = Arc::downgrade(&item);
             ui::on_click(&heading, move |_| {
@@ -928,13 +928,13 @@ impl Item {
         let value = self.value.get();
         if self.kind == "tool" {
             let expanded = self.expanded.get();
-            ui::set_text(&self.heading, &format!("{}{} · {}", if expanded { "▾ " } else { "▸ " }, self.summary, self.state.get()))?;
+            ui::set_text(&self.heading, &ui::UiText::from(&format!("{}{} · {}", if expanded { "▾ " } else { "▸ " }, self.summary, self.state.get())))?;
             ui::set_visibility(&self.detail, if expanded { VIEW_VISIBLE } else { VIEW_GONE })?;
             if expanded {
-                ui::set_text(&self.detail, &format!("{}{}", self.arguments, if value.is_empty() { String::new() } else { format!("\n\nOutput\n{value}") }))?;
+                ui::set_text(&self.detail, &ui::UiText::from(&format!("{}{}", self.arguments, if value.is_empty() { String::new() } else { format!("\n\nOutput\n{value}") })))?;
             }
-        } else if value != ui::text_of(&self.detail)? {
-            ui::set_text(&self.detail, &value)?;
+        } else if value != String::from(ui::text_of(&self.detail)?) {
+            ui::set_text(&self.detail, &ui::UiText::from(&value))?;
         }
         Ok(())
     }

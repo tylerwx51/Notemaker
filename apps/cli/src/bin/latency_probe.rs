@@ -4,10 +4,12 @@
 use notemaker_cli::item_coverage::{self, FACTORY};
 use notemaker_cli::local_proxy::LocalProxy;
 use notemaker_cli::png::Png;
-use notemaker_cli::probe::{self, memory, ms_since, timed};
+use notemaker_cli::probe::{self, memory, ms_since, timed, ProbePhase};
+use notemaker_cli::raster::PixelSize;
 use notemaker_core::coverage::{Coverage, CoverageFactory};
 use notemaker_core::drawing_actions;
-use notemaker_core::geometry;
+use notemaker_core::geometry::{DocPoint, Polygon, Radius, Segment};
+use notemaker_core::ids::{DocumentName, LayerId, PageNumber};
 use notemaker_core::layer_editor::LayerEditor;
 use notemaker_core::store::{self, Store};
 use notemaker_core::{json, object, Error, Map, Result, Value};
@@ -57,8 +59,8 @@ fn run(args: &[String]) -> Result<()> {
         ));
     }
     let doc = args[1].clone();
-    let store = Store::writer(&dir, &doc)?;
-    let state = timed("cold_read", || store.read())?;
+    let store = Store::writer(&dir, &DocumentName::from(&doc))?;
+    let state = timed(&ProbePhase::from("cold_read"), || store.read())?;
     let model = store::model(&state)?;
     let layer = match state.get("selected") {
         None => "base".to_string(),
@@ -68,7 +70,7 @@ fn run(args: &[String]) -> Result<()> {
             .to_string(),
     };
     let page = json::as_int(Some(json::get_or_default(&state, "page", &Value::from(0))))?;
-    let editor = LayerEditor::new(&model, &layer, page)?;
+    let editor = LayerEditor::new(&model, &LayerId::from(&layer), PageNumber(page))?;
     let mut points = 0usize;
     for item in editor.items() {
         if item.kind == "stroke" {
@@ -78,9 +80,9 @@ fn run(args: &[String]) -> Result<()> {
     probe::print(Value::Object(
         object! {"items" => editor.items().count(), "points" => points, "layer" => layer.clone(), "page" => page},
     ));
-    memory("memory_before_coverage")?;
+    memory(&ProbePhase::from("memory_before_coverage"))?;
     for _ in 0..3 {
-        timed("warm_read", || store.read())?;
+        timed(&ProbePhase::from("warm_read"), || store.read())?;
     }
     // Use a real ink point, retaining the note's item sizes and brush geometry.
     let (mut x, mut y) = (200.0, 200.0);
@@ -93,7 +95,7 @@ fn run(args: &[String]) -> Result<()> {
             break;
         }
     }
-    let region = geometry::capsule([x, y], [x, y], 12.0);
+    let region = Polygon::capsule(Segment { start: DocPoint { x, y }, end: DocPoint { x, y } }, Radius(12.0));
     let input = object! {"mode" => "partial", "layer" => layer.clone(), "page" => page, "radius" => 12, "points" => vec![Value::Array(vec![json::double(x), json::double(y)])]};
     let mut swipe = Vec::new();
     for i in 0..120 {
@@ -108,7 +110,7 @@ fn run(args: &[String]) -> Result<()> {
         nanos: Cell::new(0),
         calls: Cell::new(0),
     };
-    timed("all_item_hit_tests", || {
+    timed(&ProbePhase::from("all_item_hit_tests"), || {
         for item in editor.items() {
             let start = Instant::now();
             let hit = item.intersects(&region, &measured)?;
@@ -117,14 +119,14 @@ fn run(args: &[String]) -> Result<()> {
             } else {
                 0
             };
-            costs.push(object! {"id" => item.id.clone(), "kind" => item.kind.clone(), "points" => n, "ms" => json::double(ms_since(start)), "hit" => hit});
+            costs.push(object! {"id" => item.id.clone(), "kind" => item.kind.clone(), "points" => n, "ms" => json::double(ms_since(start).0), "hit" => hit});
         }
         Ok(())
     })?;
     probe::print(Value::Object(
         object! {"coverage_factory_ms" => json::double(measured.nanos.get() as f64 / 1e6), "coverage_factory_calls" => measured.calls.get()},
     ));
-    memory("memory_after_coverage")?;
+    memory(&ProbePhase::from("memory_after_coverage"))?;
     costs.sort_by(|a, b| {
         json::number(b, "ms")
             .unwrap_or(0.0)
@@ -133,17 +135,17 @@ fn run(args: &[String]) -> Result<()> {
     let slowest: Vec<Value> = costs.iter().take(10).cloned().map(Value::Object).collect();
     probe::print(Value::Object(object! {"slowest" => slowest}));
     for _ in 0..3 {
-        timed("erase_geometry", || {
+        timed(&ProbePhase::from("erase_geometry"), || {
             drawing_actions::erase(&model, &input, &FACTORY)
         })?;
     }
     // Diagnostic only: conservative ink-point bounds before exact coverage.
     // Production still uses the original query; this isolates avoidable work.
     item_coverage::cache_clear();
-    timed("experimental_ink_prefilter_cold", || {
+    timed(&ProbePhase::from("experimental_ink_prefilter_cold"), || {
         let (mut candidates, mut hits) = (0, 0);
-        let q = geometry::bounds(&region);
-        for item in LayerEditor::new(&model, &layer, page)?.items() {
+        let q = region.bounds();
+        for item in LayerEditor::new(&model, &LayerId::from(&layer), PageNumber(page))?.items() {
             if item.kind == "stroke" {
                 let (mut l, mut t, mut r, mut b) = (
                     f64::INFINITY,
@@ -160,7 +162,7 @@ fn run(args: &[String]) -> Result<()> {
                     b = b.max(py);
                 }
                 let pad = json::number(&item.content, "width")? * 2.0;
-                if r + pad < q[0] || l - pad > q[2] || b + pad < q[1] || t - pad > q[3] {
+                if r + pad < q.left || l - pad > q.right || b + pad < q.top || t - pad > q.bottom {
                     continue;
                 }
             }
@@ -181,35 +183,41 @@ fn run(args: &[String]) -> Result<()> {
         ));
         Ok(())
     })?;
-    timed("render_png", || {
-        Png::export(&model, page, 0.0, 0.0, 1000, 1400, &dir.join("render.png"))
+    timed(&ProbePhase::from("render_png"), || {
+        Png::export(
+            &model,
+            PageNumber(page),
+            DocPoint { x: 0.0, y: 0.0 },
+            PixelSize { width: 1000, height: 1400 },
+            &dir.join("render.png"),
+        )
     })?;
     let proxy = LocalProxy::new(&dir, 0)?;
     let outcome = (|| -> Result<()> {
         for _ in 0..3 {
-            timed("proxy_erase", || {
+            timed(&ProbePhase::from("proxy_erase"), || {
                 proxy.execute(&command(&doc, &["erase", "-"], Some(&input)))
             })?;
-            let snap = timed("proxy_snapshot", || {
+            let snap = timed(&ProbePhase::from("proxy_snapshot"), || {
                 proxy.execute(&command(&doc, &["snapshot"], None))
             })?;
-            timed("snapshot_to_model", || {
+            timed(&ProbePhase::from("snapshot_to_model"), || {
                 store::model_of_map(json::map(&snap)?)
             })?;
-            timed("proxy_undo", || {
+            timed(&ProbePhase::from("proxy_undo"), || {
                 proxy.execute(&command(&doc, &["undo"], None))
             })?;
         }
-        timed("swipe_geometry", || {
+        timed(&ProbePhase::from("swipe_geometry"), || {
             drawing_actions::erase(&model, &swipe_input, &FACTORY)
         })?;
-        timed("proxy_swipe", || {
+        timed(&ProbePhase::from("proxy_swipe"), || {
             proxy.execute(&command(&doc, &["erase", "-"], Some(&swipe_input)))
         })?;
-        timed("post_swipe_snapshot", || {
+        timed(&ProbePhase::from("post_swipe_snapshot"), || {
             proxy.execute(&command(&doc, &["snapshot"], None))
         })?;
-        match timed("post_swipe_tap_geometry", || {
+        match timed(&ProbePhase::from("post_swipe_tap_geometry"), || {
             drawing_actions::erase(&store.model()?, &input, &FACTORY)
         }) {
             Ok(_) => {}
@@ -234,7 +242,7 @@ fn run(args: &[String]) -> Result<()> {
                     }
                     probe::print(Value::Object(object! {
                         "phase" => "queued_erase", "index" => index, "queue_ms" => json::double((start - submitted).as_nanos() as f64 / 1e6),
-                        "work_ms" => json::double(ms_since(start)), "total_ms" => json::double(ms_since(submitted)), "error" => error
+                        "work_ms" => json::double(ms_since(start).0), "total_ms" => json::double(ms_since(submitted).0), "error" => error
                     }));
                 }
             })
@@ -266,7 +274,7 @@ fn run(args: &[String]) -> Result<()> {
             let command_ms = ms_since(start);
             proxy.execute(&command(&doc, &["snapshot"], None))?;
             probe::print(Value::Object(
-                object! {"phase" => "varied_erase", "sample" => sample, "points" => pts.len(), "command_ms" => json::double(command_ms), "through_snapshot_ms" => json::double(ms_since(start)), "changed" => changed},
+                object! {"phase" => "varied_erase", "sample" => sample, "points" => pts.len(), "command_ms" => json::double(command_ms.0), "through_snapshot_ms" => json::double(ms_since(start).0), "changed" => changed},
             ));
             sample += 1;
             if changed {

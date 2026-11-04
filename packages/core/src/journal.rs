@@ -8,12 +8,14 @@
 //!   the same lock `FileChannel.lock()` takes on Linux/Android.
 
 use crate::checkpoint_point_prefixes;
+use crate::ids::DocumentName;
+use crate::java_port::file::canonical_path;
 use crate::error::{io_message, require, Error, ErrorKind, Result};
 use crate::json::{self, Map, Value};
 use crate::model::Model;
 use crate::object;
 use crate::store::{State, StateKind};
-use crate::timing::mark;
+use crate::timing::{mark, TimingPhase};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -105,38 +107,6 @@ fn cache_for(path: &str) -> Arc<Mutex<Journal>> {
     map.entry(path.to_string()).or_insert_with(|| Arc::new(Mutex::new(Journal::new()))).clone()
 }
 
-/// `File.getCanonicalPath()` (works for files that do not exist yet).
-pub fn canonical_path(file: &Path) -> String {
-    if let Ok(p) = fs::canonicalize(file) {
-        return p.to_string_lossy().into_owned();
-    }
-    let absolute = if file.is_absolute() {
-        file.to_path_buf()
-    } else {
-        std::env::current_dir().map(|d| d.join(file)).unwrap_or_else(|_| file.to_path_buf())
-    };
-    let mut existing = absolute.clone();
-    let mut rest: Vec<std::ffi::OsString> = Vec::new();
-    while !existing.exists() {
-        match (existing.file_name().map(|n| n.to_os_string()), existing.parent()) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                existing = parent.to_path_buf();
-            }
-            _ => break,
-        }
-    }
-    let mut out = fs::canonicalize(&existing).unwrap_or(existing);
-    for name in rest.into_iter().rev() {
-        if name == ".." {
-            out.pop();
-        } else if name != "." {
-            out.push(name);
-        }
-    }
-    out.to_string_lossy().into_owned()
-}
-
 /// `File.lastModified()` in milliseconds (0 when missing).
 fn last_modified(file: &Path) -> i64 {
     fs::metadata(file)
@@ -222,13 +192,21 @@ fn op_id_key(op: &Value) -> String {
 /// overlays on every state it returns (Java `Store.overlay`).
 pub type Overlay<'a> = dyn Fn() -> (Map, Map) + 'a;
 
+/// Whether a journal access may write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JournalMode {
+    ReadOnly,
+    Writable,
+}
+
 /// `Journal.access(file, document, edit, writable)`, followed by Java's
 /// `Store.overlay` when `overlay` is given. Java's overlay mutated the fresh
 /// shallow copy each access returned. Here the overlay keys are kept at the
 /// end of the cached journal state itself, updated in place under the journal
 /// lock, so the returned state can share that map instead of deep-copying it;
 /// they are stripped wherever the state is persisted.
-pub fn access(file: &Path, document: &str, edit: Option<&mut Edit<'_>>, scope: EditScope, writable: bool, overlay: Option<&Overlay<'_>>) -> Result<State> {
+pub fn access(file: &Path, document: &DocumentName, edit: Option<&mut Edit<'_>>, scope: EditScope, mode: JournalMode, overlay: Option<&Overlay<'_>>) -> Result<State> {
+    let (document, writable): (&str, bool) = (document, mode == JournalMode::Writable);
     let path = canonical_path(file);
     let cache = cache_for(&path);
     let _held = enter(&path)?;
@@ -270,7 +248,8 @@ fn without_overlay(state: &Map) -> Map {
 }
 
 /// `Journal.checkpoint(file, document)`: fold the WAL into a new base file.
-pub fn checkpoint(file: &Path, document: &str) -> Result<Map> {
+pub fn checkpoint(file: &Path, document: &DocumentName) -> Result<Map> {
+    let document: &str = document;
     let path = canonical_path(file);
     let cache = cache_for(&path);
     let _held = enter(&path)?;
@@ -416,9 +395,9 @@ impl Journal {
         if replayed {
             self.rebuild_effective()?;
         }
-        mark("journal_wal_ready");
+        mark(TimingPhase("journal_wal_ready"));
         if let Some(edit) = edit {
-            mark("journal_begin");
+            mark(TimingPhase("journal_begin"));
             if scope == EditScope::Append {
                 // Unshare first: copying a shared cache would give every
                 // history entry a new identity.
@@ -430,13 +409,13 @@ impl Journal {
             }
             let mut next = self.edit_snapshot();
             let prepared = (|| -> Result<(Map, Vec<u8>)> {
-                mark("edit_begin");
+                mark(TimingPhase("edit_begin"));
                 edit(&mut next)?;
-                mark("edit_done");
+                mark(TimingPhase("edit_done"));
                 let delta = difference(self.state.as_ref().unwrap(), &next)?;
-                mark("delta_done");
+                mark(TimingPhase("delta_done"));
                 let bytes = json::write_map(&delta).into_bytes();
-                mark("serialize_done");
+                mark(TimingPhase("serialize_done"));
                 require(bytes.len() <= 40000000, "Local transaction exceeds 40 MB")?;
                 Ok((delta, bytes))
             })();
@@ -444,7 +423,7 @@ impl Journal {
             let written = self.write_record(&mut log, &wal, &bytes)?;
             self.apply(&delta, false)?;
             self.offset += written;
-            mark("apply_done");
+            mark(TimingPhase("apply_done"));
         }
         Ok(self.snapshot())
     }
@@ -460,16 +439,16 @@ impl Journal {
         log.seek(SeekFrom::Start(self.offset)).map_err(Error::from)?;
         log.write_all(&record).map_err(|e| io_error(wal, e))?;
         log.sync_all().map_err(|e| io_error(wal, e))?;
-        mark("sync_done");
+        mark(TimingPhase("sync_done"));
         Ok(record.len() as u64)
     }
 
     fn load(&mut self, file: &Path, document: &str) -> Result<()> {
         let mut state = if file.exists() {
             let bytes = fs::read(file).map_err(|e| io_error(file, e))?;
-            mark("journal_base_read");
+            mark(TimingPhase("journal_base_read"));
             let source = String::from_utf8_lossy(&bytes);
-            mark("journal_base_decoded");
+            mark(TimingPhase("journal_base_decoded"));
             match json::parse(&source)? {
                 Value::Object(m) => m,
                 _ => return Err(Error::illegal_argument("Expected JSON object")),
@@ -477,9 +456,9 @@ impl Journal {
         } else {
             object! {"events" => Value::Array(Vec::new()), "pending" => Value::Array(Vec::new()), "cursor" => 0}
         };
-        mark("journal_base_parsed");
+        mark(TimingPhase("journal_base_parsed"));
         checkpoint_point_prefixes::decode(&mut state)?;
-        mark("journal_points_expanded");
+        mark(TimingPhase("journal_points_expanded"));
         json::put_if_absent(&mut state, "relay", Value::Array(Vec::new()));
         let relay_format = state.shift_remove("relayFormat");
         if relay_format.as_ref().and_then(Value::as_str) == Some("ids") {
@@ -501,17 +480,17 @@ impl Journal {
         json::put_if_absent(&mut state, "actors", Value::Object(Map::new()));
         json::put_if_absent(&mut state, "revision", Value::from(0));
         json::put_if_absent(&mut state, "document", Value::String(document.to_string()));
-        mark("journal_relay_ready");
+        mark(TimingPhase("journal_relay_ready"));
         let mut committed = Model::new();
         for op in json::list_at(&state, "events")? {
             committed.apply(json::map(op)?)?;
         }
-        mark("journal_committed_ready");
+        mark(TimingPhase("journal_committed_ready"));
         let mut effective = committed.clone();
         for op in json::list_at(&state, "pending")? {
             effective.apply(json::map(op)?)?;
         }
-        mark("journal_effective_ready");
+        mark(TimingPhase("journal_effective_ready"));
         self.state = Some(Arc::new(state));
         self.received_ids = received;
         self.committed = committed;
@@ -649,13 +628,13 @@ impl Journal {
         }
         let mut next = State::shared(Arc::new(next), Some(self.effective.clone()), StateKind::Journal);
         let prepared = (|| -> Result<(Map, Vec<u8>)> {
-            mark("edit_begin");
+            mark(TimingPhase("edit_begin"));
             edit(&mut next)?;
-            mark("edit_done");
+            mark(TimingPhase("edit_done"));
             let delta = self.append_difference(&next, before)?;
-            mark("delta_done");
+            mark(TimingPhase("delta_done"));
             let bytes = json::write_map(&delta).into_bytes();
-            mark("serialize_done");
+            mark(TimingPhase("serialize_done"));
             require(bytes.len() <= 40000000, "Local transaction exceeds 40 MB")?;
             Ok((delta, bytes))
         })();
@@ -683,7 +662,7 @@ impl Journal {
         Arc::make_mut(self.state.as_mut().unwrap()).insert("actors".into(), actors);
         self.apply_with(&delta, false, false)?;
         self.offset += written;
-        mark("apply_done");
+        mark(TimingPhase("apply_done"));
         if let Some((mut original, mut received)) = original {
             apply_state(&mut original, &delta, &mut received, true)?;
             assert!(json::write_map(&original) == json::write_map(self.state.as_ref().unwrap()), "Append-scope state differs from the full apply");

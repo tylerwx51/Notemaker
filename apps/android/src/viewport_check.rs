@@ -10,15 +10,17 @@
 use crate::android_canvas;
 use crate::android_consts::{COLOR_BLACK, COLOR_WHITE};
 use crate::error::{AppError, AppResult};
-use crate::integration::Integration;
+use crate::ink_cache::BitmapSize;
+use crate::integration::{bitmap_size, create_bitmap, pixel, BitmapPoint, Integration};
 use crate::jx::{self, Obj};
 use crate::main_activity::MainActivity;
 use crate::performance::{drain_writes, open_file_output, write_file_output};
-use crate::stroke_crossings::{bitmap_canvas, bitmap_height, bitmap_width, blue, create_bitmap, green, pixel, recycle, red};
+use crate::stroke_crossings::{bitmap_canvas, recycle};
 use crate::tile_ink_cache::{self, TileInkCache};
 use crate::ui::round_f32;
 use notemaker_cli::canvas::RectF;
 use notemaker_core::json::{self, Map, Value};
+use notemaker_core::style::ArgbColor;
 use notemaker_core::{ids, jfmt, object};
 use std::sync::Arc;
 
@@ -29,7 +31,7 @@ pub struct Frame {
     pub metrics: Map,
 }
 impl Frame {
-    pub fn new(image: Obj, metrics: Map) -> Frame {
+    fn new(image: Obj, metrics: Map) -> Frame {
         Frame { image, metrics }
     }
 }
@@ -67,43 +69,43 @@ fn refresh<S: crate::main_activity::SharedState + Sync + ?Sized>(test: &Arc<Inte
     test.run_on_main_sync(|| app.refresh_shared(state).map_err(|e| AppError::runtime_cause(&e)))?
 }
 fn put_object(app: &MainActivity, input: Map) -> AppResult<()> {
-    app.replica().command(&["object", "put", "-"], Some(&Value::Object(input)))?;
+    app.replica().command(crate::app_replica::CliArgs(&["object", "put", "-"]), Some(&Value::Object(input)))?;
     Ok(())
 }
 
 /// `private static void phase(String name)`.
-pub fn phase(name: &str) {
-    jx::log::i("ViewportCheck", name);
+fn phase(name: &str) {
+    jx::log::i(crate::jx::log::VIEWPORT_CHECK, name);
 }
 /// `private static void require(boolean condition, String message)`.
-pub fn require(condition: bool, message: &str) -> AppResult<()> {
+fn require(condition: bool, message: &str) -> AppResult<()> {
     if !condition {
         return Err(AppError::illegal_state(message));
     }
     Ok(())
 }
 /// `private static Bitmap snapshot(Integration test, MainActivity app)`.
-pub fn snapshot(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Obj> {
+fn snapshot(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Obj> {
     test.run_on_main_sync(|| -> AppResult<Obj> {
         let canvas = app.canvas();
-        let image = create_bitmap(canvas.width(), canvas.height())?;
+        let image = create_bitmap(BitmapSize { width: canvas.width().0, height: canvas.height().0 })?;
         jcall!(canvas.view(), "android/view/View", "draw", "(Landroid/graphics/Canvas;)V", &bitmap_canvas(&image)?)?;
         Ok(image)
     })?
 }
 /// `private static Frame captureCold(Integration test, MainActivity app)`.
-pub fn capture_cold(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Frame> {
+fn capture_cold(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Frame> {
     test.run_on_main_sync(|| -> AppResult<Frame> {
         let canvas = app.canvas();
         canvas.ink_document.set(String::new());
-        let image = create_bitmap(canvas.width(), canvas.height())?;
+        let image = create_bitmap(BitmapSize { width: canvas.width().0, height: canvas.height().0 })?;
         jcall!(canvas.view(), "android/view/View", "draw", "(Landroid/graphics/Canvas;)V", &bitmap_canvas(&image)?)?;
         Ok(Frame::new(image, canvas.tile_cache_metrics()))
     })?
 }
 /// `private static int[] differences(Bitmap a, Bitmap b)`.
-pub fn differences(a: &Obj, b: &Obj) -> AppResult<Vec<i32>> {
-    require(bitmap_width(a)? == bitmap_width(b)? && bitmap_height(a)? == bitmap_height(b)?, "Reference dimensions changed")?;
+fn differences(a: &Obj, b: &Obj) -> AppResult<Vec<i32>> {
+    require(bitmap_size(a)? == bitmap_size(b)?, "Reference dimensions changed")?;
     let x = android_canvas::bitmap_pixels(a)?;
     let y = android_canvas::bitmap_pixels(b)?;
     Ok(pixel_differences(&x, &y))
@@ -114,32 +116,30 @@ fn pixel_differences(x: &[i32], y: &[i32]) -> Vec<i32> {
     for i in 0..x.len() {
         if x[i] != y[i] {
             out[0] += 1;
-            out[1] = out[1].max((stroke_alpha(x[i]) - stroke_alpha(y[i])).abs());
-            out[2] = out[2].max((red(x[i]) - red(y[i])).abs());
-            out[3] = out[3].max((green(x[i]) - green(y[i])).abs());
+            let (a, b) = (ArgbColor(x[i]).channels(), ArgbColor(y[i]).channels());
+            out[1] = out[1].max((a.alpha - b.alpha).abs());
+            out[2] = out[2].max((a.red - b.red).abs());
+            out[3] = out[3].max((a.green - b.green).abs());
         }
     }
     out
 }
-fn stroke_alpha(c: i32) -> i32 {
-    crate::stroke_crossings::alpha(c)
-}
 /// `private static Map<String,Object> metrics(Integration test, MainActivity app)`.
-pub fn metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+fn metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     Ok(test.run_on_main_sync(|| app.canvas().tile_cache_metrics())?)
 }
 /// `private static boolean hasItem(Map<String,Object> metrics, String id)`.
-pub fn has_item(metrics: &Map, id: &str) -> bool {
+fn has_item(metrics: &Map, id: &str) -> bool {
     let ids = json::list(metrics.get("lastRenderedItemIds").unwrap_or(&Value::Null)).unwrap_or_else(|e| panic!("{}", AppError::from(e)));
     ids.iter().any(|value| value.as_str() == Some(id))
 }
 /// `private static long n(Map<String,Object> m, String key)`.
-pub fn n(m: &Map, key: &str) -> i64 {
+fn n(m: &Map, key: &str) -> i64 {
     crate::performance::long_metric(m, key)
 }
 /// `private static void saveDebug(MainActivity app, String name, Bitmap bitmap)`:
 /// failures are wrapped in a `RuntimeException`.
-pub fn save_debug(app: &Arc<MainActivity>, name: &str, bitmap: &Obj) -> AppResult<()> {
+fn save_debug(app: &Arc<MainActivity>, name: &str, bitmap: &Obj) -> AppResult<()> {
     (|| -> AppResult<()> {
         let out = open_file_output(app, name)?;
         let format = jsget!("android/graphics/Bitmap$CompressFormat", "PNG", "Landroid/graphics/Bitmap$CompressFormat;")?.some();
@@ -156,12 +156,12 @@ fn save_text(app: &Arc<MainActivity>, name: &str, text: &str) -> AppResult<()> {
     write_file_output(app, name, text.as_bytes()).map_err(|e| AppError::runtime_cause(&e))
 }
 /// `private static void resetDocument(Integration test, MainActivity app, String type, float zoom, float ox, float oy) throws Exception`.
-pub fn reset_document(test: &Arc<Integration>, app: &Arc<MainActivity>, type_: &str, zoom: f32, ox: f32, oy: f32) -> AppResult<()> {
+fn reset_document(test: &Arc<Integration>, app: &Arc<MainActivity>, type_: &str, zoom: f32, ox: f32, oy: f32) -> AppResult<()> {
     test.run_on_main_sync(|| -> AppResult<()> {
-        app.document.set(format!("viewport-{}", ids::random_uuid()));
+        app.document.set(format!("viewport-{}", String::from(ids::Uuid::random())));
         app.host.set(String::new());
         app.proxy_url.set(String::new());
-        app.load(type_)?;
+        app.load(&crate::main_activity::DocumentType::from(type_))?;
         app.configure_proxy()?;
         let canvas = app.canvas();
         canvas.zoom.set(zoom);
@@ -184,23 +184,24 @@ pub fn reset_document(test: &Arc<Integration>, app: &Arc<MainActivity>, type_: &
     Ok(())
 }
 /// `private static List<Object> points(float scale, float zoom, float ox, float oy, float[][] screen)`.
-pub fn points(scale: f32, zoom: f32, ox: f32, oy: f32, screen: &[[f32; 2]]) -> Vec<Value> {
+fn points(scale: f32, zoom: f32, ox: f32, oy: f32, screen: &[[f32; 2]]) -> Vec<Value> {
     screen.iter().map(|p| Value::from(vec![json::from_float((p[0] - ox) / (scale * zoom)), json::from_float((p[1] - oy) / (scale * zoom)), json::double(0.9)])).collect()
 }
 /// `private static void addStroke(MainActivity app, String id, String brush, int color, double width, List<Object> pts) throws Exception`.
-pub fn add_stroke(app: &Arc<MainActivity>, id: &str, brush: &str, color: i32, width: f64, pts: Vec<Value>) -> AppResult<()> {
+fn add_stroke(app: &Arc<MainActivity>, id: &str, brush: &str, color: i32, width: f64, pts: Vec<Value>) -> AppResult<()> {
     let input = object! {"stroke" => id, "layer" => "base", "page" => 0, "color" => color, "width" => json::double(width), "brush" => brush, "material" => 65, "points" => pts};
-    app.replica().command(&["stroke", "put", "-"], Some(&Value::Object(input)))?;
+    app.replica().command(crate::app_replica::CliArgs(&["stroke", "put", "-"]), Some(&Value::Object(input)))?;
     Ok(())
 }
 /// `private static void compare(Integration test, MainActivity app, String where)`.
-pub fn compare(test: &Arc<Integration>, app: &Arc<MainActivity>, where_: &str) -> AppResult<()> {
+fn compare(test: &Arc<Integration>, app: &Arc<MainActivity>, where_: &str) -> AppResult<()> {
     let cached = snapshot(test, app)?;
     test.run_on_main_sync(|| app.canvas().cull_tile_items.set(false))?;
     let direct = snapshot(test, app)?;
     test.run_on_main_sync(|| app.canvas().cull_tile_items.set(true))?;
     let diff = differences(&cached, &direct)?;
-    let pixels = bitmap_width(&cached)? * bitmap_height(&cached)?;
+    let size = bitmap_size(&cached)?;
+    let pixels = size.width * size.height;
     if diff[0] != 0 {
         save_debug(app, "viewport-compare-cached.png", &cached)?;
         save_debug(app, "viewport-compare-reference.png", &direct)?;
@@ -220,7 +221,7 @@ pub fn compare(test: &Arc<Integration>, app: &Arc<MainActivity>, where_: &str) -
     require(diff[0] == 0, &format!("{} culled/unculled same-tier raster differs at {} pixels (viewport {}); per-channel maxima alpha/red/green={}/{}/{}", where_, diff[0], pixels, diff[1], diff[2], diff[3]))
 }
 /// `private static float nearbyTileBoundary(float center, float offset, float unit, float limit)`.
-pub fn nearby_tile_boundary(center: f32, offset: f32, unit: f32, limit: f32) -> f32 {
+fn nearby_tile_boundary(center: f32, offset: f32, unit: f32, limit: f32) -> f32 {
     let doc = (center - offset) / unit;
     let mut boundary = ((doc / 256f32) as f64).floor() as f32 * 256f32;
     let screen = offset + boundary * unit;
@@ -234,19 +235,18 @@ pub fn nearby_tile_boundary(center: f32, offset: f32, unit: f32, limit: f32) -> 
     boundary
 }
 /// `private static void seamCompare(Integration test, MainActivity app, float zoom, float ox, float oy, float scale, float seamX, float seamY)`.
-pub fn seam_compare(test: &Arc<Integration>, app: &Arc<MainActivity>, zoom: f32, ox: f32, oy: f32, scale: f32, seam_x: f32, seam_y: f32) -> AppResult<()> {
+fn seam_compare(test: &Arc<Integration>, app: &Arc<MainActivity>, zoom: f32, ox: f32, oy: f32, scale: f32, seam_x: f32, seam_y: f32) -> AppResult<()> {
     let cached = snapshot(test, app)?;
     let unit = scale * zoom;
     let probe_x = 48.0 / unit;
     let probe_y = 24.0 / unit;
-    test.run_on_main_sync(|| app.canvas().monolithic_tile_probe.set(Some(RectF::new(seam_x - probe_x, seam_y - probe_y, seam_x + probe_x, seam_y + probe_y))))?;
+    test.run_on_main_sync(|| app.canvas().monolithic_tile_probe.set(Some(RectF { left: seam_x - probe_x, top: seam_y - probe_y, right: seam_x + probe_x, bottom: seam_y + probe_y })))?;
     let monolithic = snapshot(test, app)?;
     test.run_on_main_sync(|| app.canvas().monolithic_tile_probe.set(None))?;
     test.run_on_main_sync(|| app.canvas().use_ink_cache.set(false))?;
     let direct = snapshot(test, app)?;
     test.run_on_main_sync(|| app.canvas().use_ink_cache.set(true))?;
-    let w = bitmap_width(&cached)?;
-    let h = bitmap_height(&cached)?;
+    let BitmapSize { width: w, height: h } = bitmap_size(&cached)?;
     let sx = round_f32(ox + seam_x * scale * zoom);
     let sy = round_f32(oy + seam_y * scale * zoom);
     let left = 0.max(sx - 30);
@@ -257,9 +257,9 @@ pub fn seam_compare(test: &Arc<Integration>, app: &Arc<MainActivity>, zoom: f32,
     let (mut diff_left, mut diff_top, mut diff_right, mut diff_bottom) = (w, h, 0, 0);
     for y in top..bottom {
         for x in left..right {
-            let a = pixel(&cached, x, y)?;
-            let b = pixel(&direct, x, y)?;
-            let m = pixel(&monolithic, x, y)?;
+            let a = pixel(&cached, BitmapPoint { x, y })?.0;
+            let b = pixel(&direct, BitmapPoint { x, y })?.0;
+            let m = pixel(&monolithic, BitmapPoint { x, y })?.0;
             if m != COLOR_WHITE {
                 visible += 1;
             }
@@ -270,7 +270,8 @@ pub fn seam_compare(test: &Arc<Integration>, app: &Arc<MainActivity>, zoom: f32,
                 diff_right = diff_right.max(x + 1);
                 diff_bottom = diff_bottom.max(y + 1);
             }
-            worst = worst.max((red(a) - red(b)).abs().max((green(a) - green(b)).abs().max((blue(a) - blue(b)).abs())));
+            let (a, b) = (ArgbColor(a).channels(), ArgbColor(b).channels());
+            worst = worst.max((a.red - b.red).abs().max((a.green - b.green).abs().max((a.blue - b.blue).abs())));
         }
     }
     if mono_diff > 0 {
@@ -300,7 +301,7 @@ pub fn seam_compare(test: &Arc<Integration>, app: &Arc<MainActivity>, zoom: f32,
                 mono_diff,
                 worst,
                 f(scale * zoom),
-                tier,
+                tier.0,
                 json::write_map(&warm)
             ),
         )?;
@@ -313,14 +314,13 @@ pub fn seam_compare(test: &Arc<Integration>, app: &Arc<MainActivity>, zoom: f32,
     require(worst <= 24, &format!("Tile seam changed translucent pigment by {worst} channel levels"))
 }
 /// `private static int edgeHits(Bitmap image, String edge)`.
-pub fn edge_hits(image: &Obj, edge: &str) -> AppResult<i32> {
-    let w = bitmap_width(image)?;
-    let h = bitmap_height(image)?;
+fn edge_hits(image: &Obj, edge: &str) -> AppResult<i32> {
+    let BitmapSize { width: w, height: h } = bitmap_size(image)?;
     let mut hits = 0;
     if edge == "top" {
         for y in 0..12 {
             for x in 12..w - 12 {
-                if pixel(image, x, y)? != COLOR_WHITE {
+                if pixel(image, BitmapPoint { x, y })?.0 != COLOR_WHITE {
                     hits += 1;
                 }
             }
@@ -329,7 +329,7 @@ pub fn edge_hits(image: &Obj, edge: &str) -> AppResult<i32> {
     if edge == "bottom" {
         for y in h - 12..h {
             for x in 12..w - 12 {
-                if pixel(image, x, y)? != COLOR_WHITE {
+                if pixel(image, BitmapPoint { x, y })?.0 != COLOR_WHITE {
                     hits += 1;
                 }
             }
@@ -338,7 +338,7 @@ pub fn edge_hits(image: &Obj, edge: &str) -> AppResult<i32> {
     if edge == "left" {
         for x in 0..12 {
             for y in 12..h - 12 {
-                if pixel(image, x, y)? != COLOR_WHITE {
+                if pixel(image, BitmapPoint { x, y })?.0 != COLOR_WHITE {
                     hits += 1;
                 }
             }
@@ -347,7 +347,7 @@ pub fn edge_hits(image: &Obj, edge: &str) -> AppResult<i32> {
     if edge == "right" {
         for x in w - 12..w {
             for y in 12..h - 12 {
-                if pixel(image, x, y)? != COLOR_WHITE {
+                if pixel(image, BitmapPoint { x, y })?.0 != COLOR_WHITE {
                     hits += 1;
                 }
             }
@@ -359,9 +359,9 @@ pub fn edge_hits(image: &Obj, edge: &str) -> AppResult<i32> {
 pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     drain_writes()?;
     let canvas = app.canvas();
-    let width = canvas.width() as f32;
-    let height = canvas.height() as f32;
-    let scale = canvas.scale();
+    let width = canvas.width().0 as f32;
+    let height = canvas.height().0 as f32;
+    let scale = canvas.scale().0;
     require(width > 200.0 && height > 200.0, "Canvas has no usable viewport")?;
     let brushes = ["pen", "marker", "charcoal", "oily", "square", "pencil"];
     for type_ in ["fixed", "infinite"] {
@@ -426,7 +426,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
                         let edge = app.model().strokes.get(&format!("edge-{si}")).cloned();
                         let bounds = match edge {
                             None => RectF::default(),
-                            Some(edge) => tile_ink_cache::Item::new(&format!("edge-{si}"), edge)?.bounds,
+                            Some(edge) => tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(format!("edge-{si}")), edge)?.bounds,
                         };
                         let viewport = app.canvas().document_viewport();
                         save_debug(app, "viewport-edge-cached.png", &rendered)?;
@@ -449,8 +449,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
                                 list_string(&points(scale, zoom, ox, oy, &lines[si])),
                                 rect_string(&bounds),
                                 rect_string(&viewport),
-                                tier,
-                                TileInkCache::tile_size(tier),
+                                tier.0,
+                                TileInkCache::tile_size(tier).0,
                                 reference_hits,
                                 cached_hits,
                                 json::write_map(&warm)
@@ -464,8 +464,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
                             side,
                             f(zoom),
                             reference_hits,
-                            bitmap_width(&uncullled)?,
-                            bitmap_height(&uncullled)?,
+                            bitmap_size(&uncullled)?.width,
+                            bitmap_size(&uncullled)?.height,
                             f(scale),
                             f(unit),
                             f(pad)
@@ -480,17 +480,17 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
                 phase(&format!("seam passed {} zoom={}", type_, f(zoom)));
             } else {
                 let x0 = 0.max(round_f32(ox + scale * zoom * 1008.0));
-                let x1 = bitmap_width(&rendered)?.min(round_f32(ox + scale * zoom * 1120.0));
+                let x1 = bitmap_size(&rendered)?.width.min(round_f32(ox + scale * zoom * 1120.0));
                 let y0 = 0.max(round_f32(oy + scale * zoom * 290.0));
-                let y1 = bitmap_height(&rendered)?.min(round_f32(oy + scale * zoom * 410.0));
+                let y1 = bitmap_size(&rendered)?.height.min(round_f32(oy + scale * zoom * 410.0));
                 let mut blue_pixels = 0;
                 if zoom == 0.2f32 {
                     require(x1 > x0 && y1 > y0, "Fixed-page clipping probe did not intersect the viewport")?;
                 }
                 for y in y0..y1 {
                     for x in x0..x1 {
-                        let p = pixel(&rendered, x, y)?;
-                        if blue(p) > red(p) + 25 && blue(p) > green(p) + 25 {
+                        let p = pixel(&rendered, BitmapPoint { x, y })?.channels();
+                        if p.blue > p.red + 25 && p.blue > p.green + 25 {
                             blue_pixels += 1;
                         }
                     }
@@ -525,7 +525,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
             phase(&format!("stable object passed {} zoom={}", type_, f(zoom)));
             let before_erase = snapshot(test, app)?;
             app.replica().command(
-                &["erase", "-"],
+                crate::app_replica::CliArgs(&["erase", "-"]),
                 Some(&Value::Object(object! {"layer" => "base", "page" => 0, "mode" => "partial", "radius" => 28, "points" => vec![Value::from(vec![json::double(seam_x as f64), json::double(seam_y as f64)])]})),
             )?;
             let masked = app.replica().read()?;
@@ -623,8 +623,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
         let shift = i;
         test.run_on_main_sync(|| {
             let canvas = app.canvas();
-            canvas.offset_x.set((-shift * canvas.width()) as f32 * 0.8f32);
-            canvas.offset_y.set((-shift * canvas.height()) as f32 * 0.7f32);
+            canvas.offset_x.set((-shift * canvas.width().0) as f32 * 0.8f32);
+            canvas.offset_y.set((-shift * canvas.height().0) as f32 * 0.7f32);
         })?;
         recycle(&snapshot(test, app)?)?;
     }
@@ -696,7 +696,7 @@ mod tests {
         assert_eq!(float_matrix_string(&[[-300.0, -0.5], [1.5, 2.0]]), "[[-300.0, -0.5], [1.5, 2.0]]");
         let pts = points(1.0, 1.0, 0.0, 0.0, &[[1.5, -2.0]]);
         assert_eq!(list_string(&pts), "[[1.5, -2.0, 0.9]]");
-        assert_eq!(rect_string(&RectF::new(0.0, 1.5, 2.0, 3.0)), "RectF(0.0, 1.5, 2.0, 3.0)");
+        assert_eq!(rect_string(&RectF { left: 0.0, top: 1.5, right: 2.0, bottom: 3.0 }), "RectF(0.0, 1.5, 2.0, 3.0)");
     }
 
     #[test]

@@ -2,12 +2,43 @@
 //! brushes and shapes. Prints `{"queries","hits","sha256"}`.
 
 use notemaker_cli::item_coverage::FACTORY;
-use notemaker_cli::probe::{self, JavaRandom};
+use notemaker_cli::probe;
 use notemaker_core::draw_item::DrawItem;
-use notemaker_core::geometry;
+use notemaker_core::geometry::{DocPoint, DocRect, Polygon, Radius, Segment};
+use notemaker_core::ids::LayerId;
 use notemaker_core::model::Model;
 use notemaker_core::{actions, json, object, Result, Value};
 use sha2::{Digest, Sha256};
+
+/// `java.util.Random` (48-bit LCG), so seeded probes produce the same
+/// sequences and digests as Java.
+struct JavaRandom {
+    seed: i64,
+}
+
+const MULTIPLIER: i64 = 0x5DEECE66D;
+const MASK: i64 = (1 << 48) - 1;
+
+impl JavaRandom {
+    /// `new Random(seed)`.
+    fn new(seed: i64) -> JavaRandom {
+        JavaRandom {
+            seed: (seed ^ MULTIPLIER) & MASK,
+        }
+    }
+    /// `next(bits)`.
+    fn next(&mut self, bits: u32) -> i32 {
+        self.seed = (self.seed.wrapping_mul(MULTIPLIER).wrapping_add(0xB)) & MASK;
+        ((self.seed as u64) >> (48 - bits)) as i64 as i32
+    }
+    /// `nextDouble()`.
+    fn next_double(&mut self) -> f64 {
+        let high = (self.next(26) as i64) << 27;
+        let low = self.next(27) as i64;
+        (high + low) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+}
+
 
 fn run() -> Result<()> {
     let mut random = JavaRandom::new(72931);
@@ -42,8 +73,12 @@ fn run() -> Result<()> {
                 stroke.insert(
                     "erasures".into(),
                     Value::Array(vec![
-                        geometry::json(&geometry::rect(-45.0, -25.0, 30.0, 110.0)),
-                        geometry::json(&geometry::capsule([-40.0, -50.0], [30.0, 0.0], 9.0)),
+                        DocRect { x: -45.0, y: -25.0, width: 30.0, height: 110.0 }.polygon().to_json(),
+                        Polygon::capsule(
+                            Segment { start: DocPoint { x: -40.0, y: -50.0 }, end: DocPoint { x: 30.0, y: 0.0 } },
+                            Radius(9.0),
+                        )
+                        .to_json(),
                     ]),
                 );
             }
@@ -55,7 +90,7 @@ fn run() -> Result<()> {
                 let y = random.next_double() * 130.0;
                 let w = 0.4 + random.next_double() * 8.0;
                 let h = 0.4 + random.next_double() * 8.0;
-                let hit = item.intersects(&geometry::rect(x, y, w, h), &FACTORY)?;
+                let hit = item.intersects(&DocRect { x, y, width: w, height: h }.polygon(), &FACTORY)?;
                 hash.update([hit as u8]);
                 queries += 1;
                 if hit {
@@ -71,12 +106,12 @@ fn run() -> Result<()> {
         if shape == "svg" {
             input.insert("svg".into(), Value::from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"60\" height=\"40\"><circle cx=\"30\" cy=\"20\" r=\"18\" fill=\"none\" stroke=\"black\" stroke-width=\"4\"/></svg>"));
         }
-        let mut o = actions::drawing(&input, "base")?;
+        let mut o = actions::drawing(&input, &LayerId::base())?;
         o.insert("rotation".into(), Value::from(33));
         o.insert("flipX".into(), Value::from(true));
         o.insert(
             "erasures".into(),
-            Value::Array(vec![geometry::json(&geometry::rect(0.3, -1.0, 0.2, 3.0))]),
+            Value::Array(vec![DocRect { x: 0.3, y: -1.0, width: 0.2, height: 3.0 }.polygon().to_json()]),
         );
         let mut model = Model::new();
         model.apply(&o)?;
@@ -84,7 +119,7 @@ fn run() -> Result<()> {
         for _ in 0..300 {
             let x = random.next_double() * 130.0;
             let y = random.next_double() * 130.0;
-            let hit = item.intersects(&geometry::rect(x, y, 2.0, 2.0), &FACTORY)?;
+            let hit = item.intersects(&DocRect { x, y, width: 2.0, height: 2.0 }.polygon(), &FACTORY)?;
             hash.update([hit as u8]);
             queries += 1;
             if hit {

@@ -8,7 +8,8 @@
 use crate::concurrent::ExecutorService;
 use crate::error::AppResult;
 use crate::field::Field;
-use crate::jx::{self, JResult, Local, Obj, Reply};
+use crate::components::ComponentEvent;
+use crate::jx::{self, JResult, Obj, Reply};
 use crate::monitor::Monitor;
 use notemaker_cli::local_proxy::LocalProxy;
 use std::sync::{Arc, LazyLock};
@@ -72,8 +73,9 @@ fn held_by_another_process(e: &notemaker_core::Error) -> bool {
 }
 
 /// Routes the shim's `onStartCommand` / `onDestroy`.
-pub fn component_event(component: &Local, event: &str, args: &[Local]) -> JResult<Reply> {
-    match event {
+pub fn component_event(event: &ComponentEvent) -> JResult<Reply> {
+    let ComponentEvent { component, name, args } = *event;
+    match &**name {
         "onStartCommand" => {
             let this = jx::global(component).expect("service");
             let intent = args.first().and_then(jx::global);
@@ -90,7 +92,7 @@ pub fn component_event(component: &Local, event: &str, args: &[Local]) -> JResul
 }
 
 /// `public int onStartCommand(Intent intent, int flags, int id)`.
-pub fn on_start_command(this: &Obj, intent: Option<Obj>, _flags: i32, _id: i32) -> JResult<i32> {
+fn on_start_command(this: &Obj, intent: Option<Obj>, _flags: i32, _id: i32) -> JResult<i32> {
     let (document, host) = match &intent {
         None => (Some("notes".to_string()), Some(String::new())),
         Some(i) => (
@@ -104,11 +106,11 @@ pub fn on_start_command(this: &Obj, intent: Option<Obj>, _flags: i32, _id: i32) 
             let proxy = ensure(&service)?;
             // Java passed a null document straight to configure, which threw.
             let document = document.ok_or_else(|| crate::error::AppError::Core(notemaker_core::Error::null_pointer()))?;
-            proxy.configure(&document, host.as_deref())?;
+            proxy.configure(&notemaker_core::ids::DocumentName::from(document), host.as_deref())?;
             Ok(())
         })();
         if let Err(e) = result {
-            jx::log::e_err("NoteMaker", "Cannot start local proxy", &e);
+            jx::log::e_err(crate::jx::log::NOTEMAKER, "Cannot start local proxy", &e);
         }
     });
     Ok(crate::android_consts::SERVICE_START_NOT_STICKY)
@@ -125,12 +127,12 @@ pub fn on_destroy() {
         let old = PROXY.get();
         if let Some(old) = old {
             if let Err(e) = old.close() {
-                jx::log::e_err("NoteMaker", "Proxy shutdown", &e);
+                jx::log::e_err(crate::jx::log::NOTEMAKER, "Proxy shutdown", &e);
             }
         }
         PROXY.set(None);
     });
     if let Err(e) = done.get() {
-        jx::log::e_err("NoteMaker", "Proxy shutdown task failed", &e);
+        jx::log::e_err(crate::jx::log::NOTEMAKER, "Proxy shutdown task failed", &e);
     }
 }

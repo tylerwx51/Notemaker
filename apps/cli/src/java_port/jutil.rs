@@ -1,67 +1,9 @@
-//! Small Java library semantics the CLI relied on (`String.split`,
-//! `URLDecoder`, `Integer.parseInt`, hash-map iteration order, monitors,
-//! `FileChannel.tryLock`).
+//! Small Java library semantics the CLI relies on in more than one module
+//! (`Integer.parseInt`), and the monitor and `FileChannel.tryLock` types.
 
-use notemaker_core::{json, Error, ErrorKind, Result};
+use notemaker_core::{Error, ErrorKind, Result};
 use std::sync::{Condvar, Mutex};
 use std::thread::ThreadId;
-
-/// `s.split(regex_literal)` for a literal separator: trailing empty strings
-/// are removed; `""` gives `[""]`.
-pub(crate) fn split(s: &str, sep: &str) -> Vec<String> {
-    let mut parts: Vec<String> = s.split(sep).map(str::to_string).collect();
-    if s.is_empty() {
-        return vec![String::new()];
-    }
-    while parts.len() > 1 && parts.last().is_some_and(|p| p.is_empty()) {
-        parts.pop();
-    }
-    if parts.len() == 1 && parts[0].is_empty() && !s.is_empty() {
-        parts.clear();
-    }
-    parts
-}
-
-/// `URLDecoder.decode(s, "UTF-8")`.
-pub(crate) fn url_decode(s: &str) -> Result<String> {
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' => {
-                while i < bytes.len() && bytes[i] == b'%' {
-                    if i + 2 >= bytes.len() {
-                        return Err(Error::illegal_argument(
-                            "URLDecoder: Incomplete trailing escape (%) pattern",
-                        ));
-                    }
-                    let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
-                        .ok()
-                        .and_then(|h| u8::from_str_radix(h, 16).ok());
-                    match hex {
-                        Some(b) => out.push(b),
-                        None => {
-                            return Err(Error::illegal_argument(
-                                "URLDecoder: Illegal hex characters in escape (%) pattern",
-                            ))
-                        }
-                    }
-                    i += 3;
-                }
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    Ok(String::from_utf8_lossy(&out).into_owned())
-}
 
 /// `Integer.parseInt(s)`.
 pub(crate) fn parse_int(s: &str) -> Result<i32> {
@@ -71,11 +13,6 @@ pub(crate) fn parse_int(s: &str) -> Result<i32> {
         return Err(error());
     }
     s.parse::<i32>().map_err(|_| error())
-}
-
-/// Iteration order of a `HashMap`/`ConcurrentHashMap` with these keys.
-pub(crate) fn hash_order<'a>(keys: impl IntoIterator<Item = &'a String>) -> Vec<String> {
-    json::java_hash_set_order(keys.into_iter().cloned())
 }
 
 /// A reentrant monitor (`synchronized(this)`).

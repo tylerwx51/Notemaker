@@ -1,14 +1,30 @@
 //! Routes manifest component callbacks (Activity, Service, Instrumentation)
 //! from the shim to their Rust implementations.
 
-use crate::jx::{self, JResult, Local, Reply};
+use crate::jx::{self, CallbackArgs, JResult, Local, Reply};
 
-pub fn dispatch(component: &Local, event: &str, args: &[Local]) -> JResult<Reply> {
+notemaker_core::string_newtype! {
+    /// A component lifecycle callback name from the shim (`onCreate`,
+    /// `onStartCommand`, `onDestroy`, …).
+    pub struct ComponentEventName;
+}
+
+/// One `Native.component(component, event, args)` call from the shim.
+#[derive(Clone, Copy)]
+pub struct ComponentEvent<'a> {
+    /// The Activity, Service or Instrumentation (a local reference).
+    pub component: &'a Local,
+    pub name: &'a ComponentEventName,
+    pub args: &'a CallbackArgs,
+}
+
+pub fn dispatch(event: &ComponentEvent) -> JResult<Reply> {
+    let component = event.component;
     let class = class_name(component);
     match class.as_str() {
-        "com.notemaker.MainActivity" => crate::main_activity::component_event(component, event, args),
-        "com.notemaker.ReplicaService" => crate::replica_service::component_event(component, event, args),
-        "com.notemaker.Integration" => crate::integration::component_event(component, event, args),
+        "com.notemaker.MainActivity" => crate::main_activity::component_event(event),
+        "com.notemaker.ReplicaService" => crate::replica_service::component_event(event),
+        "com.notemaker.Integration" => crate::integration::component_event(event),
         other => Err(jx::JavaError::new("java.lang.IllegalStateException", format!("Unknown component {other}"))),
     }
 }

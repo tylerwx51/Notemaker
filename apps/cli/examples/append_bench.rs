@@ -14,6 +14,7 @@
 //! Prints per-100-write mean/max milliseconds for the write and the read.
 
 use notemaker_cli::local_proxy::LocalProxy;
+use notemaker_core::ids::DocumentName;
 use notemaker_core::store;
 use notemaker_core::{json, object, Map, Value};
 use std::cell::RefCell;
@@ -89,7 +90,7 @@ fn main() -> notemaker_core::Result<()> {
         let observer = notemaker_core::timing::set_observer(None);
         let start = Instant::now();
         for _ in 0..2 {
-            let state = proxy.snapshot_state(doc)?;
+            let state = proxy.snapshot_state(&DocumentName::from(doc))?;
             let model = store::model(&state)?;
             std::hint::black_box(model.strokes.len());
         }
@@ -106,7 +107,7 @@ fn main() -> notemaker_core::Result<()> {
     }
     println!("total_s {:.3}", total.elapsed().as_secs_f64());
     {
-        let state = proxy.snapshot_state(doc)?;
+        let state = proxy.snapshot_state(&DocumentName::from(doc))?;
         let model = store::model(&state)?;
         let start = Instant::now();
         for _ in 0..100 {
@@ -118,7 +119,7 @@ fn main() -> notemaker_core::Result<()> {
     for (phase, ms) in &phases.borrow().1 {
         println!("phase {:<28} {:>8.3} ms/stroke (time since previous mark, last 100 strokes)", phase, ms / 100.0);
     }
-    let state = proxy.snapshot_state(doc)?;
+    let state = proxy.snapshot_state(&DocumentName::from(doc))?;
     let model = store::model(&state)?;
     assert_eq!(if objects { model.objects.len() } else { model.strokes.len() }, strokes);
     drop(model);

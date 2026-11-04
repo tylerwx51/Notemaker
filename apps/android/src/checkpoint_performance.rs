@@ -33,17 +33,17 @@ fn parse_io(text: &str) -> AppResult<IndexMap<String, i64>> {
 }
 
 /// `private static Map<String,Long> io() throws Exception` (`/proc/self/io`).
-pub fn io() -> AppResult<IndexMap<String, i64>> {
+fn io() -> AppResult<IndexMap<String, i64>> {
     let text = std::fs::read_to_string("/proc/self/io")?;
     parse_io(&text)
 }
 /// `private static Map<String,Object> measure(MainActivity app) throws Exception`.
-pub fn measure(app: &Arc<MainActivity>) -> AppResult<Map> {
+fn measure(app: &Arc<MainActivity>) -> AppResult<Map> {
     let before = io()?;
     let cpu = jstatic!("android/os/Process", "getElapsedCpuTime", "()J")?.long();
     let pss = jstatic!("android/os/Debug", "getPss", "()J")?.long();
     let wall = jstatic!("android/os/SystemClock", "elapsedRealtimeNanos", "()J")?.long();
-    let result = app.replica().command(&["checkpoint"], None)?;
+    let result = app.replica().command(crate::app_replica::CliArgs(&["checkpoint"]), None)?;
     let wall_ms = (jstatic!("android/os/SystemClock", "elapsedRealtimeNanos", "()J")?.long() - wall) as f64 / 1e6;
     let cpu_ms = jstatic!("android/os/Process", "getElapsedCpuTime", "()J")?.long() - cpu;
     let after_pss = jstatic!("android/os/Debug", "getPss", "()J")?.long();

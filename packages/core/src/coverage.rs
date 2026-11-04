@@ -1,16 +1,17 @@
 //! Port of `Coverage.java`: item-local painted area.
 
 use crate::error::{require, Result};
-use crate::geometry;
+use crate::geometry::{Bounds, DocRect, Polygon};
 use crate::jmath::{self, floor_div};
 use crate::json::Map;
+use crate::style::ArgbPixels;
 use indexmap::IndexMap;
 use std::sync::{Arc, Mutex};
 
 /// `Coverage` interface. Implementations never know about layers or sessions.
 pub trait Coverage: Send + Sync {
-    fn bounds(&self) -> [f64; 4];
-    fn intersects(&self, polygon: &[[f64; 2]]) -> Result<bool>;
+    fn bounds(&self) -> Bounds;
+    fn intersects(&self, polygon: &Polygon) -> Result<bool>;
 }
 
 /// `Coverage.Factory`. `DrawItem` caches coverage per factory identity
@@ -19,11 +20,20 @@ pub trait CoverageFactory {
     fn create(&self, local_content: &Map) -> Result<Box<dyn Coverage>>;
 }
 
-/// `Coverage.Tiles.Painter`: ARGB pixels of a `size`×`size` tile at (x,y).
+/// A square tile of coverage pixels: `size`×`size` document units with its
+/// top-left corner at (`x`, `y`), one pixel per unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoverageTile {
+    pub x: i32,
+    pub y: i32,
+    pub size: i32,
+}
+
+/// `Coverage.Tiles.Painter`: ARGB pixels of one [`CoverageTile`].
 pub trait Painter: Send + Sync {
     /// Errors propagate out of `Tiles::intersects`, as the Java painter's
     /// unchecked exceptions did.
-    fn paint(&self, x: i32, y: i32, size: i32) -> Result<Vec<i32>>;
+    fn paint(&self, tile: CoverageTile) -> Result<ArgbPixels>;
 }
 
 #[derive(Clone)]
@@ -36,13 +46,13 @@ enum Tile {
 /// `Coverage.Tiles`: lazy alpha support, one document unit per pixel,
 /// at most 128 cached 64×64 tiles (access order, like `LinkedHashMap(…, true)`).
 pub struct Tiles {
-    box_: [f64; 4],
+    box_: Bounds,
     painter: Box<dyn Painter>,
     cache: Mutex<IndexMap<i64, Tile>>,
 }
 
 impl Tiles {
-    pub fn new(box_: [f64; 4], painter: Box<dyn Painter>) -> Tiles {
+    pub fn new(box_: Bounds, painter: Box<dyn Painter>) -> Tiles {
         Tiles { box_, painter, cache: Mutex::new(IndexMap::new()) }
     }
     fn tile(&self, x: i32, y: i32) -> Result<Tile> {
@@ -52,7 +62,7 @@ impl Tiles {
             cache.insert(key, bits.clone());
             return Ok(bits);
         }
-        let pixels = self.painter.paint(x * 64, y * 64, 64)?;
+        let pixels = self.painter.paint(CoverageTile { x: x * 64, y: y * 64, size: 64 })?;
         let mut bits = [0u64; 64];
         let mut count = 0;
         for i in 0..4096usize {
@@ -77,16 +87,16 @@ impl Tiles {
 }
 
 impl Coverage for Tiles {
-    fn bounds(&self) -> [f64; 4] {
+    fn bounds(&self) -> Bounds {
         self.box_
     }
-    fn intersects(&self, polygon: &[[f64; 2]]) -> Result<bool> {
-        let q = geometry::bounds(polygon);
+    fn intersects(&self, polygon: &Polygon) -> Result<bool> {
+        let q = polygon.bounds();
         let b0 = &self.box_;
-        let l = jmath::d2i(jmath::max(b0[0], q[0]).floor());
-        let t = jmath::d2i(jmath::max(b0[1], q[1]).floor());
-        let r = jmath::d2i(jmath::min(b0[2], q[2]).ceil());
-        let b = jmath::d2i(jmath::min(b0[3], q[3]).ceil());
+        let l = jmath::d2i(jmath::max(b0.left, q.left).floor());
+        let t = jmath::d2i(jmath::max(b0.top, q.top).floor());
+        let r = jmath::d2i(jmath::min(b0.right, q.right).ceil());
+        let b = jmath::d2i(jmath::min(b0.bottom, q.bottom).ceil());
         if l >= r || t >= b {
             return Ok(false);
         }
@@ -98,7 +108,7 @@ impl Coverage for Tiles {
         while ty <= floor_div(b - 1, 64) {
             let mut tx = floor_div(l, 64);
             while tx <= floor_div(r - 1, 64) {
-                if geometry::intersects(polygon, &geometry::rect((tx * 64) as f64, (ty * 64) as f64, 64.0, 64.0)) {
+                if polygon.intersects(&DocRect { x: (tx * 64) as f64, y: (ty * 64) as f64, width: 64.0, height: 64.0 }.polygon()) {
                     match self.tile(tx, ty)? {
                         Tile::Empty => {}
                         Tile::Full => return Ok(true),
@@ -107,7 +117,7 @@ impl Coverage for Tiles {
                                 for x in l.max(tx * 64)..r.min(tx * 64 + 64) {
                                     let i = ((y - ty * 64) * 64 + x - tx * 64) as usize;
                                     if (bits[i >> 6] & (1u64 << (i & 63))) != 0
-                                        && geometry::intersects(polygon, &geometry::rect(x as f64, y as f64, 1.0, 1.0))
+                                        && polygon.intersects(&DocRect { x: x as f64, y: y as f64, width: 1.0, height: 1.0 }.polygon())
                                     {
                                         return Ok(true);
                                     }

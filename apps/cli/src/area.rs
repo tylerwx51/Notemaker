@@ -3,7 +3,7 @@
 //! resolved shapes (outer contours counter-clockwise, holes clockwise), so
 //! later operations do not depend on the source path's fill rule.
 
-use crate::canvas::{FillType, Path, RectF};
+use crate::canvas::{CanvasPoint, FillType, FlattenTolerance, Path, RectF};
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::overlay::FloatOverlay;
@@ -11,7 +11,7 @@ use i_overlay::float::relate::FloatRelate;
 use i_overlay::float::single::SingleFloatOverlay;
 
 /// Flattening tolerance in document units for curved outlines.
-pub(crate) const TOLERANCE: f32 = 0.01;
+pub(crate) const TOLERANCE: FlattenTolerance = FlattenTolerance(0.01);
 
 type Shapes = Vec<Vec<Vec<[f64; 2]>>>;
 
@@ -26,9 +26,10 @@ impl Area {
     pub(crate) fn of(path: &Path) -> Area {
         let contours: Vec<Vec<[f64; 2]>> = path
             .flatten(TOLERANCE)
+            .0
             .into_iter()
             .filter(|c| c.len() >= 3)
-            .map(|c| c.into_iter().map(|[x, y]| [x as f64, y as f64]).collect())
+            .map(|c| c.into_iter().map(|p| [p.x as f64, p.y as f64]).collect())
             .collect();
         if contours.is_empty() {
             return Area::default();
@@ -52,7 +53,7 @@ impl Area {
         for p in self.shapes.iter().flatten().flatten() {
             let (x, y) = (p[0] as f32, p[1] as f32);
             match &mut out {
-                None => out = Some(RectF::new(x, y, x, y)),
+                None => out = Some(RectF { left: x, top: y, right: x, bottom: y }),
                 Some(r) => {
                     r.left = r.left.min(x);
                     r.top = r.top.min(y);
@@ -109,10 +110,10 @@ impl Area {
             let mut first = true;
             for p in contour {
                 if first {
-                    path.move_to(p[0] as f32, p[1] as f32);
+                    path.move_to(CanvasPoint { x: p[0] as f32, y: p[1] as f32 });
                     first = false;
                 } else {
-                    path.line_to(p[0] as f32, p[1] as f32);
+                    path.line_to(CanvasPoint { x: p[0] as f32, y: p[1] as f32 });
                 }
             }
             path.close();

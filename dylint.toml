@@ -1,4 +1,4 @@
 # Configuration for the Dylint libraries in tools/lints (ADR 0030).
 [notemaker_lints]
-# Types from these crates count as local, so apps can pass core newtypes.
-allowed_crates = ["notemaker_core"]
+# Types from these crates count as local, so apps can pass shared newtypes.
+allowed_crates = ["notemaker_core", "notemaker_cli"]

@@ -22,25 +22,45 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// `private static final int[] FRAME_PHASE_IDS`.
-pub const FRAME_PHASE_IDS: [i32; 8] = [
-    FRAMEMETRICS_UNKNOWN_DELAY_DURATION,
-    FRAMEMETRICS_INPUT_HANDLING_DURATION,
-    FRAMEMETRICS_ANIMATION_DURATION,
-    FRAMEMETRICS_LAYOUT_MEASURE_DURATION,
-    FRAMEMETRICS_DRAW_DURATION,
-    FRAMEMETRICS_SYNC_DURATION,
-    FRAMEMETRICS_COMMAND_ISSUE_DURATION,
-    FRAMEMETRICS_SWAP_BUFFERS_DURATION,
+pub const FRAME_PHASE_IDS: [FrameMetricId; 8] = [
+    FrameMetricId(FRAMEMETRICS_UNKNOWN_DELAY_DURATION),
+    FrameMetricId(FRAMEMETRICS_INPUT_HANDLING_DURATION),
+    FrameMetricId(FRAMEMETRICS_ANIMATION_DURATION),
+    FrameMetricId(FRAMEMETRICS_LAYOUT_MEASURE_DURATION),
+    FrameMetricId(FRAMEMETRICS_DRAW_DURATION),
+    FrameMetricId(FRAMEMETRICS_SYNC_DURATION),
+    FrameMetricId(FRAMEMETRICS_COMMAND_ISSUE_DURATION),
+    FrameMetricId(FRAMEMETRICS_SWAP_BUFFERS_DURATION),
 ];
 /// `private static final String[] FRAME_PHASE_NAMES`.
 pub const FRAME_PHASE_NAMES: [&str; 8] = ["unknown_delay", "input", "animation", "layout", "draw", "sync", "command_issue", "swap_buffers"];
+
+/// A `FrameMetrics.*_DURATION` metric id (`FRAMEMETRICS_*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameMetricId(pub i32);
+
+/// The `FrameMetrics` argument of an `onFrameMetricsAvailable` callback.
+#[derive(Clone, Copy)]
+pub struct FrameMetrics<'a>(pub &'a Local);
+
+/// A frame phase duration from `FrameMetrics.getMetric`, in nanoseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameNanos(pub i64);
+
+/// Latency samples in milliseconds, in recording order.
+#[derive(Clone, Copy)]
+pub struct LatencySamples<'a>(pub &'a [f64]);
+
+/// The number of synthetic strokes drawn so far (`resources(strokes)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StrokeCount(pub i32);
 
 // ---------------------------------------------------------------------------
 // Shared helpers for the benchmark/check modules (Java inline idioms).
 
 /// `Thread.sleep(ms)` on the instrumentation thread.
-pub(crate) fn sleep(ms: u64) {
-    std::thread::sleep(Duration::from_millis(ms));
+pub(crate) fn sleep(delay: jx::DelayMillis) {
+    std::thread::sleep(Duration::from_millis(delay.0 as u64));
 }
 /// `ReplicaService.writes.submit(()->{}).get(30,TimeUnit.SECONDS)`.
 pub(crate) fn drain_writes() -> AppResult<()> {
@@ -66,7 +86,8 @@ pub(crate) fn write_file_output(app: &MainActivity, name: &str, bytes: &[u8]) ->
     Ok(())
 }
 /// `HandlerThread frames=new HandlerThread(name); frames.start();`.
-pub(crate) fn handler_thread(name: &str) -> AppResult<Obj> {
+pub(crate) fn handler_thread(name: &jx::ThreadName) -> AppResult<Obj> {
+    let name: &str = name;
     let frames = jnew!("android/os/HandlerThread", "(Ljava/lang/String;)V", name)?;
     jcall!(frames, "java/lang/Thread", "start", "()V")?;
     Ok(frames)
@@ -87,8 +108,8 @@ pub(crate) fn async_main_handler() -> AppResult<Obj> {
     Ok(jstatic!("android/os/Handler", "createAsync", "(Landroid/os/Looper;)Landroid/os/Handler;", &looper)?.some())
 }
 /// `metrics.getMetric(id)` of a `FrameMetrics` callback argument.
-pub(crate) fn frame_metric(metrics: &Local, id: i32) -> jx::JResult<i64> {
-    Ok(jcall!(metrics, "android/view/FrameMetrics", "getMetric", "(I)J", id)?.long())
+pub(crate) fn frame_metric(metrics: FrameMetrics, id: FrameMetricId) -> jx::JResult<FrameNanos> {
+    Ok(FrameNanos(jcall!(metrics.0, "android/view/FrameMetrics", "getMetric", "(I)J", id.0)?.long()))
 }
 /// `System.gc()`.
 pub(crate) fn gc() -> AppResult<()> {
@@ -121,7 +142,7 @@ fn press(pc: &Obj) -> AppResult<()> {
 fn obtain_stylus(down: i64, action: i32, pp: &Obj, pc: &Obj) -> AppResult<Obj> {
     let properties = jx::new_object_array("android/view/MotionEvent$PointerProperties", &[Some(pp)])?;
     let coords = jx::new_object_array("android/view/MotionEvent$PointerCoords", &[Some(pc)])?;
-    let now = jx::uptime_millis();
+    let now = jx::uptime_millis().0;
     Ok(jstatic!(
         "android/view/MotionEvent",
         "obtain",
@@ -145,7 +166,7 @@ fn obtain_stylus(down: i64, action: i32, pp: &Obj, pc: &Obj) -> AppResult<Obj> {
 }
 
 /// The coordinates `position` writes into `pc.x`/`pc.y`.
-pub fn position_xy(stroke: i32, point: i32, scale: f32, visible_width: f32, visible_height: f32) -> (f32, f32) {
+fn position_xy(stroke: i32, point: i32, scale: f32, visible_width: f32, visible_height: f32) -> (f32, f32) {
     let columns = 1.max(20.min(((visible_width - 100.0) / 45.0) as i32 + 1));
     let rows = 1.max(50.min(((visible_height - 100.0) / 24.0) as i32 + 1));
     let cell = stroke % (columns * rows);
@@ -160,14 +181,14 @@ pub fn position_xy(stroke: i32, point: i32, scale: f32, visible_width: f32, visi
 }
 
 /// `static void position(MotionEvent.PointerCoords pc, int stroke, int point, float scale, float visibleWidth, float visibleHeight)`.
-pub fn position(pc: &Obj, stroke: i32, point: i32, scale: f32, visible_width: f32, visible_height: f32) -> AppResult<()> {
+fn position(pc: &Obj, stroke: i32, point: i32, scale: f32, visible_width: f32, visible_height: f32) -> AppResult<()> {
     let (x, y) = position_xy(stroke, point, scale, visible_width, visible_height);
     jset!(pc, "android/view/MotionEvent$PointerCoords", "x", "F", x)?;
     jset!(pc, "android/view/MotionEvent$PointerCoords", "y", "F", y)?;
     Ok(())
 }
 /// `static int bucket(int stroke)`.
-pub fn bucket(stroke: i32) -> i32 {
+fn bucket(stroke: i32) -> i32 {
     if stroke < 100 {
         0
     } else if (400..500).contains(&stroke) {
@@ -179,7 +200,7 @@ pub fn bucket(stroke: i32) -> i32 {
     }
 }
 /// `static double percentile(List<Double> values, double fraction)`.
-pub fn percentile(values: &[f64], fraction: f64) -> f64 {
+fn percentile(values: &[f64], fraction: f64) -> f64 {
     let mut sorted = values.to_vec();
     // Collections.sort on Double: Double.compareTo order.
     sorted.sort_by(|a, b| a.total_cmp(b));
@@ -190,7 +211,8 @@ pub fn percentile(values: &[f64], fraction: f64) -> f64 {
     }
 }
 /// `static Map<String,Object> stats(List<Double> values)`.
-pub fn stats(values: &[f64]) -> Map {
+pub fn stats(values: LatencySamples) -> Map {
+    let LatencySamples(values) = values;
     object! {
         "over_30_ms" => values.iter().filter(|v| **v >= 30.0).count() as i64,
         "samples" => values.len() as i64,
@@ -203,9 +225,9 @@ pub fn stats(values: &[f64]) -> Map {
 /// `private static void prewarmGraphics(Instrumentation test, MainActivity app) throws Exception`.
 pub fn prewarm_graphics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     test.run_on_main_sync(|| -> AppResult<()> {
-        app.document.set(format!("performance-warmup-{}", jx::current_time_millis()));
+        app.document.set(format!("performance-warmup-{}", jx::current_time_millis().0));
         app.host.set("http://127.0.0.1:1".into());
-        app.load("fixed")?;
+        app.load(&crate::main_activity::DocumentType::from("fixed"))?;
         app.configure_proxy()?;
         app.update()?;
         app.set_drawing_tool(None)?;
@@ -217,13 +239,13 @@ pub fn prewarm_graphics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> App
     for stroke in 0..40 {
         let number = stroke;
         test.run_on_main_sync(|| -> AppResult<()> {
-            let down = jx::uptime_millis();
+            let down = jx::uptime_millis().0;
             let canvas = app.canvas();
-            let scale = canvas.scale();
+            let scale = canvas.scale().0;
             for step in 0..3 {
                 let pp = stylus_properties()?;
                 let pc = jnew!("android/view/MotionEvent$PointerCoords", "()V")?;
-                position(&pc, number, step * 24, scale, canvas.width() as f32 / scale, canvas.height() as f32 / scale)?;
+                position(&pc, number, step * 24, scale, canvas.width().0 as f32 / scale, canvas.height().0 as f32 / scale)?;
                 press(&pc)?;
                 let action = if step == 0 {
                     MOTIONEVENT_ACTION_DOWN
@@ -238,7 +260,7 @@ pub fn prewarm_graphics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> App
             }
             Ok(())
         })??;
-        sleep(18);
+        sleep(jx::DelayMillis(18));
     }
     drain_writes()
 }
@@ -296,7 +318,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     // Android input messages bypass traversal synchronization barriers. A regular
     // runOnMainSync message does not, adding an artificial extra vsync of delay.
     let input = async_main_handler()?;
-    let frames = handler_thread("performance-frames")?;
+    let frames = handler_thread(&jx::ThreadName::from("performance-frames"))?;
     let listener = {
         let current = current.clone();
         let samples = samples.clone();
@@ -306,9 +328,9 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                 let b = bucket(current.load(Ordering::SeqCst));
                 if current.load(Ordering::SeqCst) >= 10 && b >= 0 {
                     let metrics = &args[1];
-                    add(&samples[b as usize][3], frame_metric(metrics, FRAMEMETRICS_TOTAL_DURATION)? as f64 / 1e6);
+                    add(&samples[b as usize][3], frame_metric(FrameMetrics(metrics), FrameMetricId(FRAMEMETRICS_TOTAL_DURATION))?.0 as f64 / 1e6);
                     for (m, id) in FRAME_PHASE_IDS.iter().enumerate() {
-                        add(&frame_phases[b as usize][m], frame_metric(metrics, *id)? as f64 / 1e6);
+                        add(&frame_phases[b as usize][m], frame_metric(FrameMetrics(metrics), *id)?.0 as f64 / 1e6);
                     }
                 }
             }
@@ -316,14 +338,14 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         })
     };
     test.run_on_main_sync(|| -> AppResult<()> {
-        app.document.set(format!("performance-{}", jx::current_time_millis()));
+        app.document.set(format!("performance-{}", jx::current_time_millis().0));
         app.host.set("http://127.0.0.1:1".into());
-        app.load("fixed")?;
+        app.load(&crate::main_activity::DocumentType::from("fixed"))?;
         app.configure_proxy()?;
         app.update()?;
         let editor = crate::ui::edit(&app.this)?;
-        crate::ui::put_string(&editor, "document", &app.document.get())?;
-        crate::ui::put_string(&editor, "host", &app.host.get())?;
+        crate::ui::put_string(&editor, &crate::ui::PrefKey::from("document"), &crate::ui::PrefText::from(&app.document.get()))?;
+        crate::ui::put_string(&editor, &crate::ui::PrefKey::from("host"), &crate::ui::PrefText::from(&app.host.get()))?;
         jcall!(editor, "android/content/SharedPreferences$Editor", "commit", "()Z")?;
         let canvas = app.canvas();
         {
@@ -333,7 +355,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
             let figure_eight_latency = figure_eight_latency.clone();
             let slow_events = slow_events.clone();
             canvas.after_draw.set(Some(Arc::new(move || {
-                let drawn = jx::nano_time();
+                let drawn = jx::nano_time().0;
                 let mut pending = pending_draw.lock().unwrap();
                 for event in pending.iter() {
                     let e: [i64; 7] = std::array::from_fn(|i| event[i].load(Ordering::SeqCst));
@@ -346,7 +368,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                     let mut slow = slow_events.lock().unwrap();
                     if ms >= 30.0 && slow.len() < 20 {
                         slow.push(Value::Object(object! {
-                            "recorded_wall_ms" => jx::current_time_millis(),
+                            "recorded_wall_ms" => jx::current_time_millis().0,
                             "post_call_ms" => if e[6] == 0 { Value::Null } else { json::double((e[6] - e[0]) as f64 / 1e6) },
                             "stroke" => e[2] + 1,
                             "step" => e[3],
@@ -375,21 +397,21 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         jcall!(window, "android/view/Window", "addOnFrameMetricsAvailableListener", "(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V", &listener, &handler)?;
         Ok(())
     })??;
-    sleep(1000);
+    sleep(jx::DelayMillis(1000));
     let mut max_saving = 0;
-    let start = jx::nano_time();
+    let start = jx::nano_time().0;
     let initial_tile_metrics = tile_metrics(test, app)?;
-    let mut resources_list: Vec<Value> = vec![Value::Object(resources(0)?)];
+    let mut resources_list: Vec<Value> = vec![Value::Object(resources(StrokeCount(0))?)];
     for stroke in 0..1000 {
         jx::frame(|| -> AppResult<()> {
             current.store(stroke, Ordering::SeqCst);
             let number = stroke;
             let b = bucket(stroke);
-            let down = jx::uptime_millis();
+            let down = jx::uptime_millis().0;
             for step in 0..8 {
                 let index = step;
                 let handled = Arc::new(CountDownLatch::new(1));
-                let queued = jx::nano_time();
+                let queued = jx::nano_time().0;
                 let event_timing: EventTiming = Arc::new([
                     AtomicI64::new(queued),
                     AtomicI64::new(if index == 0 { 0 } else if index == 7 { 2 } else { 1 }),
@@ -410,7 +432,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                             let pp = stylus_properties()?;
                             let pc = jnew!("android/view/MotionEvent$PointerCoords", "()V")?;
                             let canvas = app.canvas();
-                            let scale = canvas.scale();
+                            let scale = canvas.scale().0;
                             let batch = if number % 100 == 99 { 83 } else { 8 };
                             let point = if index == 0 {
                                 0
@@ -419,8 +441,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                             } else {
                                 1 + (index - 1) * batch
                             };
-                            let visible_width = canvas.width() as f32 / scale;
-                            let visible_height = canvas.height() as f32 / scale;
+                            let visible_width = canvas.width().0 as f32 / scale;
+                            let visible_height = canvas.height().0 as f32 / scale;
                             position(&pc, number, point, scale, visible_width, visible_height)?;
                             press(&pc)?;
                             let action = if index == 0 {
@@ -435,13 +457,13 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                                 for history in 1..batch {
                                     position(&pc, number, point + history, scale, visible_width, visible_height)?;
                                     let coords = jx::new_object_array("android/view/MotionEvent$PointerCoords", &[Some(&pc)])?;
-                                    jcall!(e, "android/view/MotionEvent", "addBatch", "(J[Landroid/view/MotionEvent$PointerCoords;I)V", jx::uptime_millis(), &coords, 0)?;
+                                    jcall!(e, "android/view/MotionEvent", "addBatch", "(J[Landroid/view/MotionEvent$PointerCoords;I)V", jx::uptime_millis().0, &coords, 0)?;
                                 }
                             }
                             let view = canvas.view();
-                            let before = jx::nano_time();
+                            let before = jx::nano_time().0;
                             dispatch_touch(&view, &e)?;
-                            let after = jx::nano_time();
+                            let after = jx::nano_time().0;
                             recycle_event(&e)?;
                             event_timing[4].store(before, Ordering::SeqCst);
                             event_timing[5].store(after, Ordering::SeqCst);
@@ -459,44 +481,44 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                     })
                 };
                 crate::ui::post(&input, &runnable)?;
-                event_timing[6].store(jx::nano_time(), Ordering::SeqCst);
+                event_timing[6].store(jx::nano_time().0, Ordering::SeqCst);
                 if !handled.await_timeout(Duration::from_millis(30)) {
                     let stacks = stall_stacks()?;
                     dispatch_stalls.push(Value::Object(object! {
                         "stroke" => number + 1,
                         "step" => index,
-                        "wall_ms" => jx::current_time_millis(),
-                        "wait_ms" => json::double((jx::nano_time() - queued) as f64 / 1e6),
+                        "wall_ms" => jx::current_time_millis().0,
+                        "wait_ms" => json::double((jx::nano_time().0 - queued) as f64 / 1e6),
                         "stacks" => stacks,
                     }));
                     error::require(handled.await_timeout(Duration::from_secs(5)), "Input dispatch timed out")?;
                 }
                 // Sample at 250 Hz; real window frames still determine draw latency.
-                sleep(6);
+                sleep(jx::DelayMillis(6));
             }
             let pending = test.run_on_main_sync(|| app.saving.get())?;
             max_saving = max_saving.max(pending);
             if stroke % 100 == 99 {
-                resources_list.push(Value::Object(resources(stroke + 1)?));
-                jx::log::i("NoteMakerPerformance", &format!("strokes={} saveQueue={}", stroke + 1, pending));
+                resources_list.push(Value::Object(resources(StrokeCount(stroke + 1))?));
+                jx::log::i(crate::jx::log::PERFORMANCE, &format!("strokes={} saveQueue={}", stroke + 1, pending));
             }
             Ok(())
         })?;
     }
-    let drain_start = jx::nano_time();
+    let drain_start = jx::nano_time().0;
     drain_writes()?;
     test.wait_for_idle_sync()?;
-    sleep(500);
+    sleep(jx::DelayMillis(500));
     // The physical E Ink window may schedule the last traversal after the
     // fixed grace period. Wait for a natural draw before declaring loss.
-    let draw_deadline = jx::uptime_millis() + 3000;
+    let draw_deadline = jx::uptime_millis().0 + 3000;
     loop {
         let undrawn = test.run_on_main_sync(|| pending_draw.lock().unwrap().len())?;
         if undrawn == 0 {
             break;
         }
-        sleep(50);
-        if jx::uptime_millis() >= draw_deadline {
+        sleep(jx::DelayMillis(50));
+        if jx::uptime_millis().0 >= draw_deadline {
             break;
         }
     }
@@ -544,11 +566,11 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         "max_path_command_points_estimate" => get("maxPathCommandPointsEstimate"),
     };
     tile_cache.insert("reused_tile_repaints".into(), Value::from(metric_delta(f, i, "reusedTileRepaints")));
-    let timed_end = jx::nano_time();
+    let timed_end = jx::nano_time().0;
     let bounds_cache = TileInkCache::bounds_cache_metrics();
     gc()?;
-    sleep(1000);
-    let after_gc = resources(1000)?;
+    sleep(jx::DelayMillis(1000));
+    let after_gc = resources(StrokeCount(1000))?;
     let report = object! {
         "samples" => resources_list,
         "after_gc" => after_gc,
@@ -561,14 +583,14 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     for b in 0..3 {
         let mut phases = Map::new();
         for m in 0..FRAME_PHASE_IDS.len() {
-            phases.insert(FRAME_PHASE_NAMES[m].into(), Value::Object(stats(&values(&frame_phases[b][m]))));
+            phases.insert(FRAME_PHASE_NAMES[m].into(), Value::Object(stats(LatencySamples(&values(&frame_phases[b][m])))));
         }
         windows.push(Value::Object(object! {
             "strokes" => names[b],
-            "handler" => stats(&values(&samples[b][0])),
-            "dispatch" => stats(&values(&samples[b][1])),
-            "input_to_draw" => stats(&values(&samples[b][2])),
-            "frame" => stats(&values(&samples[b][3])),
+            "handler" => stats(LatencySamples(&values(&samples[b][0]))),
+            "dispatch" => stats(LatencySamples(&values(&samples[b][1]))),
+            "input_to_draw" => stats(LatencySamples(&values(&samples[b][2]))),
+            "frame" => stats(LatencySamples(&values(&samples[b][3]))),
             "frame_phases" => phases,
         }));
     }
@@ -578,11 +600,11 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         "dispatch_stalls" => dispatch_stalls_value,
         "slow_events" => slow_events_value,
         "latency_definition" => "UI enqueue to end of canvas draw; every event after 10 warmup strokes, including coalesced events",
-        "stroke_latency" => stats(&values(&stroke_latency)),
-        "figure_eight_latency" => stats(&values(&figure_eight_latency)),
-        "down_latency" => stats(&values(&phase_latency[0])),
-        "move_latency" => stats(&values(&phase_latency[1])),
-        "up_latency" => stats(&values(&phase_latency[2])),
+        "stroke_latency" => stats(LatencySamples(&values(&stroke_latency))),
+        "figure_eight_latency" => stats(LatencySamples(&values(&figure_eight_latency))),
+        "down_latency" => stats(LatencySamples(&values(&phase_latency[0]))),
+        "move_latency" => stats(LatencySamples(&values(&phase_latency[1]))),
+        "up_latency" => stats(LatencySamples(&values(&phase_latency[2]))),
         "document" => app.document.get(),
         "strokes" => 1000,
         "short_strokes" => 990,
@@ -643,8 +665,9 @@ fn proc_io() -> Map {
 }
 
 /// `static Map<String,Object> resources(int strokes)`.
-pub fn resources(strokes: i32) -> AppResult<Map> {
-    let start = jx::nano_time();
+pub fn resources(strokes: StrokeCount) -> AppResult<Map> {
+    let StrokeCount(strokes) = strokes;
+    let start = jx::nano_time().0;
     let memory = jnew!("android/os/Debug$MemoryInfo", "()V")?;
     jstatic!("android/os/Debug", "getMemoryInfo", "(Landroid/os/Debug$MemoryInfo;)V", &memory)?;
     let mut memory_parts = Map::new();
@@ -673,11 +696,11 @@ pub fn resources(strokes: i32) -> AppResult<Map> {
         "native_allocated_bytes" => native_allocated,
         "process_cpu_ms" => cpu,
         "io" => io,
-        "sampling_ms" => json::double((jx::nano_time() - start) as f64 / 1e6),
+        "sampling_ms" => json::double((jx::nano_time().0 - start) as f64 / 1e6),
     })
 }
 /// `private static Map<String,Object> tileMetrics(Instrumentation test, MainActivity app)`.
-pub fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     Ok(test.run_on_main_sync(|| app.canvas().tile_cache_metrics())?)
 }
 /// `((Number)m.get(key)).longValue()`: Java threw (NPE/ClassCast) for a
@@ -686,7 +709,7 @@ pub(crate) fn long_metric(m: &Map, key: &str) -> i64 {
     json::as_long(m.get(key)).unwrap_or_else(|e| panic!("{}", AppError::from(e)))
 }
 /// `private static long metricDelta(Map after, Map before, String key)`.
-pub fn metric_delta(after: &Map, before: &Map, key: &str) -> i64 {
+fn metric_delta(after: &Map, before: &Map, key: &str) -> i64 {
     long_metric(after, key) - long_metric(before, key)
 }
 
@@ -713,9 +736,9 @@ mod tests {
         assert_eq!(percentile(&v, 0.5), 5.0);
         assert_eq!(percentile(&v, 1.0), 40.0);
         assert_eq!(percentile(&v, 0.0), 1.0);
-        let s = stats(&v);
+        let s = stats(LatencySamples(&v));
         assert_eq!(json::write_map(&s), r#"{"over_30_ms":1,"samples":4,"p50_ms":5.0,"p95_ms":40.0,"p99_ms":40.0,"max_ms":40.0}"#);
-        assert_eq!(json::write_map(&stats(&[])), r#"{"over_30_ms":0,"samples":0,"p50_ms":0.0,"p95_ms":0.0,"p99_ms":0.0,"max_ms":0.0}"#);
+        assert_eq!(json::write_map(&stats(LatencySamples(&[]))), r#"{"over_30_ms":0,"samples":0,"p50_ms":0.0,"p95_ms":0.0,"p99_ms":0.0,"max_ms":0.0}"#);
     }
 
     #[test]

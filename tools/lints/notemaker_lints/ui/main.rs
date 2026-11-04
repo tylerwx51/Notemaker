@@ -9,9 +9,11 @@ pub enum LoadError {
 type Alias = String;
 
 // Flagged: primitives, std types, arrays, slices, tuples, aliases.
-pub fn primitive(page: u32) -> bool {
-    true
+pub fn primitive(page: u32) -> char {
+    'p'
 }
+pub fn bool_parameter(redo: bool) {}
+pub fn wrapped_raw(pages: std::sync::Arc<std::sync::Mutex<Vec<u32>>>) {}
 pub(crate) fn crate_visible(name: &str) {}
 pub fn array(points: [PageNumber; 2]) {}
 pub fn slice(pages: &[PageNumber]) {}
@@ -58,6 +60,24 @@ pub fn newtypes(page: PageNumber, title: &Title) -> Result<Option<Title>, LoadEr
     Ok(None)
 }
 pub fn unit() {}
+pub fn predicate() -> bool {
+    true
+}
+pub fn predicate_result() -> Result<bool, LoadError> {
+    Ok(true)
+}
+pub fn wrappers(
+    shared: std::sync::Arc<Document>,
+    boxed: Box<Document>,
+    local: std::rc::Rc<std::cell::RefCell<Document>>,
+    guarded: &std::sync::Mutex<Option<Title>>,
+    lock: std::sync::RwLock<Document>,
+    once: &std::sync::OnceLock<Title>,
+    weak: std::sync::Weak<Document>,
+    flag: &std::sync::atomic::AtomicBool,
+    worker: std::thread::JoinHandle<()>,
+) {
+}
 pub fn generic<T: Into<String>>(value: T) -> T {
     value
 }

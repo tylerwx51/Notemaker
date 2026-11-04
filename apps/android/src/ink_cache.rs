@@ -5,6 +5,7 @@
 use crate::android_canvas::{argb_8888, rect_from_java, rect_to_java, RectFExt};
 use crate::android_consts::COLOR_TRANSPARENT;
 use crate::error::AppResult;
+use crate::java_port::math::{float_value, fmax, fmin};
 use crate::jx::{self, Obj};
 use indexmap::IndexMap;
 use notemaker_cli::canvas::RectF;
@@ -33,32 +34,17 @@ pub struct InkCache {
     pub paint_bounds: HashMap<usize, (Entity, RectF)>,
 }
 
-/// `((Number) value).floatValue()`.
-pub(crate) fn float_value(value: Option<&Value>) -> AppResult<f32> {
-    match value {
-        Some(Value::Number(n)) => Ok(match n.as_i64() {
-            Some(i) => i as f32,
-            None => json::number_double(n) as f32,
-        }),
-        other => Ok(json::as_double(other)? as f32),
-    }
+/// The size of the cache bitmap in device pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BitmapSize {
+    pub width: i32,
+    pub height: i32,
 }
 
-/// Java `Math.min(float, float)` / `Math.max` (NaN propagates).
-pub(crate) fn fmin(a: f32, b: f32) -> f32 {
-    if a.is_nan() || b.is_nan() {
-        f32::NAN
-    } else {
-        a.min(b)
-    }
-}
-pub(crate) fn fmax(a: f32, b: f32) -> f32 {
-    if a.is_nan() || b.is_nan() {
-        f32::NAN
-    } else {
-        a.max(b)
-    }
-}
+/// The settled strokes and objects to show, by id, in drawing order
+/// (`LinkedHashMap<String, Map<String,Object>> visible`).
+#[derive(Clone, Default)]
+pub struct VisibleInk(pub IndexMap<String, Entity>);
 
 fn ptr(e: &Entity) -> usize {
     Arc::as_ptr(e) as *const () as usize
@@ -66,12 +52,14 @@ fn ptr(e: &Entity) -> usize {
 
 impl InkCache {
     /// `InkCache(int width, int height)`.
-    pub fn new(width: i32, height: i32) -> AppResult<InkCache> {
+    pub fn new(size: BitmapSize) -> AppResult<InkCache> {
+        let BitmapSize { width, height } = size;
         let bitmap = jstatic!("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", width, height, &argb_8888()?)?.some();
         Ok(InkCache { bitmap, drawn: IndexMap::new(), paint_bounds: HashMap::new() })
     }
     /// `void draw(Canvas destination, LinkedHashMap visible, Consumer<Canvas> transform, BiConsumer<Canvas,Map> stroke)`.
-    pub fn draw(&mut self, destination: &Obj, visible: IndexMap<String, Entity>, transform: &mut Transform<'_>, stroke: &mut StrokeRenderer<'_>) -> AppResult<()> {
+    pub fn draw(&mut self, destination: &Obj, visible: VisibleInk, transform: &mut Transform<'_>, stroke: &mut StrokeRenderer<'_>) -> AppResult<()> {
+        let visible = visible.0;
         let mut changed = false;
         let mut reordered = false;
         let mut dirty = RectF::default();
@@ -197,7 +185,7 @@ impl InkCache {
         Ok(())
     }
     /// `private static boolean sameBase(Map a, Map b)`.
-    pub fn same_base(a: &Map, b: &Map) -> bool {
+    fn same_base(a: &Map, b: &Map) -> bool {
         if a.get("kind").and_then(Value::as_str) == Some("object") || b.get("kind").and_then(Value::as_str) == Some("object") {
             return a == b;
         }
@@ -209,11 +197,11 @@ impl InkCache {
         true
     }
     /// `private static boolean sameInk(Map a, Map b)` (`a == b` is `Arc::ptr_eq`).
-    pub fn same_ink(a: &Entity, b: &Entity) -> bool {
+    fn same_ink(a: &Entity, b: &Entity) -> bool {
         Arc::ptr_eq(a, b) || (InkCache::same_base(a, b) && json::objects_equal(a.get("erasures"), b.get("erasures")))
     }
     /// `private RectF bounds(Map stroke)`.
-    pub fn bounds(&mut self, stroke: &Entity) -> AppResult<RectF> {
+    fn bounds(&mut self, stroke: &Entity) -> AppResult<RectF> {
         if let Some((_, cached)) = self.paint_bounds.get(&ptr(stroke)) {
             return Ok(*cached);
         }
@@ -222,10 +210,10 @@ impl InkCache {
         Ok(result)
     }
     /// `private static RectF computeBounds(Map stroke)`.
-    pub fn compute_bounds(stroke: &Map) -> AppResult<RectF> {
+    fn compute_bounds(stroke: &Map) -> AppResult<RectF> {
         if stroke.get("kind").and_then(Value::as_str) == Some("object") {
             let b = DrawItem::from_map(&Model::new(), stroke.clone())?.paint_bounds(&notemaker_cli::item_coverage::FACTORY)?;
-            return Ok(RectF::new(b[0] as f32 - 1.0, b[1] as f32 - 1.0, b[2] as f32 + 1.0, b[3] as f32 + 1.0));
+            return Ok(RectF { left: b.left as f32 - 1.0, top: b.top as f32 - 1.0, right: b.right as f32 + 1.0, bottom: b.bottom as f32 + 1.0 });
         }
         let width = float_value(stroke.get("width"))?;
         // Pen ribbons and round caps stay within half the nominal width. Using
@@ -245,7 +233,7 @@ impl InkCache {
             r = fmax(r, x);
             b = fmax(b, y);
         }
-        Ok(RectF::new(l - pad, t - pad, r + pad, b + pad))
+        Ok(RectF { left: l - pad, top: t - pad, right: r + pad, bottom: b + pad })
     }
 }
 
@@ -261,9 +249,9 @@ mod tests {
     #[test]
     fn stroke_bounds() {
         let b = InkCache::compute_bounds(&map(r#"{"kind":"stroke","width":4,"points":[[10,20],[30,5.5]]}"#)).unwrap();
-        assert_eq!(b, RectF::new(7.0, 2.5, 33.0, 23.0));
+        assert_eq!(b, RectF { left: 7.0, top: 2.5, right: 33.0, bottom: 23.0 });
         let b = InkCache::compute_bounds(&map(r#"{"kind":"stroke","width":4,"brush":"marker","points":[[10,20]]}"#)).unwrap();
-        assert_eq!(b, RectF::new(1.0, 11.0, 19.0, 29.0));
+        assert_eq!(b, RectF { left: 1.0, top: 11.0, right: 19.0, bottom: 29.0 });
     }
 
     #[test]

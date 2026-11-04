@@ -561,7 +561,7 @@ pub fn double(d: f64) -> String {
 }
 
 /// Append Java `Float.toString(f)` to `out`.
-pub fn append_float(out: &mut String, f: f32) {
+fn append_float(out: &mut String, f: f32) {
     const SINGLE_EXP_SHIFT: i32 = 23;
     const SINGLE_FRACT_HOB: i32 = 1 << SINGLE_EXP_SHIFT;
     let f_bits = f.to_bits() as i32;
@@ -602,16 +602,6 @@ pub fn float(f: f32) -> String {
     let mut s = String::with_capacity(16);
     append_float(&mut s, f);
     s
-}
-
-/// Java `Long.toString(v)`.
-pub fn long(v: i64) -> String {
-    v.to_string()
-}
-
-/// `String.format(Locale.ROOT, "#%06x", c & 0xffffff)`.
-pub fn hex_color(c: i32) -> String {
-    format!("#{:06x}", c & 0xffffff)
 }
 
 /// Java `String.trim()`: strips leading/trailing chars `<= ' '`.

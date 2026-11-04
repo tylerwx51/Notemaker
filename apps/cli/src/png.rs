@@ -8,18 +8,26 @@
 //! wrote `new com.notemaker.cli.Png(canvas)`.
 
 use crate::area::Area;
-use crate::canvas::{Canvas, Cap, FillType, Join, Paint, Path, RectF, Style};
+use crate::canvas::{
+    Bitmap, Canvas, CanvasPoint, CanvasSegment, CanvasSize, Cap, FillType, Join, Paint, Path,
+    RectF, Rotation, SaveCount, ScaleFactors, Style, SvgTree, Translation,
+};
 use crate::item_coverage;
-use crate::raster::RasterCanvas;
-use crate::typeface::Typeface;
+use crate::raster::{PixelSize, RasterCanvas};
+use crate::typeface::{FaceStyle, TextSize, Typeface};
 use indexmap::IndexMap;
-use notemaker_core::geometry::Polygon;
+use notemaker_core::coverage::CoverageTile;
+use notemaker_core::geometry::{Degrees, DocPoint, DocRect, Erasures, InkPasses, Polygon, Segment};
+use notemaker_core::ids::PageNumber;
 use notemaker_core::model::Model;
-use notemaker_core::render::{self, Surface};
+use notemaker_core::render::{self, HiddenLayers, Surface};
+use notemaker_core::style::{
+    ArgbColor, ArgbPixels, Flip, FontFamily, FontSize, PathEnd, RectShape, ShapePaint, StrokeWidth,
+    TextAlignment, TextContent, TextStyle,
+};
 use notemaker_core::svg_asset::{self, DotGrid};
 use notemaker_core::{Error, Map, Result};
 use resvg::{tiny_skia, usvg};
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -44,10 +52,10 @@ pub enum StrokeCommand {
     /// `canvas.restore()` (`endErase`).
     Restore,
     /// `paint.setColor(color); setStyle(FILL); canvas.drawPath(path)`.
-    FillPath { path: Path, color: i32 },
+    FillPath { path: Path, color: ArgbColor },
     /// `paint.setColor(color); setStyle(STROKE); setStrokeWidth(width);
     /// setStrokeJoin(ROUND); canvas.drawPath(path)`.
-    StrokePath { path: Path, color: i32, width: f32 },
+    StrokePath { path: Path, color: ArgbColor, width: f32 },
     /// `paint.setColor(color); setStyle(STROKE); setStrokeWidth(width);
     /// canvas.drawLine(x0, y0, x1, y1)`.
     Line {
@@ -55,7 +63,7 @@ pub enum StrokeCommand {
         y0: f32,
         x1: f32,
         y1: f32,
-        color: i32,
+        color: ArgbColor,
         width: f32,
     },
 }
@@ -68,8 +76,8 @@ pub struct StrokeCommands {
 
 impl StrokeCommands {
     /// The recorded calls, in order (for non-`Canvas` replays).
-    pub fn commands(&self) -> &[StrokeCommand] {
-        &self.commands
+    pub fn commands(&self) -> impl ExactSizeIterator<Item = &StrokeCommand> + '_ {
+        self.commands.iter()
     }
 }
 
@@ -77,8 +85,8 @@ impl StrokeCommands {
 pub struct Png<'a> {
     target: Target<'a>,
     paint: Paint,
-    clips: Vec<i32>,
-    transforms: Vec<i32>,
+    clips: Vec<SaveCount>,
+    transforms: Vec<SaveCount>,
 }
 
 enum Target<'a> {
@@ -89,8 +97,8 @@ enum Target<'a> {
 /// `SVGS` (parsed trees, LRU 16). Keyed by (source, w, h) because the
 /// normalized `100%` viewport resolves against the object box.
 type SvgKey = (String, u32, u32);
-fn svgs() -> &'static Mutex<IndexMap<SvgKey, Arc<usvg::Tree>>> {
-    static SVGS: OnceLock<Mutex<IndexMap<SvgKey, Arc<usvg::Tree>>>> = OnceLock::new();
+fn svgs() -> &'static Mutex<IndexMap<SvgKey, Arc<SvgTree>>> {
+    static SVGS: OnceLock<Mutex<IndexMap<SvgKey, Arc<SvgTree>>>> = OnceLock::new();
     SVGS.get_or_init(|| Mutex::new(IndexMap::new()))
 }
 
@@ -100,7 +108,7 @@ const IMAGE_CACHE_KEY_LIMIT: usize = 4 * 1024 * 1024;
 /// `IMAGES` with the Android byte and key-length budgets.
 #[derive(Default)]
 struct ImageCache {
-    images: IndexMap<String, Arc<tiny_skia::Pixmap>>,
+    images: IndexMap<String, Arc<Bitmap>>,
     bytes: usize,
     key_chars: usize,
 }
@@ -277,28 +285,28 @@ impl<'a> Png<'a> {
 
     /// `Png.coverageTile(m, item, x, y, size)`: ARGB pixels of `item`
     /// painted into a transparent `size`×`size` tile at (x, y).
-    pub fn coverage_tile(m: &Model, item: &Map, x: i32, y: i32, size: i32) -> Result<Vec<i32>> {
-        let mut image = RasterCanvas::new(size as u32, size as u32)?;
-        image.translate(-x as f32, -y as f32);
+    pub fn coverage_tile(m: &Model, item: &Map, tile: CoverageTile) -> Result<ArgbPixels> {
+        let CoverageTile { x, y, size } = tile;
+        let mut image = RasterCanvas::new(PixelSize { width: size as u32, height: size as u32 })?;
+        image.translate(Translation { dx: -x as f32, dy: -y as f32 });
         render::draw_item(m, item, &mut Png::new(&mut image))?;
         Ok(image.argb_pixels())
     }
 
-    /// `Png.export(m, page, x, y, w, h, out)`: white background, viewport at
-    /// (x, y), PNG written to `out`.
+    /// `Png.export(m, page, x, y, w, h, out)`: white background, viewport
+    /// origin at `origin`, `size` pixels, PNG written to `out`.
     pub fn export(
         m: &Model,
-        page: i32,
-        x: f64,
-        y: f64,
-        w: i32,
-        h: i32,
+        page: PageNumber,
+        origin: DocPoint,
+        size: PixelSize,
         out: &std::path::Path,
     ) -> Result<()> {
-        let mut image = RasterCanvas::new(w as u32, h as u32)?;
-        image.draw_color(0xffff_ffffu32 as i32);
-        image.translate(-x as f32, -y as f32);
-        render::draw(m, page, &HashSet::new(), &mut Png::new(&mut image))?;
+        let DocPoint { x, y } = origin;
+        let mut image = RasterCanvas::new(size)?;
+        image.draw_color(ArgbColor::WHITE);
+        image.translate(Translation { dx: -x as f32, dy: -y as f32 });
+        render::draw(m, page, &HiddenLayers::default(), &mut Png::new(&mut image))?;
         let bytes = image.encode_png()?;
         std::fs::write(out, bytes).map_err(|e| {
             Error::io(format!(
@@ -361,7 +369,13 @@ impl<'a> Png<'a> {
                     paint.color = *color;
                     paint.style = Style::Stroke;
                     paint.stroke_width = *width;
-                    canvas.draw_line(*x0, *y0, *x1, *y1, paint);
+                    canvas.draw_line(
+                        CanvasSegment {
+                            start: CanvasPoint { x: *x0, y: *y0 },
+                            end: CanvasPoint { x: *x1, y: *y1 },
+                        },
+                        paint,
+                    );
                 }
             }
         }
@@ -373,7 +387,7 @@ impl<'a> Png<'a> {
     }
 
     /// Record or draw a fill.
-    fn fill_path(&mut self, path: Path, color: i32) -> Result<()> {
+    fn fill_path(&mut self, path: Path, color: ArgbColor) -> Result<()> {
         match &mut self.target {
             Target::Recorder(commands) => commands.push(StrokeCommand::FillPath { path, color }),
             Target::Canvas(canvas) => {
@@ -388,34 +402,34 @@ impl<'a> Png<'a> {
     fn draw_dots(canvas: &mut dyn Canvas, w: f64, h: f64, dots: &DotGrid) {
         canvas.save();
         let scale = (w / dots.width).min(h / dots.height);
-        canvas.translate(
-            ((w - dots.width * scale) / 2.0) as f32,
-            ((h - dots.height * scale) / 2.0) as f32,
-        );
-        canvas.scale(scale as f32, scale as f32);
+        canvas.translate(Translation {
+            dx: ((w - dots.width * scale) / 2.0) as f32,
+            dy: ((h - dots.height * scale) / 2.0) as f32,
+        });
+        canvas.scale(ScaleFactors { sx: scale as f32, sy: scale as f32 });
         let fill = Paint {
-            color: dots.color,
+            color: ArgbColor(dots.color),
             style: Style::Fill,
             ..Paint::anti_alias()
         };
         let alpha = notemaker_core::jmath::round(dots.stroke_opacity * 255.0) as u32 & 255;
         let stroke = Paint {
-            color: ((dots.color as u32 & 0x00ff_ffff) | (alpha << 24)) as i32,
+            color: ArgbColor(((dots.color as u32 & 0x00ff_ffff) | (alpha << 24)) as i32),
             style: Style::Stroke,
             stroke_width: dots.stroke_width as f32,
             ..Paint::anti_alias()
         };
-        let circles = dots.circles();
-        for c in circles.chunks_exact(3) {
-            let (cx, cy, r) = (c[0] as f32, c[1] as f32, c[2] as f32);
+        let p = |x: f32, y: f32| CanvasPoint { x, y };
+        for c in dots.circles() {
+            let (cx, cy, r) = (c.center.x as f32, c.center.y as f32, c.radius.0 as f32);
             let (left, top, right, bottom, k) =
                 (cx - r, cy - r, cx + r, cy + r, r * 0.552_284_8f32);
             let mut circle = Path::new();
-            circle.move_to(cx, top);
-            circle.cubic_to(cx + k, top, right, cy - k, right, cy);
-            circle.cubic_to(right, cy + k, cx + k, bottom, cx, bottom);
-            circle.cubic_to(cx - k, bottom, left, cy + k, left, cy);
-            circle.cubic_to(left, cy - k, cx - k, top, cx, top);
+            circle.move_to(p(cx, top));
+            circle.cubic_to(p(cx + k, top), p(right, cy - k), p(right, cy));
+            circle.cubic_to(p(right, cy + k), p(cx + k, bottom), p(cx, bottom));
+            circle.cubic_to(p(cx - k, bottom), p(left, cy + k), p(left, cy));
+            circle.cubic_to(p(left, cy - k), p(cx - k, top), p(cx, top));
             circle.close();
             canvas.draw_path(&circle, &fill);
             canvas.draw_path(&circle, &stroke);
@@ -423,7 +437,7 @@ impl<'a> Png<'a> {
         canvas.restore();
     }
 
-    fn svg_tree(source: &str, w: f64, h: f64) -> Result<Arc<usvg::Tree>> {
+    fn svg_tree(source: &str, w: f64, h: f64) -> Result<Arc<SvgTree>> {
         let key = (
             source.to_string(),
             (w as f32).to_bits(),
@@ -440,13 +454,13 @@ impl<'a> Png<'a> {
         let options = usvg::Options {
             default_size: usvg::Size::from_wh(w as f32, h as f32)
                 .unwrap_or(usvg::Size::from_wh(100.0, 100.0).expect("valid size")),
-            fontdb: crate::typeface::svg_fontdb(),
+            fontdb: crate::typeface::svg_fontdb().0,
             ..usvg::Options::default()
         };
-        let tree = Arc::new(
+        let tree = Arc::new(SvgTree(
             usvg::Tree::from_str(&normalized, &options)
                 .map_err(|_| Error::illegal_argument("Could not render SVG"))?,
-        );
+        ));
         trace(format!(
             "svg_source_bytes={} svg_validate_ms={} svg_parse_ms={}",
             source.len(),
@@ -460,7 +474,7 @@ impl<'a> Png<'a> {
         Ok(tree)
     }
 
-    fn cached_image(data: &str) -> Result<Arc<tiny_skia::Pixmap>> {
+    fn cached_image(data: &str) -> Result<Arc<Bitmap>> {
         let mut cache = images().lock().unwrap_or_else(|e| e.into_inner());
         let cacheable = data.len() <= 1_000_000;
         if cacheable {
@@ -470,18 +484,18 @@ impl<'a> Png<'a> {
             }
         }
         let bytes = base64_payload(data)?;
-        let image = Arc::new(
+        let image = Arc::new(Bitmap(
             decode_image(&bytes)
                 .ok_or_else(|| Error::illegal_argument("Could not decode image pixels"))?,
-        );
-        let used = image.data().len();
+        ));
+        let used = image.0.data().len();
         if cacheable && used <= IMAGE_CACHE_LIMIT && data.len() <= IMAGE_CACHE_KEY_LIMIT {
             while (cache.bytes + used > IMAGE_CACHE_LIMIT
                 || cache.key_chars + data.len() > IMAGE_CACHE_KEY_LIMIT)
                 && !cache.images.is_empty()
             {
                 if let Some((key, eldest)) = cache.images.shift_remove_index(0) {
-                    cache.bytes -= eldest.data().len();
+                    cache.bytes -= eldest.0.data().len();
                     cache.key_chars -= key.len();
                 }
             }
@@ -494,10 +508,10 @@ impl<'a> Png<'a> {
 }
 
 impl Surface for Png<'_> {
-    fn begin_erase(&mut self, polygons: &[Polygon]) -> Result<()> {
-        let paths: Vec<Path> = polygons
+    fn begin_erase(&mut self, erasures: &Erasures) -> Result<()> {
+        let paths: Vec<Path> = erasures
             .iter()
-            .map(|p| item_coverage::path(p, true))
+            .map(|p| item_coverage::path(p, PathEnd::Closed))
             .collect();
         match &mut self.target {
             Target::Recorder(commands) => commands.push(StrokeCommand::SaveClipOut(paths)),
@@ -522,15 +536,10 @@ impl Surface for Png<'_> {
         }
         Ok(())
     }
-    fn polygon(
-        &mut self,
-        points: &[[f64; 2]],
-        color: i32,
-        width: f64,
-        fill: Option<i32>,
-        closed: bool,
-    ) -> Result<()> {
-        let p = item_coverage::path(points, closed);
+    fn polygon(&mut self, points: &Polygon, paint: ShapePaint, end: PathEnd) -> Result<()> {
+        let ShapePaint { color, width, fill } = paint;
+        let width = width.0;
+        let p = item_coverage::path(points, end);
         if let Some(fill) = fill {
             self.fill_path(p.clone(), fill)?;
         }
@@ -553,15 +562,19 @@ impl Surface for Png<'_> {
         }
         Ok(())
     }
-    fn ink(&mut self, passes: &[Polygon], color: i32) -> Result<()> {
+    fn ink(&mut self, passes: &InkPasses, color: ArgbColor) -> Result<()> {
         if passes.len() == 1 {
-            return self.polygon(&passes[0], color, 0.0, Some(color), true);
+            return self.polygon(
+                &passes[0],
+                ShapePaint { color, width: StrokeWidth(0.0), fill: Some(color) },
+                PathEnd::Closed,
+            );
         }
-        if (color as u32 >> 24) == 255 {
+        if (color.0 as u32 >> 24) == 255 {
             let mut union = Path::new();
             union.set_fill_type(FillType::Winding);
             for points in passes {
-                union.add_path(&item_coverage::path(points, true));
+                union.add_path(&item_coverage::path(points, PathEnd::Closed));
             }
             return self.fill_path(union, color);
         }
@@ -569,7 +582,7 @@ impl Surface for Png<'_> {
         // rasterization prevents antialias cracks at artificial pass boundaries.
         let mut layers: Vec<Area> = Vec::new();
         for points in passes {
-            let mut carry = Area::of(&item_coverage::path(points, true));
+            let mut carry = Area::of(&item_coverage::path(points, PathEnd::Closed));
             for layer in layers.iter_mut() {
                 let overlap = layer.intersect(&carry);
                 *layer = layer.union(&carry);
@@ -587,8 +600,15 @@ impl Surface for Png<'_> {
         }
         Ok(())
     }
-    fn line(&mut self, x: f64, y: f64, ex: f64, ey: f64, color: i32, width: f64) -> Result<()> {
-        let (x0, y0, x1, y1, width) = (x as f32, y as f32, ex as f32, ey as f32, width as f32);
+    fn line(&mut self, segment: Segment, color: ArgbColor, width: StrokeWidth) -> Result<()> {
+        let Segment { start, end } = segment;
+        let (x0, y0, x1, y1, width) = (
+            start.x as f32,
+            start.y as f32,
+            end.x as f32,
+            end.y as f32,
+            width.0 as f32,
+        );
         match &mut self.target {
             Target::Recorder(commands) => commands.push(StrokeCommand::Line {
                 x0,
@@ -602,26 +622,31 @@ impl Surface for Png<'_> {
                 self.paint.color = color;
                 self.paint.style = Style::Stroke;
                 self.paint.stroke_width = width;
-                canvas.draw_line(x0, y0, x1, y1, &self.paint);
+                canvas.draw_line(
+                    CanvasSegment {
+                        start: CanvasPoint { x: x0, y: y0 },
+                        end: CanvasPoint { x: x1, y: y1 },
+                    },
+                    &self.paint,
+                );
             }
         }
         Ok(())
     }
-    fn rect(
-        &mut self,
-        x: f64,
-        y: f64,
-        w: f64,
-        h: f64,
-        color: i32,
-        width: f64,
-        fill: Option<i32>,
-        ellipse: bool,
-    ) -> Result<()> {
+    fn rect(&mut self, rect: DocRect, paint: ShapePaint, shape: RectShape) -> Result<()> {
+        let DocRect { x, y, width: w, height: h } = rect;
+        let ShapePaint { color, width, fill } = paint;
+        let width = width.0;
+        let ellipse = shape == RectShape::Ellipse;
         let mut paint = self.paint;
         paint.join = Join::Miter;
         let canvas = self.canvas()?;
-        let r = RectF::new(x as f32, y as f32, (x + w) as f32, (y + h) as f32);
+        let r = RectF {
+            left: x as f32,
+            top: y as f32,
+            right: (x + w) as f32,
+            bottom: (y + h) as f32,
+        };
         let draw = |canvas: &mut dyn Canvas, paint: &Paint| {
             if ellipse {
                 canvas.draw_oval(r, paint)
@@ -643,9 +668,13 @@ impl Surface for Png<'_> {
         self.paint = paint;
         Ok(())
     }
-    fn text(&mut self, x: f64, y: f64, text: &str, color: i32, size: f64) -> Result<()> {
-        let face = Typeface::create("sans-serif", false, false)?;
-        let path = face.text_path(text, x as f32, y as f32, size as f32);
+    fn text(&mut self, origin: DocPoint, text: &TextContent, color: ArgbColor, size: FontSize) -> Result<()> {
+        let face = Typeface::create(&FontFamily::from("sans-serif"), FaceStyle::REGULAR)?;
+        let path = face.text_path(
+            text,
+            CanvasPoint { x: origin.x as f32, y: origin.y as f32 },
+            TextSize(size.0 as f32),
+        );
         let mut paint = self.paint;
         paint.color = color;
         paint.style = Style::Fill;
@@ -655,19 +684,19 @@ impl Surface for Png<'_> {
     }
     fn styled_text(
         &mut self,
-        x: f64,
-        y: f64,
-        text: &str,
-        color: i32,
-        size: f64,
-        family: &str,
-        bold: bool,
-        italic: bool,
-        underline: bool,
-        alignment: &str,
+        origin: DocPoint,
+        text: &TextContent,
+        color: ArgbColor,
+        size: FontSize,
+        family: &FontFamily,
+        style: TextStyle,
+        alignment: &TextAlignment,
     ) -> Result<()> {
-        let face = Typeface::create(family, bold, italic)?;
-        let width = face.measure_text(text, size as f32);
+        let DocPoint { x, y } = origin;
+        let size = size.0;
+        let alignment: &str = alignment;
+        let face = Typeface::create(family, FaceStyle { bold: style.bold, italic: style.italic })?;
+        let width = face.measure_text(text, TextSize(size as f32)).0;
         let draw_x = x as f32
             - if alignment == "center" {
                 width / 2.0
@@ -676,13 +705,13 @@ impl Surface for Png<'_> {
             } else {
                 0.0
             };
-        let path = face.text_path(text, draw_x, y as f32, size as f32);
+        let path = face.text_path(text, CanvasPoint { x: draw_x, y: y as f32 }, TextSize(size as f32));
         let mut paint = self.paint;
         paint.color = color;
         paint.style = Style::Fill;
         let canvas = self.canvas()?;
         canvas.draw_path(&path, &paint);
-        if underline {
+        if style.underline {
             let line = Paint {
                 color,
                 style: Style::Stroke,
@@ -691,37 +720,45 @@ impl Surface for Png<'_> {
                 ..paint
             };
             canvas.draw_line(
-                draw_x,
-                (y + 2.0) as f32,
-                draw_x + width,
-                (y + 2.0) as f32,
+                CanvasSegment {
+                    start: CanvasPoint { x: draw_x, y: (y + 2.0) as f32 },
+                    end: CanvasPoint { x: draw_x + width, y: (y + 2.0) as f32 },
+                },
                 &line,
             );
         }
         self.paint = paint;
         Ok(())
     }
-    fn image(&mut self, x: f64, y: f64, w: f64, h: f64, data: &str) -> Result<()> {
+    fn image(&mut self, rect: DocRect, data: &str) -> Result<()> {
+        let DocRect { x, y, width: w, height: h } = rect;
         let image = Png::cached_image(data)?;
         let paint = Paint {
-            color: 0xffff_ffffu32 as i32,
+            color: ArgbColor::WHITE,
             ..self.paint
         };
         self.canvas()?.draw_bitmap(
             &image,
-            RectF::new(x as f32, y as f32, (x + w) as f32, (y + h) as f32),
+            RectF {
+                left: x as f32,
+                top: y as f32,
+                right: (x + w) as f32,
+                bottom: (y + h) as f32,
+            },
             &paint,
         );
         Ok(())
     }
-    fn svg(&mut self, x: f64, y: f64, w: f64, h: f64, source: &str) -> Result<()> {
+    fn svg(&mut self, rect: DocRect, source: &str) -> Result<()> {
+        let DocRect { x, y, width: w, height: h } = rect;
         let canvas = self.canvas()?;
+        let clip = RectF { left: 0.0, top: 0.0, right: w as f32, bottom: h as f32 };
         if USE_DIRECT_DOTS.load(Ordering::Relaxed) {
             let begun = Instant::now();
             if let Some(dots) = svg_asset::dot_grid(source)? {
                 canvas.save();
-                canvas.translate(x as f32, y as f32);
-                canvas.clip_rect(0.0, 0.0, w as f32, h as f32);
+                canvas.translate(Translation { dx: x as f32, dy: y as f32 });
+                canvas.clip_rect(clip);
                 Png::draw_dots(canvas, w, h, &dots);
                 canvas.restore();
                 trace(format!(
@@ -737,29 +774,23 @@ impl Surface for Png<'_> {
             return Ok(());
         }
         canvas.save();
-        canvas.translate(x as f32, y as f32);
-        canvas.clip_rect(0.0, 0.0, w as f32, h as f32);
-        canvas.draw_svg(&tree, w as f32, h as f32);
+        canvas.translate(Translation { dx: x as f32, dy: y as f32 });
+        canvas.clip_rect(clip);
+        canvas.draw_svg(&tree, CanvasSize { width: w as f32, height: h as f32 });
         canvas.restore();
         Ok(())
     }
-    fn save_transform(
-        &mut self,
-        cx: f64,
-        cy: f64,
-        rotation: f64,
-        flip_x: bool,
-        flip_y: bool,
-    ) -> Result<()> {
+    fn save_transform(&mut self, center: DocPoint, rotation: Degrees, flip: Flip) -> Result<()> {
+        let DocPoint { x: cx, y: cy } = center;
         let canvas = self.canvas()?;
         let count = canvas.save();
-        canvas.translate(cx as f32, cy as f32);
-        canvas.rotate(rotation as f32);
-        canvas.scale(
-            if flip_x { -1.0 } else { 1.0 },
-            if flip_y { -1.0 } else { 1.0 },
-        );
-        canvas.translate(-cx as f32, -cy as f32);
+        canvas.translate(Translation { dx: cx as f32, dy: cy as f32 });
+        canvas.rotate(Rotation(rotation.0 as f32));
+        canvas.scale(ScaleFactors {
+            sx: if flip.horizontal { -1.0 } else { 1.0 },
+            sy: if flip.vertical { -1.0 } else { 1.0 },
+        });
+        canvas.translate(Translation { dx: -cx as f32, dy: -cy as f32 });
         self.transforms.push(count);
         Ok(())
     }

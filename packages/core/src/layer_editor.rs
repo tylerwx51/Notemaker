@@ -1,6 +1,8 @@
 //! Port of `LayerEditor.java`: layer-owned scope for candidate lookup and ID resolution.
 
 use crate::coverage::CoverageFactory;
+use crate::geometry::Polygon;
+use crate::ids::{EntityId, EntityKind, LayerId, PageNumber};
 use crate::draw_item::DrawItem;
 use crate::error::{require, require_with, Result};
 use crate::jmath;
@@ -11,18 +13,34 @@ use indexmap::IndexMap;
 /// `LayerEditor`.
 pub struct LayerEditor {
     items: IndexMap<String, DrawItem>,
-    pub layer: String,
-    pub page: i32,
+    pub layer: LayerId,
+    pub page: PageNumber,
+}
+
+/// Which items a [`LayerEditor`] holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemFilter {
+    ActiveOnly,
+    IncludeInactive,
+}
+
+/// How many hits a selection keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitMode {
+    /// Only the topmost hit item.
+    Topmost,
+    /// Every hit item, topmost first.
+    All,
 }
 
 /// `LayerEditor.page(request)`: validated integer page (default 0).
-pub fn page(request: &Map) -> Result<i32> {
+pub fn page(request: &Map) -> Result<PageNumber> {
     let zero = Value::from(0);
     let raw = json::get_or_default(request, "page", &zero);
     require(raw.is_number(), "Invalid page")?;
     let n = json::as_double(Some(raw))?;
     require(n.is_finite() && n == jmath::rint(n) && (0.0..=10000.0).contains(&n), "Invalid page")?;
-    Ok(jmath::d2i(n))
+    Ok(PageNumber(jmath::d2i(n)))
 }
 
 fn editable(model: &Model, layer: &str, page: i32) -> Result<()> {
@@ -36,24 +54,24 @@ fn page_of(o: &Map) -> Result<i32> {
 
 impl LayerEditor {
     /// `new LayerEditor(model, layer, page)`: active items only.
-    pub fn new(model: &Model, layer: &str, page: i32) -> Result<LayerEditor> {
-        LayerEditor::build(model, layer, page, false, true)
+    pub fn new(model: &Model, layer: &LayerId, page: PageNumber) -> Result<LayerEditor> {
+        LayerEditor::build(model, layer.as_ref(), page.0, false, true)
     }
 
     /// `new LayerEditor(model, layer, page, includeInactive)`.
-    pub fn with_inactive(model: &Model, layer: &str, page: i32, include_inactive: bool) -> Result<LayerEditor> {
-        LayerEditor::build(model, layer, page, include_inactive, true)
+    pub fn with_filter(model: &Model, layer: &LayerId, page: PageNumber, filter: ItemFilter) -> Result<LayerEditor> {
+        LayerEditor::build(model, layer.as_ref(), page.0, filter == ItemFilter::IncludeInactive, true)
     }
 
     /// `LayerEditor.forErase(model, layer, page)`: scans the tables directly.
-    pub fn for_erase(model: &Model, layer: &str, page: i32) -> Result<LayerEditor> {
-        LayerEditor::build(model, layer, page, false, false)
+    pub fn for_erase(model: &Model, layer: &LayerId, page: PageNumber) -> Result<LayerEditor> {
+        LayerEditor::build(model, layer.as_ref(), page.0, false, false)
     }
 
     fn build(model: &Model, layer: &str, page: i32, include_inactive: bool, indexed: bool) -> Result<LayerEditor> {
         editable(model, layer, page)?;
         let source: Vec<Entity> = if indexed {
-            model.layer_items(layer, page).as_ref().clone()
+            model.layer_items(&LayerId::from(layer), PageNumber(page)).as_ref().clone()
         } else {
             let mut scoped = Vec::new();
             for o in model.strokes.values().chain(model.objects.values()) {
@@ -70,7 +88,7 @@ impl LayerEditor {
                 items.insert(format!("{}:{}", item.kind, item.id), item);
             }
         }
-        Ok(LayerEditor { items, layer: layer.to_string(), page })
+        Ok(LayerEditor { items, layer: LayerId::from(layer), page: PageNumber(page) })
     }
 
     /// `items()`.
@@ -79,7 +97,7 @@ impl LayerEditor {
     }
 
     /// `resolve(kind, id)`.
-    pub fn resolve(&self, kind: &str, id: &str) -> Result<&DrawItem> {
+    pub fn resolve(&self, kind: &EntityKind, id: &EntityId) -> Result<&DrawItem> {
         let item = self.items.get(&format!("{}:{}", kind, id));
         require_with(item.is_some(), || format!("Item is outside the editable layer/page: {}", id))?;
         Ok(item.unwrap())
@@ -89,13 +107,14 @@ impl LayerEditor {
     pub fn resolve_refs<'a>(&self, refs: &'a [Value]) -> Result<&'a [Value]> {
         for raw in refs {
             let r = json::map(raw)?;
-            self.resolve(json::string(r, "kind")?, json::string(r, "id")?)?;
+            self.resolve(&EntityKind::from(json::string(r, "kind")?), &EntityId::from(json::string(r, "id")?))?;
         }
         Ok(refs)
     }
 
     /// `LayerEditor.requireReferences(model, layer, page, refs)`.
-    pub fn require_references(model: &Model, layer: &str, page: i32, refs: &[Value]) -> Result<()> {
+    pub fn require_references(model: &Model, layer: &LayerId, page: PageNumber, refs: &[Value]) -> Result<()> {
+        let (layer, page) = (&**layer, page.0);
         editable(model, layer, page)?;
         for raw in refs {
             let r = json::map(raw)?;
@@ -117,7 +136,8 @@ impl LayerEditor {
     }
 
     /// `select(region, topmost, factory)`: topmost first; `None` region selects any painted item.
-    pub fn select(&self, region: Option<&[[f64; 2]]>, topmost: bool, factory: &dyn CoverageFactory) -> Result<Vec<Value>> {
+    pub fn select(&self, region: Option<&Polygon>, hits: HitMode, factory: &dyn CoverageFactory) -> Result<Vec<Value>> {
+        let topmost = hits == HitMode::Topmost;
         let mut out = Vec::new();
         for item in self.items.values().rev() {
             let hit = match region {
@@ -136,8 +156,9 @@ impl LayerEditor {
 
     /// Static `LayerEditor.select(model, layer, page, region, topmost, factory)`:
     /// tests topmost items first without preparing unreachable `DrawItem`s.
-    pub fn select_in(model: &Model, layer: &str, page: i32, region: Option<&[[f64; 2]]>, topmost: bool, factory: &dyn CoverageFactory) -> Result<Vec<Value>> {
-        editable(model, layer, page)?;
+    pub fn select_in(model: &Model, layer: &LayerId, page: PageNumber, region: Option<&Polygon>, hits: HitMode, factory: &dyn CoverageFactory) -> Result<Vec<Value>> {
+        let topmost = hits == HitMode::Topmost;
+        editable(model, layer.as_ref(), page.0)?;
         let ordered = model.layer_items(layer, page);
         let mut out = Vec::new();
         for source in ordered.iter().rev() {

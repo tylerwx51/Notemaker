@@ -2,7 +2,7 @@
 //! no source document is mutated.
 
 use notemaker_cli::item_coverage;
-use notemaker_cli::probe;
+use notemaker_cli::probe::{self, ProbePhase};
 use notemaker_core::{json, object, Map, Result, Value};
 
 fn stroke(i: i64, count: i64) -> Map {
@@ -20,7 +20,7 @@ fn stroke(i: i64, count: i64) -> Map {
 fn run() -> Result<()> {
     item_coverage::create(&stroke(-1, 20))?;
     item_coverage::cache_clear();
-    probe::memory("cache_empty")?;
+    probe::memory(&ProbePhase::from("cache_empty"))?;
     let start = std::time::Instant::now();
     let mut from = 0;
     for count in [100i64, 1000, 10000] {
@@ -28,9 +28,9 @@ fn run() -> Result<()> {
             item_coverage::create(&stroke(i, 20))?;
         }
         probe::print(Value::Object(
-            object! {"items" => count, "points_per_item" => 20, "cache_entries" => item_coverage::cache_len(), "build_ms" => json::double(probe::ms_since(start))},
+            object! {"items" => count, "points_per_item" => 20, "cache_entries" => item_coverage::cache_len().0, "build_ms" => json::double(probe::ms_since(start).0)},
         ));
-        probe::memory(&format!("cache_{}", count))?;
+        probe::memory(&ProbePhase::from(format!("cache_{}", count)))?;
         from = count;
     }
     Ok(())

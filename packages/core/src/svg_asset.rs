@@ -9,6 +9,7 @@
 //! characters as decimal character references).
 
 use crate::error::{Error, Result};
+use crate::geometry::{DocPoint, Radius};
 use crate::jfmt;
 use indexmap::IndexMap;
 use std::sync::{Arc, Mutex};
@@ -48,10 +49,17 @@ pub struct DotGrid {
 }
 
 impl DotGrid {
-    /// `circles()`: x, y, radius triples (a copy, like Java's `clone()`).
-    pub fn circles(&self) -> Vec<f64> {
-        self.circles.clone()
+    /// `circles()`: each dot's centre and radius.
+    pub fn circles(&self) -> impl Iterator<Item = DotCircle> + '_ {
+        self.circles.chunks_exact(3).map(|c| DotCircle { center: DocPoint { x: c[0], y: c[1] }, radius: Radius(c[2]) })
     }
+}
+
+/// One dot of a [`DotGrid`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DotCircle {
+    pub center: DocPoint,
+    pub radius: Radius,
 }
 
 struct Asset {
@@ -1070,8 +1078,8 @@ fn validate_locked(cache: &mut IndexMap<String, Arc<Asset>>, source: &str) -> Re
 
 /// `SvgAsset.validate(source)`: intrinsic viewBox dimensions. No external
 /// resources or XML entities.
-pub fn validate(source: &str) -> Result<[f64; 2]> {
-    with_cache(|cache| validate_locked(cache, source))
+pub fn validate(source: &str) -> Result<crate::geometry::Size> {
+    with_cache(|cache| validate_locked(cache, source)).map(|s| crate::geometry::Size { width: s[0], height: s[1] })
 }
 
 /// `SvgAsset.viewport(source)`: the normalized SVG with a 100% viewport wrapper.
@@ -1108,7 +1116,7 @@ mod tests {
             viewport(s).unwrap(),
             "<svg xmlns=\"http://www.w3.org/2000/svg\" height=\"100%\" id=\"a\" viewBox=\"0 0 10.0 20.0\" width=\"100%\"><g class=\"x\" fill=\"red\">t &amp; &lt; &gt; \" ' \u{e9}<!-- c --><rect x=\"1\" y=\"2\"/></g></svg>"
         );
-        assert_eq!(validate(s).unwrap(), [10.0, 20.0]);
+        assert_eq!(validate(s).unwrap(), crate::geometry::Size { width: 10.0, height: 20.0 });
     }
 
     #[test]
@@ -1123,9 +1131,9 @@ mod tests {
     #[test]
     fn dot_grid_fast_path() {
         let s = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100.0 50.0\" width=\"100.0\" height=\"50.0\"><g stroke=\"#777777\" stroke-opacity=\"1.0\" stroke-width=\"1.0\"><circle cx=\"10.0\" cy=\"10.0\" r=\"2.0\" fill=\"#777777\"/></g></svg>";
-        assert_eq!(validate(s).unwrap(), [100.0, 50.0]);
+        assert_eq!(validate(s).unwrap(), crate::geometry::Size { width: 100.0, height: 50.0 });
         let grid = dot_grid(s).unwrap().unwrap();
-        assert_eq!(grid.circles(), vec![10.0, 10.0, 2.0]);
+        assert_eq!(grid.circles().collect::<Vec<_>>(), vec![DotCircle { center: DocPoint { x: 10.0, y: 10.0 }, radius: Radius(2.0) }]);
         assert_eq!(grid.color, 0xff777777u32 as i32);
         assert!(viewport(s).unwrap().starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100.0 50.0\" width=\"100%\" height=\"100%\"><g stroke="));
     }

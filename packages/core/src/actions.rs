@@ -1,7 +1,7 @@
 //! Port of `Actions.java`: shared action builders.
 
 use crate::error::{require, Error, Result};
-use crate::ids;
+use crate::ids::{self, LayerId};
 use crate::json::{self, Map, Value};
 use crate::model::Model;
 use crate::object;
@@ -11,27 +11,23 @@ use std::collections::HashSet;
 /// `Actions.Build`: produces the requested operations from the current model.
 pub type Build<'a> = dyn FnMut(&mut Model) -> Result<Vec<Value>> + 'a;
 
-/// `Actions.id()`.
-pub fn id() -> String {
-    ids::random_uuid()
-}
-
 /// `Actions.drawing(input, layer)`: object operation with defaults, validated.
-pub fn drawing(input: &Map, layer: &str) -> Result<Map> {
+pub fn drawing(input: &Map, layer: &LayerId) -> Result<Map> {
+    let layer: &str = layer;
     let mut input = input.clone();
     if input.get("shape").and_then(Value::as_str) == Some("svg") {
         let size = svg_asset::validate(json::string(&input, "svg")?)?;
-        json::put_if_absent(&mut input, "w", json::double(size[0]));
-        json::put_if_absent(&mut input, "h", json::double(size[1]));
+        json::put_if_absent(&mut input, "w", json::double(size.width));
+        json::put_if_absent(&mut input, "h", json::double(size.height));
     }
     if input.get("shape").and_then(Value::as_str) == Some("image") {
         let size = image_asset::validate(Some(json::string(&input, "image")?))?;
-        json::put_if_absent(&mut input, "w", json::double(size[0]));
-        json::put_if_absent(&mut input, "h", json::double(size[1]));
+        json::put_if_absent(&mut input, "w", json::double(size.width));
+        json::put_if_absent(&mut input, "h", json::double(size.height));
     }
     let mut o = input;
     o.insert("kind".into(), "object".into());
-    json::put_if_absent(&mut o, "object", Value::String(id()));
+    json::put_if_absent(&mut o, "object", Value::String(String::from(ids::Uuid::random())));
     json::put_if_absent(&mut o, "layer", Value::String(layer.to_string()));
     json::put_if_absent(&mut o, "page", Value::from(0));
     json::put_if_absent(&mut o, "color", Value::from(-16777216));
@@ -48,16 +44,16 @@ pub fn drawing(input: &Map, layer: &str) -> Result<Map> {
 
 /// `Actions.diagram(model, input)`: a new layer plus its nodes and connectors.
 pub fn diagram(model: &Model, input: &Map) -> Result<Vec<Value>> {
-    let generated = id();
+    let generated = String::from(ids::Uuid::random());
     let layer = json::string_or(input, "layer", &generated)?.ok_or_else(Error::null_pointer)?.to_string();
     require(!model.layers.contains_key(&layer), "Diagram layer already exists")?;
-    let name = json::get_or_default_owned(input, "name", Value::from("Diagram"));
+    let name = get_or_default_owned(input, "name", Value::from("Diagram"));
     let mut result: Vec<Map> = vec![object! {"kind" => "layer", "layer" => layer.clone(), "name" => name, "force" => false}];
     let mut ids: HashSet<String> = model.objects.keys().cloned().collect();
     let objects = json::list_at(input, "objects")?;
     require(!objects.is_empty(), "Diagram needs objects")?;
     for v in objects {
-        let mut o = drawing(json::map(v)?, &layer)?;
+        let mut o = drawing(json::map(v)?, &LayerId::from(&layer))?;
         o.insert("layer".into(), Value::String(layer.clone()));
         require(ids.insert(json::string(&o, "object")?.to_string()), "Duplicate object ID")?;
         result.push(o);
@@ -140,4 +136,12 @@ pub fn inverse(model: &Model, op: &Map) -> Result<Value> {
     };
     let value = active.get(&id) != Some(&false);
     Ok(Value::Object(object! {"kind" => k, key => id, "active" => value}))
+}
+
+/// Owned `Map.getOrDefault(key, default)`.
+fn get_or_default_owned(m: &Map, key: &str, default: Value) -> Value {
+    match m.get(key) {
+        Some(v) => v.clone(),
+        None => default,
+    }
 }

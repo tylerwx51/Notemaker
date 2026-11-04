@@ -25,7 +25,11 @@ dylint_linting::impl_late_lint! {
     /// `pub(crate)`, `pub(super)`, `pub(in ..)`) that are primitives, arrays,
     /// slices, tuples, or types defined outside the current crate.
     ///
-    /// `Option<T>` and `Result<T, E>` are allowed when `T` and `E` pass.
+    /// `Option<T>` and `Result<T, E>` are allowed when `T` and `E` pass, as
+    /// are std ownership and concurrency wrappers (`Box`, `Arc`, `Rc`,
+    /// `Weak`, `Mutex`, `RwLock`, `Cell`, `RefCell`, `OnceLock`, `Pin`,
+    /// channels, join handles, ...). Atomics are allowed. `bool` is allowed
+    /// in return types, so predicates need no wrapper.
     /// References, raw pointers, function pointers and generic arguments of
     /// local types are checked through to their inner types. Generic
     /// parameters, `impl Trait`, `dyn Trait`, `()` and `!` are allowed.
@@ -100,16 +104,16 @@ impl RawTypeInSignature {
         }
         let sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
         for (hir_ty, ty) in decl.inputs.iter().zip(sig.inputs()) {
-            self.report(cx, hir_ty.span, *ty);
+            self.report(cx, hir_ty.span, *ty, Position::Parameter);
         }
         if let FnRetTy::Return(hir_ty) = decl.output {
-            self.report(cx, hir_ty.span, sig.output());
+            self.report(cx, hir_ty.span, sig.output(), Position::Return);
         }
     }
 
-    fn report<'tcx>(&self, cx: &LateContext<'tcx>, span: Span, ty: Ty<'tcx>) {
+    fn report<'tcx>(&self, cx: &LateContext<'tcx>, span: Span, ty: Ty<'tcx>, position: Position) {
         let mut found = Vec::new();
-        self.collect(cx.tcx, ty, &mut found);
+        self.collect(cx.tcx, ty, position, &mut found);
         found.dedup();
         for raw in found {
             cx.opt_span_lint(
@@ -126,29 +130,45 @@ impl RawTypeInSignature {
     }
 
     /// Pushes every disallowed type reachable from `ty` onto `found`.
-    fn collect<'tcx>(&self, tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, found: &mut Vec<Ty<'tcx>>) {
+    fn collect<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        ty: Ty<'tcx>,
+        position: Position,
+        found: &mut Vec<Ty<'tcx>>,
+    ) {
         match ty.kind() {
+            ty::Bool if position == Position::Return => {}
             ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str => {
                 found.push(ty)
             }
             ty::Array(..) | ty::Slice(_) | ty::Pat(..) => found.push(ty),
             ty::Tuple(items) if !items.is_empty() => found.push(ty),
-            ty::Ref(_, inner, _) | ty::RawPtr(inner, _) => self.collect(tcx, *inner, found),
+            ty::Ref(_, inner, _) | ty::RawPtr(inner, _) => {
+                self.collect(tcx, *inner, position, found)
+            }
             ty::FnPtr(sig_tys, _) => {
-                for inner in sig_tys.skip_binder().inputs_and_output {
-                    self.collect(tcx, inner, found);
+                let sig = sig_tys.skip_binder();
+                for inner in sig.inputs() {
+                    self.collect(tcx, *inner, Position::Parameter, found);
                 }
+                self.collect(tcx, sig.output(), Position::Return, found);
             }
             ty::Adt(def, args) => {
                 let did = def.did();
+                if is_std_leaf_allowed(tcx, did) {
+                    return;
+                }
                 let transparent = tcx.is_diagnostic_item(sym::Option, did)
-                    || tcx.is_diagnostic_item(sym::Result, did);
+                    || tcx.is_diagnostic_item(sym::Result, did)
+                    || def.is_box()
+                    || is_std_wrapper(tcx, did);
                 if !transparent && !self.is_local_crate(tcx, did.krate) {
                     found.push(ty);
                     return;
                 }
                 for inner in args.types() {
-                    self.collect(tcx, inner, found);
+                    self.collect(tcx, inner, position, found);
                 }
             }
             // Foreign `extern type`s.
@@ -167,6 +187,55 @@ impl RawTypeInSignature {
                 .iter()
                 .any(|name| tcx.crate_name(krate).as_str() == name)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Position {
+    Parameter,
+    Return,
+}
+
+/// Ownership and concurrency wrappers from std whose contents are checked
+/// instead of the wrapper itself.
+const STD_WRAPPERS: &[&str] = &[
+    "Arc",
+    "Rc",
+    "Weak",
+    "Mutex",
+    "MutexGuard",
+    "RwLock",
+    "RwLockReadGuard",
+    "RwLockWriteGuard",
+    "Cell",
+    "RefCell",
+    "Ref",
+    "RefMut",
+    "OnceCell",
+    "OnceLock",
+    "LazyCell",
+    "LazyLock",
+    "Pin",
+    "Sender",
+    "SyncSender",
+    "Receiver",
+    "JoinHandle",
+    "ScopedJoinHandle",
+    "Condvar",
+    "Barrier",
+];
+
+fn is_std_crate(tcx: TyCtxt<'_>, did: rustc_hir::def_id::DefId) -> bool {
+    matches!(tcx.crate_name(did.krate).as_str(), "std" | "core" | "alloc")
+}
+
+fn is_std_wrapper(tcx: TyCtxt<'_>, did: rustc_hir::def_id::DefId) -> bool {
+    is_std_crate(tcx, did) && STD_WRAPPERS.contains(&tcx.item_name(did).as_str())
+}
+
+/// Atomics, and `Global`, the default allocator argument of `Box`/`Arc`/`Rc`.
+fn is_std_leaf_allowed(tcx: TyCtxt<'_>, did: rustc_hir::def_id::DefId) -> bool {
+    let name = tcx.item_name(did);
+    is_std_crate(tcx, did) && (name.as_str().starts_with("Atomic") || name.as_str() == "Global")
 }
 
 /// Private means no visibility written, or `pub(self)`. This is syntactic on

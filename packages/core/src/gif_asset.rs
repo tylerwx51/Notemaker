@@ -36,10 +36,18 @@ impl Info {
         Info { width: w, height: h, delays, offsets, duration: total }
     }
     /// `timeForFrame(frame)`.
-    pub fn time_for_frame(&self, frame: usize) -> i32 {
-        self.offsets[frame]
+    pub fn time_for_frame(&self, frame: FrameIndex) -> FrameTime {
+        FrameTime(self.offsets[frame.0])
     }
 }
+
+/// A frame's position in an animation, `0` for the first frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FrameIndex(pub usize);
+
+/// Milliseconds from the start of an animation (`Movie.setTime`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FrameTime(pub i32);
 
 /// `GifAsset.validate(String uri)`. `None` mirrors a Java null.
 pub fn validate(uri: Option<&str>) -> Result<Info> {

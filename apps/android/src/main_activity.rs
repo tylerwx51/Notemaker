@@ -33,6 +33,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::agent_ui::AgentUi;
+use crate::components::ComponentEvent;
 use crate::android_canvas::{self, AndroidCanvas, RectFExt};
 use crate::android_consts::*;
 use crate::animation_player::AnimationPlayer;
@@ -42,6 +43,7 @@ use crate::editor_ui::EditorUi;
 use crate::error::{self, AppError, AppResult};
 use crate::field::Field;
 use crate::jx::{self, JResult, JThread, JavaError, Local, Obj, Reply, WeakObj};
+use crate::java_port::uri;
 use crate::monitor::Monitor;
 use crate::org_json::{self, JSONArray, JSONObject, JV};
 use crate::replica_service;
@@ -55,6 +57,7 @@ use notemaker_cli::png::{self, Png};
 use notemaker_core::draw_item::DrawItem;
 use notemaker_core::layer_editor::LayerEditor;
 use notemaker_core::model::{Entity, Model};
+use notemaker_core::collaboration::SelectionTransform;
 use notemaker_core::store::{self, State, Store};
 use notemaker_core::{actions, drawing_actions, geometry, gif_asset, ids, image_asset, jfmt, jmath, json, object, render, svg_asset, timing};
 use notemaker_core::json::{Map, Value};
@@ -223,7 +226,7 @@ fn owned(args: &[&str]) -> Vec<String> {
 /// `map.put(key, value)` on an `eraseTimings` trace.
 fn trace_put(trace: &Option<Arc<Field<IndexMap<String, i64>>>>, key: &str) {
     if let Some(t) = trace {
-        let now = jx::nano_time();
+        let now = jx::nano_time().0;
         t.with_mut(|m| {
             m.insert(key.to_string(), now);
         });
@@ -244,13 +247,96 @@ fn style(s: Style) -> AppResult<Obj> {
     Ok(android_canvas::style_obj(s)?)
 }
 
+// ---------------------------------------------------------------------------
+// Canvas coordinate spaces and editor values
+
+/// A point in canvas-view pixels: `MotionEvent.getX/getY` of a touch on the
+/// `CanvasView`, before [`CanvasView::to_document`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ScreenPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A rectangle in canvas-view pixels (`View.invalidate(l, t, r, b)`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScreenRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// The stylus pressure of one touch sample (`MotionEvent.getPressure`);
+/// recorded ink clamps it to `0..=1`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StylusPressure(pub f32);
+
+/// A document-space point at the canvas view's Java `float` precision
+/// (touch positions after [`CanvasView::to_document`], gesture anchors).
+/// Converts losslessly into core's `f64` [`geometry::DocPoint`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DocPointF {
+    pub x: f32,
+    pub y: f32,
+}
+impl From<DocPointF> for geometry::DocPoint {
+    fn from(p: DocPointF) -> geometry::DocPoint {
+        geometry::DocPoint { x: p.x as f64, y: p.y as f64 }
+    }
+}
+
+/// Canvas-view pixels per document unit: [`CanvasView::scale`] fits the
+/// 1000×1400 page to the view; multiplied by `zoom` it is the effective
+/// scale ([`crate::tile_ink_cache::TileInkCache::density_tier`]).
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct ViewScale(pub f32);
+
+notemaker_core::string_newtype! {
+    /// A document's layout as stored in its `document` action:
+    /// `"fixed"`, `"pages"` or `"infinite"` (kept as the original string so
+    /// an unknown type fails where the shared model rejects it).
+    pub struct DocumentType;
+}
+
+notemaker_core::string_newtype! {
+    /// A page template kind: `ruled`, `grid`, `dots`, `planner` or `blank`.
+    pub struct TemplateKind;
+}
+
+notemaker_core::string_newtype! {
+    /// An `erase` action mode: `stroke`, `partial`, `area` or `page`.
+    pub struct EraserMode;
+}
+
+/// A `layer <command> <id> [argument]` CLI edit of one layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LayerCommand {
+    /// `layer hide <id>` (archive the layer).
+    Hide,
+    /// `layer duplicate <id>`.
+    Duplicate,
+    /// `layer reorder <id> <position>`.
+    Reorder(ids::LayerPosition),
+    /// `layer merge <id> <target>`.
+    Merge(ids::LayerId),
+}
+
+/// Whether [`MainActivity::transform_selection`] only previews the
+/// transform or also commits it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransformCommit {
+    Preview,
+    Commit,
+}
+
 /// `private static final class PendingObjectHistory { int index; }`.
 /// Compared by identity (`Arc::ptr_eq`) like the Java `ArrayList.remove(Object)`.
 pub struct PendingObjectHistory {
     pub index: Field<i32>,
 }
 impl PendingObjectHistory {
-    pub fn new(index: i32) -> Arc<PendingObjectHistory> {
+    fn new(index: i32) -> Arc<PendingObjectHistory> {
         Arc::new(PendingObjectHistory { index: Field::new(index) })
     }
 }
@@ -267,12 +353,12 @@ pub struct ErasePreview {
 impl ErasePreview {
     /// `ErasePreview(Model model, String layer, int page, Map input)`; Java
     /// threw `IllegalArgumentException` for invalid input.
-    pub fn new(model: &Model, layer: &str, page: i32, input: &Map) -> AppResult<ErasePreview> {
+    fn new(model: &Model, layer: &str, page: i32, input: &Map) -> AppResult<ErasePreview> {
         let mut paths = Vec::new();
         let mut hidden = HashSet::new();
         if same_str(input, "mode", "partial") {
-            for region in drawing_actions::erase_regions(input)? {
-                paths.push(android_canvas::path_to_java(&item_coverage::path(&region, true))?);
+            for region in drawing_actions::erase_regions(input)?.iter() {
+                paths.push(android_canvas::path_to_java(&item_coverage::path(region, notemaker_core::style::PathEnd::Closed))?);
             }
         } else {
             for raw in drawing_actions::erase(model, input, &item_coverage::FACTORY)? {
@@ -427,9 +513,10 @@ pub struct MainActivity {
 }
 
 /// Routes the shim's lifecycle events (`Native.component`).
-pub fn component_event(component: &Local, event: &str, args: &[Local]) -> JResult<Reply> {
+pub fn component_event(event: &ComponentEvent) -> JResult<Reply> {
+    let ComponentEvent { component, name, args } = *event;
     let arg = |i: usize| args.get(i).and_then(jx::global);
-    match event {
+    match &**name {
         "onCreate" => {
             let this = jx::global(component).expect("activity");
             let app = MainActivity::new(this)?;
@@ -570,8 +657,8 @@ impl MainActivity {
     /// The Rust instance behind a Java `com.notemaker.MainActivity`
     /// (reads the shim's `handle`). Panics if the activity was not created
     /// or is already destroyed (Java code never used a destroyed activity).
-    pub fn from_java(activity: &jni::objects::JObject) -> Arc<MainActivity> {
-        let raw = jget!(activity, "com/notemaker/MainActivity", "handle", "J").map(|r| r.long()).unwrap_or(0);
+    pub fn from_java(activity: &impl jx::AsRaw) -> Arc<MainActivity> {
+        let raw = jget!(*activity, "com/notemaker/MainActivity", "handle", "J").map(|r| r.long()).unwrap_or(0);
         assert!(raw != 0, "MainActivity handle is not set");
         let ptr = raw as *const MainActivity;
         unsafe {
@@ -586,7 +673,7 @@ impl MainActivity {
         let app = self.clone();
         let r = jx::try_once_runnable(move || f(&app).map_err(Into::into));
         if let Err(e) = jcall!(self.this, "android/app/Activity", "runOnUiThread", "(Ljava/lang/Runnable;)V", &r) {
-            jx::log::e_err("NoteMaker", "runOnUiThread failed", &e);
+            jx::log::e_err(crate::jx::log::NOTEMAKER, "runOnUiThread failed", &e);
         }
     }
     /// `this.getFilesDir()`.
@@ -621,8 +708,8 @@ impl MainActivity {
         self.replica.with(|r| r.as_ref().is_some_and(|r| Arc::ptr_eq(r, target)))
     }
     /// `Toast.makeText(this, text, duration).show()`.
-    fn toast(&self, text: &str, duration: i32) -> AppResult<()> {
-        Ok(ui::toast(&self.this, text, duration)?)
+    fn toast(&self, text: &str, duration: crate::android_consts::ToastDuration) -> AppResult<()> {
+        Ok(ui::toast(&self.this, &ui::UiText::from(text), duration)?)
     }
     fn saving_add(&self, delta: i32) {
         self.saving.with_mut(|s| *s += delta);
@@ -710,7 +797,7 @@ impl MainActivity {
     /// `new CheckBox(this); setText(label); setChecked(checked)`.
     fn check_box(&self, label: &str, checked: bool) -> AppResult<Obj> {
         let b = jnew!("android/widget/CheckBox", "(Landroid/content/Context;)V", &self.this)?;
-        ui::set_text(&b, label)?;
+        ui::set_text(&b, &ui::UiText::from(label))?;
         jcall!(b, "android/widget/CompoundButton", "setChecked", "(Z)V", checked)?;
         Ok(b)
     }
@@ -728,7 +815,7 @@ impl MainActivity {
     /// `getSharedPreferences("settings",0).edit().putString(key, value).apply()`.
     fn put_pref(&self, key: &str, value: &str) -> AppResult<()> {
         let e = ui::edit(&self.this)?;
-        ui::put_string(&e, key, value)?;
+        ui::put_string(&e, &ui::PrefKey::from(key), &ui::PrefText::from(value))?;
         ui::apply(&e)?;
         Ok(())
     }
@@ -748,13 +835,13 @@ impl MainActivity {
         o
     }
     /// `static String id()`: `UUID.randomUUID().toString()`.
-    pub fn id() -> String {
-        ids::random_uuid()
+    pub fn id() -> ids::Uuid {
+        ids::Uuid::random()
     }
     /// `private static void startupMark(boolean enabled, String phase, long started)`.
-    pub fn startup_mark(enabled: bool, phase: &str, started: i64) {
+    fn startup_mark(enabled: bool, phase: &str, started: i64) {
         if enabled {
-            jx::log::i("NoteMakerStartup", &format!("{}={}", phase, jfmt::double((jx::nano_time() - started) as f64 / 1e6)));
+            jx::log::i(crate::jx::log::STARTUP, &format!("{}={}", phase, jfmt::double((jx::nano_time().0 - started) as f64 / 1e6)));
         }
     }
     /// `static String normalizeServerAddress(String value) throws Exception`
@@ -843,27 +930,27 @@ impl MainActivity {
 
     /// `public void onCreate(Bundle b)` (after `super.onCreate(b)` in the shim).
     pub fn on_create(self: &Arc<Self>, _b: Option<Obj>) -> AppResult<()> {
-        let startup_started = jx::nano_time();
-        self.app_session_id.set(ids::random_uuid());
-        self.app_session_started_at.set(jx::current_time_millis());
+        let startup_started = jx::nano_time().0;
+        self.app_session_id.set(String::from(ids::Uuid::random()));
+        self.app_session_started_at.set(jx::current_time_millis().0);
         let package = jcall!(self.this, "android/content/Context", "getPackageName", "()Ljava/lang/String;")?.string().unwrap_or_default();
         let startup_trace = package == "com.notemaker.latency";
         self.trace_cold_load.set(startup_trace);
         self.startup_epoch.set(startup_started);
         self.trace_cold_draw.set(startup_trace);
         Self::startup_mark(startup_trace, "super_done", startup_started);
-        let device_id = ui::pref_string(&self.this, "uiDeviceId", Some(""))?.unwrap_or_default();
+        let device_id = ui::pref_string(&self.this, &ui::PrefKey::from("uiDeviceId"), Some(&ui::PrefText::from("")))?.map(String::from).unwrap_or_default();
         self.device_id.set(device_id.clone());
         if device_id.is_empty() {
-            let id = ids::random_uuid();
+            let id = String::from(ids::Uuid::random());
             self.device_id.set(id.clone());
             self.put_pref("uiDeviceId", &id)?;
         }
-        self.scribble_to_erase.set(ui::pref_bool(&self.this, "scribbleToErase", false)?);
-        self.freeform_lasso.set(ui::pref_bool(&self.this, "freeformLasso", false)?);
-        self.material.set(0.max(100.min(ui::pref_int(&self.this, "penMaterial", 50)?)));
+        self.scribble_to_erase.set(ui::pref_bool(&self.this, &ui::PrefKey::from("scribbleToErase"), ui::PrefSwitch::from(false))?);
+        self.freeform_lasso.set(ui::pref_bool(&self.this, &ui::PrefKey::from("freeformLasso"), ui::PrefSwitch::from(false))?);
+        self.material.set(0.max(100.min(ui::pref_int(&self.this, &ui::PrefKey::from("penMaterial"), ui::PrefNumber(50))?.0)));
         let clipboard = (|| -> AppResult<Option<Map>> {
-            let saved = ui::pref_string(&self.this, "selectionClipboard", Some(""))?.unwrap_or_default();
+            let saved = ui::pref_string(&self.this, &ui::PrefKey::from("selectionClipboard"), Some(&ui::PrefText::from("")))?.map(String::from).unwrap_or_default();
             if saved.is_empty() {
                 return Ok(None);
             }
@@ -872,17 +959,17 @@ impl MainActivity {
         if let Ok(Some(clipboard)) = clipboard {
             self.selection_clipboard.set(clipboard);
         }
-        let saved_host = ui::pref_string(&self.this, "host", Some(&self.host.get()))?;
+        let saved_host = ui::pref_string(&self.this, &ui::PrefKey::from("host"), Some(&ui::PrefText::from(&self.host.get())))?.map(String::from);
         let host = match saved_host {
             Some(h) => Self::normalize_server_address(&h).unwrap_or_default(),
             None => String::new(),
         };
         self.host.set(host);
-        self.document.set(ui::pref_string(&self.this, "document", Some(&self.document.get()))?.unwrap_or_else(|| "null".into()));
-        self.proxy_url.set(ui::pref_string(&self.this, "proxyUrl", Some(""))?.unwrap_or_default());
-        self.proxy_token.set(ui::pref_string(&self.this, "proxyToken", Some(""))?.unwrap_or_default());
+        self.document.set(ui::pref_string(&self.this, &ui::PrefKey::from("document"), Some(&ui::PrefText::from(&self.document.get())))?.map(String::from).unwrap_or_else(|| "null".into()));
+        self.proxy_url.set(ui::pref_string(&self.this, &ui::PrefKey::from("proxyUrl"), Some(&ui::PrefText::from("")))?.map(String::from).unwrap_or_default());
+        self.proxy_token.set(ui::pref_string(&self.this, &ui::PrefKey::from("proxyToken"), Some(&ui::PrefText::from("")))?.map(String::from).unwrap_or_default());
         Self::startup_mark(startup_trace, "preferences_done", startup_started);
-        self.load("fixed")?;
+        self.load(&DocumentType::from("fixed"))?;
         self.trace_cold_load.set(false);
         Self::startup_mark(startup_trace, "load_done", startup_started);
         self.agent.set(Some(AgentUi::new(self)?));
@@ -949,11 +1036,11 @@ impl MainActivity {
             let local = replica_service::ensure(&self.this)?;
             let replica = self.replica();
             local.set_ui_upstream(if replica.remote() { replica.descriptor.as_ref() } else { None });
-            local.register_ui_session(&self.app_session_id.get(), actions)?;
+            local.register_ui_session(&notemaker_cli::local_proxy::UiSessionId::from(self.app_session_id.get()), actions)?;
             Ok(())
         })();
         if let Err(error) = registered {
-            jx::log::e_err("NoteMaker", "Cannot register app session", &error);
+            jx::log::e_err(crate::jx::log::NOTEMAKER, "Cannot register app session", &error);
         }
         Self::startup_mark(startup_trace, "configure_done", startup_started);
         Ok(())
@@ -965,7 +1052,7 @@ impl MainActivity {
             player.stop()?;
         }
         if let Some(proxy) = replica_service::proxy() {
-            proxy.unregister_ui_session(&self.app_session_id.get());
+            proxy.unregister_ui_session(&notemaker_cli::local_proxy::UiSessionId::from(self.app_session_id.get()));
         }
         self.remove_task(&self.heartbeat_task)?;
         self.remove_task(&self.preview_expiry_task)?;
@@ -974,7 +1061,7 @@ impl MainActivity {
         if let Some(departing) = departing {
             if self.selection_session.with(Option::is_some) {
                 replica_service_writes().execute(move || {
-                    let _ = departing.command(&["selection", "disconnect"], None);
+                    let _ = departing.command(crate::app_replica::CliArgs(&["selection", "disconnect"]), None);
                 });
             }
         }
@@ -1019,8 +1106,8 @@ impl MainActivity {
                         if app.foreground.get() {
                             return;
                         }
-                        if let Err(e) = target.command(&["checkpoint"], None) {
-                            jx::log::w_err("NoteMaker", "Background checkpoint failed", &e);
+                        if let Err(e) = target.command(crate::app_replica::CliArgs(&["checkpoint"]), None) {
+                            jx::log::w_err(crate::jx::log::NOTEMAKER, "Background checkpoint failed", &e);
                         }
                     });
                 }
@@ -1029,7 +1116,7 @@ impl MainActivity {
         Ok(())
     }
     /// `protected void onActivityResult(int requestCode, int resultCode, Intent data)`.
-    pub fn on_activity_result(self: &Arc<Self>, request_code: i32, result_code: i32, data: Option<Obj>) -> AppResult<()> {
+    fn on_activity_result(self: &Arc<Self>, request_code: i32, result_code: i32, data: Option<Obj>) -> AppResult<()> {
         if (request_code != SVG_PICK_REQUEST && request_code != IMAGE_PICK_REQUEST && request_code != GIF_PICK_REQUEST) || result_code != ACTIVITY_RESULT_OK {
             return Ok(());
         }
@@ -1077,7 +1164,7 @@ impl MainActivity {
         if request_code == SVG_PICK_REQUEST {
             let source = String::from_utf8_lossy(&raw).into_owned();
             let size = svg_asset::validate(&source)?;
-            self.run_on_ui_thread(move |app| app.insert_svg(&source, size[0], size[1]));
+            self.run_on_ui_thread(move |app| app.insert_svg(&source, size.width, size.height));
         } else if request_code == GIF_PICK_REQUEST {
             let uri_data = gif_asset::from_bytes(&raw)?;
             let info = gif_asset::validate_bytes(Some(&raw))?;
@@ -1085,7 +1172,7 @@ impl MainActivity {
         } else {
             let uri_data = image_asset::from_bytes(&raw)?;
             let size = image_asset::validate(Some(&uri_data))?;
-            self.run_on_ui_thread(move |app| app.insert_image(&uri_data, size[0], size[1]));
+            self.run_on_ui_thread(move |app| app.insert_image(&uri_data, size.width, size.height));
         }
         Ok(())
     }
@@ -1104,7 +1191,7 @@ impl MainActivity {
         if self.ui_actions.with(Option::is_some) {
             match replica_service::ensure(&self.this) {
                 Ok(proxy) => proxy.set_ui_upstream(if target.remote() { target.descriptor.as_ref() } else { None }),
-                Err(error) => jx::log::e_err("NoteMaker", "Cannot update UI session route", &error),
+                Err(error) => jx::log::e_err(crate::jx::log::NOTEMAKER, "Cannot update UI session route", &error),
             }
         }
         if !target.remote() {
@@ -1121,7 +1208,7 @@ impl MainActivity {
                     let initial = target.read()?;
                     if json::as_int(initial.get("eventCount"))? == 0 && json::as_int(initial.get("pendingCount"))? == 0 {
                         let input = Value::Object(object! {"kind" => "document", "type" => target_type.clone()});
-                        target.command(&["append", "-"], Some(&input))?;
+                        target.command(crate::app_replica::CliArgs(&["append", "-"]), Some(&input))?;
                     }
                     app.refresh_from(&target)
                 })();
@@ -1137,13 +1224,13 @@ impl MainActivity {
             t.interrupt();
         }
         let app = self.clone();
-        let thread = JThread::spawn("local-state", move || app.local_loop(target));
+        let thread = JThread::spawn(&crate::jx::ThreadName::from("local-state"), move || app.local_loop(target));
         self.local_thread.set(Some(thread));
         Ok(())
     }
     /// `void persist(List<String> args, Object input, String optimisticId)`:
     /// queues `replica.command(args, input)` on `ReplicaService.writes`.
-    pub fn persist(self: &Arc<Self>, args: &[&str], input: Option<Value>, optimistic_id: Option<String>) {
+    fn persist(self: &Arc<Self>, args: &[&str], input: Option<Value>, optimistic_id: Option<String>) {
         let target = self.replica();
         let local_settings = !target.remote() && args.len() == 2 && args[0] == "settings" && optimistic_id.is_none();
         if !local_settings {
@@ -1152,7 +1239,7 @@ impl MainActivity {
         let args = owned(args);
         let app = self.clone();
         replica_service_writes().execute(move || {
-            let result = target.command(&argv(&args), input.as_ref()).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&argv(&args)), input.as_ref()).and_then(|_| target.read());
             match result {
                 Ok(snapshot) => app.run_on_ui_thread(move |app| {
                     if !local_settings {
@@ -1201,7 +1288,7 @@ impl MainActivity {
                     Ok(())
                 }),
                 Err(e) => {
-                    jx::log::e_err("NoteMaker", "Local save failed", &e);
+                    jx::log::e_err(crate::jx::log::NOTEMAKER, "Local save failed", &e);
                     app.run_on_ui_thread(move |app| {
                         if !local_settings {
                             app.saving_add(-1);
@@ -1215,7 +1302,8 @@ impl MainActivity {
         });
     }
     /// `void setDrawingTool(String shape)`.
-    pub fn set_drawing_tool(self: &Arc<Self>, shape: Option<&str>) -> AppResult<()> {
+    pub fn set_drawing_tool(self: &Arc<Self>, shape: Option<&ids::ShapeId>) -> AppResult<()> {
+        let shape: Option<&str> = shape.map(|s| &**s);
         if shape.is_some() && (self.selecting.get() || self.selection_session.with(Option::is_some) || self.selected_entities.with(|s| !s.is_empty())) {
             self.deselect()?;
         }
@@ -1239,8 +1327,12 @@ impl MainActivity {
         }
     }
     /// `void placeText(String text, float fontSize, float x, float y)`.
-    pub fn place_text(self: &Arc<Self>, text: Option<&str>, font_size: f32, mut x: f32, mut y: f32) -> AppResult<()> {
+    pub fn place_text(self: &Arc<Self>, text: Option<&notemaker_core::style::TextContent>, font_size: notemaker_core::style::FontSize, at: DocPointF) -> AppResult<()> {
         let Some(text) = text else { return Ok(()) };
+        let text: &str = text;
+        // Callers pass the editor's `float` text size, so this is exact.
+        let font_size = font_size.0 as f32;
+        let DocPointF { mut x, mut y } = at;
         if jfmt::java_trim(text).is_empty() || !font_size.is_finite() || font_size < 1.0 || font_size > 500.0 || !x.is_finite() || !y.is_finite() {
             return Ok(());
         }
@@ -1269,10 +1361,10 @@ impl MainActivity {
         self.persist_object(&object)
     }
     /// `private JSONObject objectValue(String shape, float x, float y, float w, float h, int outline, float outlineWidth, int fill)`.
-    pub fn object_value(&self, shape: &str, x: f32, y: f32, w: f32, h: f32, outline: i32, outline_width: f32, fill: i32) -> JSONObject {
+    fn object_value(&self, shape: &str, x: f32, y: f32, w: f32, h: f32, outline: i32, outline_width: f32, fill: i32) -> JSONObject {
         let object = Self::obj(&[
             ("kind", JV::from("object")),
-            ("object", JV::from(Self::id())),
+            ("object", JV::from(String::from(Self::id()))),
             ("shape", JV::from(shape)),
             ("layer", JV::from(self.selected.get())),
             ("page", JV::Int(self.page.get())),
@@ -1293,7 +1385,7 @@ impl MainActivity {
         object
     }
     /// `private boolean samePaintedObject(Model before, Map preview, String id)`.
-    pub fn same_painted_object(&self, before: &Model, preview: Option<&Map>, id: &str) -> bool {
+    fn same_painted_object(&self, before: &Model, preview: Option<&Map>, id: &str) -> bool {
         let model = self.model();
         let Some(preview) = preview else { return false };
         if before.objects.contains_key(id)
@@ -1318,7 +1410,7 @@ impl MainActivity {
         if before.object_active != new_active {
             return false;
         }
-        let Ok(expected) = actions::drawing(preview, "base") else { return false };
+        let Ok(expected) = actions::drawing(preview, &ids::LayerId::from("base")) else { return false };
         let mut visible: Map = (*committed).clone();
         for key in ["id", "actor", "seq", "at", "action", "session", "bases", "visibility"] {
             visible.shift_remove(key);
@@ -1348,7 +1440,7 @@ impl MainActivity {
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<Option<State>> {
                 let input = Value::Object(preview);
-                Ok(target.command_snapshot(&["object", "put", "snapshot", "-"], Some(&input))?.1)
+                Ok(target.command_snapshot(crate::app_replica::CliArgs(&["object", "put", "snapshot", "-"]), Some(&input))?.snapshot)
             })();
             match result {
                 Ok(snapshot) => {
@@ -1392,7 +1484,7 @@ impl MainActivity {
                     });
                 }
                 Err(e) => {
-                    jx::log::e_err("NoteMaker", "Object save failed", &e);
+                    jx::log::e_err(crate::jx::log::NOTEMAKER, "Object save failed", &e);
                     app.run_on_ui_thread(move |app| {
                         app.saving_add(-1);
                         if !app.is_current(&target) {
@@ -1424,7 +1516,7 @@ impl MainActivity {
     /// survives task failures, so it is logged.
     fn refresh_from_worker(self: &Arc<Self>, target: &Arc<AppReplica>) {
         if let Err(e) = self.refresh_from(target) {
-            jx::log::e_err("NoteMaker", "Uncaught failure in executor task", &e);
+            jx::log::e_err(crate::jx::log::NOTEMAKER, "Uncaught failure in executor task", &e);
         }
     }
     /// `boolean objectHistoryPending()` (`synchronized(lock)`).
@@ -1433,7 +1525,7 @@ impl MainActivity {
         self.pending_object_history.with(|l| !l.is_empty())
     }
     /// `Map<String,Object> editorPreferences()`.
-    pub fn editor_preferences(&self) -> Map {
+    fn editor_preferences(&self) -> Map {
         let hidden = json::java_hash_set_order(self.hidden.with(|h| h.iter().cloned().collect::<Vec<_>>()));
         object! {
             "hidden" => strings(&hidden),
@@ -1534,7 +1626,7 @@ impl MainActivity {
         Ok(())
     }
     /// `JSONObject entity(String prefix, Map.Entry<String,Map> entry, Map<String,JSONObject> previous)`.
-    pub fn entity(&self, prefix: &str, key: &str, value: &Entity, previous: &IndexMap<String, JSONObject>) -> JSONObject {
+    fn entity(&self, prefix: &str, key: &str, value: &Entity, previous: &IndexMap<String, JSONObject>) -> JSONObject {
         let old = self.rendered_entities.with_mut(|r| r.insert(format!("{prefix}{key}"), value.clone()));
         match previous.get(key) {
             Some(existing) if old.as_ref().is_some_and(|old| Arc::ptr_eq(old, value) || **value == **old) => existing.clone(),
@@ -1543,7 +1635,8 @@ impl MainActivity {
     }
     /// `void load(String newType)` (`synchronized(lock)`). Java threw
     /// `RuntimeException("Cannot read saved document", e)`.
-    pub fn load(self: &Arc<Self>, new_type: &str) -> AppResult<()> {
+    pub fn load(self: &Arc<Self>, new_type: &DocumentType) -> AppResult<()> {
+        let new_type: &str = new_type;
         let _sync = self.lock.enter();
         self.reset_drawing_gesture()?;
         if let Some(c) = self.canvas.get() {
@@ -1578,7 +1671,7 @@ impl MainActivity {
             if let Some(r) = self.replica.get() {
                 r.close();
             }
-            let replica = AppReplica::new(self, &document, &self.proxy_url.get(), &self.proxy_token.get())?;
+            let replica = AppReplica::new(self, &ids::DocumentName::from(&document), &self.proxy_url.get(), &self.proxy_token.get())?;
             self.replica.set(Some(replica.clone()));
             self.store.set(Some(replica.local.clone()));
             Self::startup_mark(trace, "replica_created", epoch);
@@ -1617,7 +1710,7 @@ impl MainActivity {
         self.apply_with(o, &action)
     }
     /// `void apply(JSONObject o, Map<String,Object> action)`.
-    pub fn apply_with(&self, o: &JSONObject, action: &Map) -> AppResult<()> {
+    fn apply_with(&self, o: &JSONObject, action: &Map) -> AppResult<()> {
         let kind = o.opt_string("kind");
         if kind == "batch" {
             let a = o.opt_json_array("actions").ok_or_else(npe)?;
@@ -1655,8 +1748,8 @@ impl MainActivity {
         self.enqueue_with(o, &action)
     }
     /// `void enqueue(JSONObject o, Map<String,Object> action)`.
-    pub fn enqueue_with(self: &Arc<Self>, o: &JSONObject, action: &Map) -> AppResult<()> {
-        let token = Self::id();
+    fn enqueue_with(self: &Arc<Self>, o: &JSONObject, action: &Map) -> AppResult<()> {
+        let token = String::from(Self::id());
         self.optimistic.with_mut(|m| {
             m.insert(token.clone(), o.clone());
         });
@@ -1665,9 +1758,9 @@ impl MainActivity {
         Ok(())
     }
     /// `void enqueueFinalStroke(Map<String,Object> action)`.
-    pub fn enqueue_final_stroke(self: &Arc<Self>, action: &Map) -> AppResult<()> {
+    fn enqueue_final_stroke(self: &Arc<Self>, action: &Map) -> AppResult<()> {
         let object = json_object(action);
-        let token = Self::id();
+        let token = String::from(Self::id());
         self.optimistic.with_mut(|m| {
             m.insert(token.clone(), object.clone());
         });
@@ -1698,11 +1791,11 @@ impl MainActivity {
     /// `void documentDialog()`.
     pub fn document_dialog(self: &Arc<Self>) -> AppResult<()> {
         let editor = self.editor();
-        let fields = ui::linear_layout(&self.this, 1)?;
-        ui::set_padding(&fields, editor.dp(24.0)?, editor.dp(8.0)?, editor.dp(24.0)?, editor.dp(8.0)?)?;
+        let fields = ui::linear_layout(&self.this, crate::android_consts::Orientation::Vertical)?;
+        ui::set_padding(&fields, ui::PxInsets { left: ui::dp(&editor.context(), ui::Dp(24.0))?.0, top: ui::dp(&editor.context(), ui::Dp(8.0))?.0, right: ui::dp(&editor.context(), ui::Dp(24.0))?.0, bottom: ui::dp(&editor.context(), ui::Dp(8.0))?.0 })?;
         let name = self.edit_text()?;
         jcall!(name, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&name, &self.document.get())?;
+        ui::set_text(&name, &ui::UiText::from(&self.document.get()))?;
         jcall!(name, "android/widget/TextView", "setHint", "(Ljava/lang/CharSequence;)V", "Document name (same on both clients)")?;
         ui::add_view(&fields, &name)?;
         let types = self.spinner(&["Fixed page", "Multiple pages", "Infinite canvas"])?;
@@ -1712,9 +1805,9 @@ impl MainActivity {
         let (name_ref, types_ref) = (WeakObj::new(&name), WeakObj::new(&types));
         let open = self.dialog_listener(move |app, _| {
             let (name, types) = (name_ref.get(), types_ref.get());
-            let next = jfmt::java_trim(&ui::text_of(&name)?).to_string();
+            let next = jfmt::java_trim(&String::from(ui::text_of(&name)?)).to_string();
             if next.is_empty() {
-                return app.toast("Enter a document name", 1);
+                return app.toast("Enter a document name", TOAST_LENGTH_LONG);
             }
             app.deselect()?;
             {
@@ -1724,7 +1817,7 @@ impl MainActivity {
                 app.connected.set(false);
                 let position = jcall!(types, "android/widget/AdapterView", "getSelectedItemPosition", "()I")?.int();
                 let new_type = ["fixed", "pages", "infinite"].get(position as usize).ok_or_else(|| AppError::java("java.lang.ArrayIndexOutOfBoundsException", format!("Index {position} out of bounds for length 3")))?;
-                app.load(new_type)?;
+                app.load(&DocumentType::from(*new_type))?;
                 let canvas = app.canvas();
                 canvas.zoom.set(1.0);
                 canvas.offset_x.set(0.0);
@@ -1766,19 +1859,20 @@ impl MainActivity {
             self.proxy_url.set(next_proxy);
             self.proxy_token.set(next_token);
             self.connected.set(false);
-            self.load(&self.type_.get())?;
+            self.load(&DocumentType::from(self.type_.get()))?;
         }
         let e = ui::edit(&self.this)?;
-        ui::put_string(&e, "host", &self.host.get())?;
-        ui::put_string(&e, "proxyUrl", &self.proxy_url.get())?;
-        ui::put_string(&e, "proxyToken", &self.proxy_token.get())?;
+        ui::put_string(&e, &ui::PrefKey::from("host"), &ui::PrefText::from(&self.host.get()))?;
+        ui::put_string(&e, &ui::PrefKey::from("proxyUrl"), &ui::PrefText::from(&self.proxy_url.get()))?;
+        ui::put_string(&e, &ui::PrefKey::from("proxyToken"), &ui::PrefText::from(&self.proxy_token.get()))?;
         ui::apply(&e)?;
         self.configure_proxy()?;
         self.update()?;
         self.toast("Network settings saved", TOAST_LENGTH_SHORT)
     }
     /// `void openDocument(String name, String documentType)`.
-    pub fn open_document(self: &Arc<Self>, name: &str, document_type: &str) -> AppResult<()> {
+    pub fn open_document(self: &Arc<Self>, name: &ids::DocumentName, document_type: &DocumentType) -> AppResult<()> {
+        let name: &str = name;
         self.deselect()?;
         self.animation_player().reset()?;
         {
@@ -1803,11 +1897,11 @@ impl MainActivity {
         }
         let field = self.edit_text()?;
         jcall!(field, "android/widget/TextView", "setInputType", "(I)V", 2)?;
-        ui::set_text(&field, &(self.page.get() + 1).to_string())?;
+        ui::set_text(&field, &ui::UiText::from(&(self.page.get() + 1).to_string()))?;
         let field_ref = WeakObj::new(&field);
         let open = self.dialog_listener(move |app, _| {
             let result = (|| -> AppResult<()> {
-                let text = ui::text_of(&field_ref.get())?;
+                let text = String::from(ui::text_of(&field_ref.get())?);
                 let value = parse_java_int(&text).ok_or_else(|| AppError::Core(notemaker_core::Error::number_format(format!("For input string: \"{text}\""))))?;
                 let next = 0.max(10000.min(value.wrapping_sub(1)));
                 app.deselect()?;
@@ -1827,7 +1921,8 @@ impl MainActivity {
         Ok(())
     }
     /// `void history(boolean forward)`.
-    pub fn history(self: &Arc<Self>, forward: bool) -> AppResult<()> {
+    pub fn history(self: &Arc<Self>, direction: store::HistoryDirection) -> AppResult<()> {
+        let forward = direction == store::HistoryDirection::Redo;
         let target = self.replica();
         let entry = {
             let _sync = self.lock.enter();
@@ -1844,12 +1939,12 @@ impl MainActivity {
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<State> {
                 let snapshot = if entry == "object-action" {
-                    target.command_snapshot(&[if forward { "redo" } else { "undo" }, "snapshot"], None)?.1
+                    target.command_snapshot(crate::app_replica::CliArgs(&[if forward { "redo" } else { "undo" }, "snapshot"]), None)?.snapshot
                 } else {
                     let erased = entry.starts_with("erase:");
                     let stroke = if erased { entry[6..].to_string() } else { entry.clone() };
                     let input = Value::Object(object! {"kind" => "active", "stroke" => stroke, "active" => if erased { !forward } else { forward }});
-                    target.command_snapshot(&["append", "snapshot", "-"], Some(&input))?.1
+                    target.command_snapshot(crate::app_replica::CliArgs(&["append", "snapshot", "-"]), Some(&input))?.snapshot
                 };
                 // Java: map(result.get("snapshot")) rejected a missing snapshot.
                 match snapshot {
@@ -1902,7 +1997,7 @@ impl MainActivity {
                 return Ok(());
             }
             if let Err(e) = app.apply_refresh(&target, &snapshot) {
-                jx::log::e_err("NoteMaker", "Refresh failed", &e);
+                jx::log::e_err(crate::jx::log::NOTEMAKER, "Refresh failed", &e);
             }
             Ok(())
         });
@@ -1970,7 +2065,7 @@ impl MainActivity {
                         // stream reader cannot be unwound from the callback, so the
                         // failure is reported like the loop's catch did.
                         if let Err(e) = app.refresh_from(&target) {
-                            jx::log::e_err("NoteMaker", "Local state refresh failed", &e);
+                            jx::log::e_err(crate::jx::log::NOTEMAKER, "Local state refresh failed", &e);
                         }
                     });
                     listened.map_err(Some)?;
@@ -1997,7 +2092,7 @@ impl MainActivity {
                 // InterruptedException
                 Err(None) => return,
                 Err(Some(e)) => {
-                    jx::log::e_err("NoteMaker", "Local state refresh failed", &e);
+                    jx::log::e_err(crate::jx::log::NOTEMAKER, "Local state refresh failed", &e);
                     let target = target.clone();
                     self.run_on_ui_thread(move |app| {
                         if app.is_current(&target) && app.connected.get() {
@@ -2006,7 +2101,7 @@ impl MainActivity {
                         }
                         Ok(())
                     });
-                    if JThread::sleep(backoff).is_err() {
+                    if JThread::sleep(jx::DelayMillis(backoff as i64)).is_err() {
                         return;
                     }
                     backoff = 30000.min(backoff * 2);
@@ -2017,7 +2112,8 @@ impl MainActivity {
     /// `public Process startCli(String... arguments) throws IOException`.
     /// The Rust build runs `libnotemaker_cli.so` from `nativeLibraryDir`
     /// (docs/design/rust-port.md, "Android") with the same arguments.
-    pub fn start_cli(&self, arguments: &[&str]) -> AppResult<std::process::Child> {
+    pub fn start_cli(&self, arguments: crate::app_replica::CliArgs) -> AppResult<std::process::Child> {
+        let arguments = arguments.0;
         let mut ui_command = false;
         let mut i = 0;
         while i < arguments.len() {
@@ -2067,7 +2163,7 @@ impl MainActivity {
         let items = jx::new_string_array(&labels)?;
         let listener = self.dialog_listener(move |app, index| {
             let id = ids.get(index as usize).ok_or_else(|| AppError::java("java.lang.IndexOutOfBoundsException", format!("Index {index}")))?;
-            app.edit_object(id)
+            app.edit_object(&ids::EntityId::from(id))
         });
         let b = self.dialog_builder()?;
         jcall!(b, "android/app/AlertDialog$Builder", "setTitle", "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;", "Edit diagram object")?;
@@ -2109,7 +2205,8 @@ impl MainActivity {
         }
     }
     /// `void insertTemplate(String template)`.
-    pub fn insert_template(self: &Arc<Self>, template: &str) -> AppResult<()> {
+    pub fn insert_template(self: &Arc<Self>, template: &TemplateKind) -> AppResult<()> {
+        let template: &str = template;
         if !["ruled", "grid", "dots", "planner", "blank"].contains(&template) {
             return Ok(());
         }
@@ -2134,7 +2231,7 @@ impl MainActivity {
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<State> {
                 for args in &commands {
-                    target.command(&argv(args), input.as_ref())?;
+                    target.command(crate::app_replica::CliArgs(&argv(args)), input.as_ref())?;
                 }
                 target.read()
             })();
@@ -2160,7 +2257,8 @@ impl MainActivity {
         });
     }
     /// `void fillEntity(String kind, String id, int fillColor)`.
-    pub fn fill_entity(self: &Arc<Self>, kind: &str, id: &str, fill_color: i32) -> AppResult<()> {
+    pub fn fill_entity(self: &Arc<Self>, kind: &ids::EntityKind, id: &ids::EntityId, fill_color: notemaker_core::style::ArgbColor) -> AppResult<()> {
+        let (kind, id, fill_color): (&str, &str, i32) = (kind, id, fill_color.0);
         if kind != "object" && kind != "stroke" {
             return Ok(());
         }
@@ -2177,15 +2275,16 @@ impl MainActivity {
         Ok(())
     }
     /// `void renameLayer(String id)`.
-    pub fn rename_layer(self: &Arc<Self>, id: &str) -> AppResult<()> {
+    pub fn rename_layer(self: &Arc<Self>, id: &ids::LayerId) -> AppResult<()> {
+        let id: &str = id;
         let Some(old) = self.layers.with(|l| l.get(id).cloned()) else { return Ok(()) };
         let name = self.edit_text()?;
         jcall!(name, "android/widget/TextView", "setSingleLine", "(Z)V", true)?;
-        ui::set_text(&name, &old.opt_string("name"))?;
+        ui::set_text(&name, &ui::UiText::from(&old.opt_string("name")))?;
         let name_ref = WeakObj::new(&name);
         let id = id.to_string();
         let save = self.dialog_listener(move |app, _| {
-            let value = jfmt::java_trim(&ui::text_of(&name_ref.get())?).to_string();
+            let value = jfmt::java_trim(&String::from(ui::text_of(&name_ref.get())?)).to_string();
             if value.is_empty() {
                 return Ok(());
             }
@@ -2201,10 +2300,16 @@ impl MainActivity {
         Ok(())
     }
     /// `void layerCommand(String command, String id, String argument)`.
-    pub fn layer_command(self: &Arc<Self>, command: &str, id: &str, argument: Option<&str>) -> AppResult<()> {
+    pub fn layer_command(self: &Arc<Self>, command: LayerCommand, id: &ids::LayerId) -> AppResult<()> {
+        let (command, argument) = match command {
+            LayerCommand::Hide => ("hide", None),
+            LayerCommand::Duplicate => ("duplicate", None),
+            LayerCommand::Reorder(position) => ("reorder", Some(position.0.to_string())),
+            LayerCommand::Merge(target) => ("merge", Some(String::from(target))),
+        };
         let mut args = owned(&["layer", command, id]);
         if let Some(a) = argument {
-            args.push(a.to_string());
+            args.push(a);
         }
         let target = self.replica();
         let pending = {
@@ -2224,8 +2329,8 @@ impl MainActivity {
     /// `ReplicaService.writes.execute(()->{try{target.command(["selection","deselect",acquired],null);}catch(...){Log.w(...)}})`.
     fn release_stale_selection(target: Arc<AppReplica>, acquired: String) {
         replica_service_writes().execute(move || {
-            if let Err(error) = target.command(&["selection", "deselect", &acquired], None) {
-                jx::log::w_err("NoteMaker", "Could not release stale selection", &error);
+            if let Err(error) = target.command(crate::app_replica::CliArgs(&["selection", "deselect", &acquired]), None) {
+                jx::log::w_err(crate::jx::log::NOTEMAKER, "Could not release stale selection", &error);
             }
         });
     }
@@ -2254,7 +2359,7 @@ impl MainActivity {
         let app = self.clone();
         replica_service_writes().execute(move || {
             let input = Value::Object(input);
-            let result = target.command(&["selection", "select", "-"], Some(&input)).and_then(into_map);
+            let result = target.command(crate::app_replica::CliArgs(&["selection", "select", "-"]), Some(&input)).and_then(into_map);
             match result {
                 Ok(result) => app.run_on_ui_thread(move |app| {
                     let acquired = json::java_string(result.get("session"));
@@ -2288,17 +2393,18 @@ impl MainActivity {
     }
     /// `LayerEditor layerEditor()`.
     pub fn layer_editor(&self) -> AppResult<LayerEditor> {
-        Ok(LayerEditor::new(&self.model(), &self.selected.get(), self.page.get())?)
+        Ok(LayerEditor::new(&self.model(), &ids::LayerId::from(self.selected.get()), ids::PageNumber(self.page.get()))?)
     }
     /// `void selectRegion(double[][] region, boolean topmost)` (`synchronized(lock)`; `null` region = all).
-    pub fn select_region(self: &Arc<Self>, region: Option<&[[f64; 2]]>, topmost: bool) -> AppResult<()> {
+    fn select_region(self: &Arc<Self>, region: Option<&geometry::Polygon>, topmost: bool) -> AppResult<()> {
         let _sync = self.lock.enter();
         let selected = self.selected.get();
         match self.canvas.get() {
-            Some(c) if c.visible(&selected) => {}
+            Some(c) if c.visible(&ids::LayerId::from(&selected)) => {}
             _ => return Ok(()),
         }
-        let hits = LayerEditor::select_in(&self.model(), &selected, self.page.get(), region, topmost, &item_coverage::FACTORY)?;
+        let hits = if topmost { notemaker_core::layer_editor::HitMode::Topmost } else { notemaker_core::layer_editor::HitMode::All };
+        let hits = LayerEditor::select_in(&self.model(), &ids::LayerId::from(&selected), ids::PageNumber(self.page.get()), region, hits, &item_coverage::FACTORY)?;
         let mut refs = Vec::new();
         for hit in hits {
             refs.push(into_map(hit)?);
@@ -2307,15 +2413,16 @@ impl MainActivity {
     }
     /// `6/Math.max(.01,canvas.scale()*canvas.zoom)`.
     fn hit_radius(canvas: &CanvasView) -> f64 {
-        6.0 / jmath::max(0.01, (canvas.scale() * canvas.zoom.get()) as f64)
+        6.0 / jmath::max(0.01, (canvas.scale().0 * canvas.zoom.get()) as f64)
     }
     /// `void selectAt(float x, float y)`.
-    pub fn select_at(self: &Arc<Self>, x: f32, y: f32) -> AppResult<()> {
+    pub fn select_at(self: &Arc<Self>, at: DocPointF) -> AppResult<()> {
         let radius = match self.canvas.get() {
             None => 1.0,
             Some(c) => Self::hit_radius(&c),
         };
-        let region = geometry::capsule([x as f64, y as f64], [x as f64, y as f64], radius);
+        let at = geometry::DocPoint::from(at);
+        let region = geometry::Polygon::capsule(geometry::Segment { start: at, end: at }, geometry::Radius(radius));
         self.select_region(Some(&region), true)
     }
     /// `void selectAllVisible()`.
@@ -2323,12 +2430,12 @@ impl MainActivity {
         self.select_region(None, false)
     }
     /// `void selectWithin(float x0, float y0, float x1, float y1)`.
-    pub fn select_within(self: &Arc<Self>, x0: f32, y0: f32, x1: f32, y1: f32) -> AppResult<()> {
-        let region = geometry::rect(fmin(x0, x1) as f64, fmin(y0, y1) as f64, (x1 - x0).abs() as f64, (y1 - y0).abs() as f64);
+    fn select_within(self: &Arc<Self>, x0: f32, y0: f32, x1: f32, y1: f32) -> AppResult<()> {
+        let region = geometry::DocRect { x: fmin(x0, x1) as f64, y: fmin(y0, y1) as f64, width: (x1 - x0).abs() as f64, height: (y1 - y0).abs() as f64 }.polygon();
         self.select_region(Some(&region), false)
     }
     /// `private void addLassoPoint(float x, float y)`.
-    pub fn add_lasso_point(&self, x: f32, y: f32) {
+    fn add_lasso_point(&self, x: f32, y: f32) {
         let Some(canvas) = self.canvas.get() else { return };
         canvas.lasso_path.with_mut(|path| {
             let far = match path.last() {
@@ -2341,18 +2448,19 @@ impl MainActivity {
         });
     }
     /// `void selectLasso(List<float[]> polygon)`.
-    pub fn select_lasso(self: &Arc<Self>, polygon: &[[f32; 2]]) -> AppResult<()> {
+    fn select_lasso(self: &Arc<Self>, polygon: &[[f32; 2]]) -> AppResult<()> {
         if polygon.len() < 3 {
             return Ok(());
         }
-        let p: Vec<[f64; 2]> = polygon.iter().map(|q| [q[0] as f64, q[1] as f64]).collect();
+        let p: geometry::Polygon = polygon.iter().map(|q| geometry::DocPoint { x: q[0] as f64, y: q[1] as f64 }).collect();
         self.select_region(Some(&p), false)
     }
     /// `Map<String,Object> selectedEntityAt(float x, float y)` (`null` → `None`).
-    pub fn selected_entity_at(&self, x: f32, y: f32) -> AppResult<Option<Map>> {
+    pub fn selected_entity_at(&self, at: DocPointF) -> AppResult<Option<Map>> {
         let canvas = self.canvas.get().ok_or_else(npe)?;
         let radius = Self::hit_radius(&canvas);
-        let region = geometry::capsule([x as f64, y as f64], [x as f64, y as f64], radius);
+        let at = geometry::DocPoint::from(at);
+        let region = geometry::Polygon::capsule(geometry::Segment { start: at, end: at }, geometry::Radius(radius));
         let model = self.model();
         let selected = self.selected.get();
         let page = self.page.get();
@@ -2383,7 +2491,8 @@ impl MainActivity {
         Ok(None)
     }
     /// `void selectLayer(String layer)`.
-    pub fn select_layer(self: &Arc<Self>, layer: &str) -> AppResult<()> {
+    pub fn select_layer(self: &Arc<Self>, layer: &ids::LayerId) -> AppResult<()> {
+        let layer: &str = layer;
         if self.selected.get() != layer {
             let selection_tool = self.selecting.get();
             self.deselect()?;
@@ -2395,7 +2504,8 @@ impl MainActivity {
         self.update()
     }
     /// `void deselectEntity(String kind, String id)`.
-    pub fn deselect_entity(self: &Arc<Self>, kind: &str, id: &str) -> AppResult<()> {
+    pub fn deselect_entity(self: &Arc<Self>, kind: &ids::EntityKind, id: &ids::EntityId) -> AppResult<()> {
+        let (kind, id): (&str, &str) = (kind, id);
         let Some(session) = self.selection_session.get() else { return Ok(()) };
         let remaining: Vec<Map> = self.selected_entities.with(|s| s.iter().filter(|e| !(same_str(e, "kind", kind) && same_str(e, "id", id))).cloned().collect());
         let target = self.replica();
@@ -2408,13 +2518,13 @@ impl MainActivity {
         let app = self.clone();
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<()> {
-                target.command(&["selection", "deselect", &session], None)?;
+                target.command(crate::app_replica::CliArgs(&["selection", "deselect", &session]), None)?;
                 if !remaining.is_empty() {
                     if generation != app.selection_generation.get() || !app.selecting.get() || !app.is_current(&target) {
                         return Ok(());
                     }
                     let request = Value::Object(object! {"layer" => app.selected.get(), "page" => app.page.get(), "entities" => Value::Array(remaining.into_iter().map(Value::Object).collect())});
-                    let result = into_map(target.command(&["selection", "select", "-"], Some(&request))?)?;
+                    let result = into_map(target.command(crate::app_replica::CliArgs(&["selection", "select", "-"]), Some(&request))?)?;
                     let acquired = json::java_string(result.get("session"));
                     let target = target.clone();
                     app.run_on_ui_thread(move |app| {
@@ -2457,17 +2567,17 @@ impl MainActivity {
             }
             let (target, session) = (target.clone(), session.clone());
             replica_service_writes().execute(move || {
-                if let Err(error) = target.command(&["selection", "heartbeat", &session], None) {
-                    jx::log::w_err("NoteMaker", "Selection heartbeat failed", &error);
+                if let Err(error) = target.command(crate::app_replica::CliArgs(&["selection", "heartbeat", &session]), None) {
+                    jx::log::w_err(crate::jx::log::NOTEMAKER, "Selection heartbeat failed", &error);
                 }
             });
             if let Some(task) = app.heartbeat_task.get() {
-                ui::post_delayed(&app.selection_handler, &task, 5000)?;
+                ui::post_delayed(&app.selection_handler, &task, crate::jx::DelayMillis(5000))?;
             }
             Ok(())
         });
         self.heartbeat_task.set(Some(task.clone()));
-        ui::post_delayed(&self.selection_handler, &task, 5000)?;
+        ui::post_delayed(&self.selection_handler, &task, crate::jx::DelayMillis(5000))?;
         Ok(())
     }
     /// `private void schedulePreviewExpiry()`.
@@ -2486,7 +2596,7 @@ impl MainActivity {
             if let Some(c) = app.canvas.get() {
                 c.invalidate()?;
             }
-            let now = jx::current_time_millis();
+            let now = jx::current_time_millis().0;
             let previews: Vec<Value> = app.transform_previews.with(|p| p.values().cloned().collect());
             for raw in previews {
                 if let Ok(e) = expires(&raw) {
@@ -2499,7 +2609,7 @@ impl MainActivity {
             Ok(())
         });
         self.preview_expiry_task.set(Some(task.clone()));
-        ui::post_delayed(&self.selection_handler, &task, 500)?;
+        ui::post_delayed(&self.selection_handler, &task, crate::jx::DelayMillis(500))?;
         Ok(())
     }
     /// `void deselect()`.
@@ -2535,20 +2645,21 @@ impl MainActivity {
             replica_service_writes().execute(move || {
                 let result = (|| -> AppResult<()> {
                     if clear_preview {
-                        target.command(&["transform", "cancel", &session], None)?;
+                        target.command(crate::app_replica::CliArgs(&["transform", "cancel", &session]), None)?;
                     }
-                    target.command(&["selection", "deselect", &session], None)?;
+                    target.command(crate::app_replica::CliArgs(&["selection", "deselect", &session]), None)?;
                     Ok(())
                 })();
                 if let Err(error) = result {
-                    jx::log::w_err("NoteMaker", "Could not release selection", &error);
+                    jx::log::w_err(crate::jx::log::NOTEMAKER, "Could not release selection", &error);
                 }
             });
         }
         Ok(())
     }
     /// `void previewSelection(double scale, double dx, double dy)`.
-    pub fn preview_selection(self: &Arc<Self>, scale: f64, dx: f64, dy: f64) -> AppResult<()> {
+    pub fn preview_selection(self: &Arc<Self>, transform: SelectionTransform) -> AppResult<()> {
+        let SelectionTransform { scale, dx, dy } = transform;
         self.preview_transform(&object! {"scale" => json::double(scale), "dx" => json::double(dx), "dy" => json::double(dy)})
     }
     /// `void previewTransform(Map<String,Object> specification)`.
@@ -2568,7 +2679,7 @@ impl MainActivity {
                 app.dispatch_latest_preview().map_err(JavaError::from)
             });
             self.preview_dispatch_task.set(Some(task.clone()));
-            ui::post_delayed(&self.selection_handler, &task, 100)?;
+            ui::post_delayed(&self.selection_handler, &task, crate::jx::DelayMillis(100))?;
         }
         Ok(())
     }
@@ -2584,7 +2695,7 @@ impl MainActivity {
         let app = self.clone();
         replica_service_writes().execute(move || {
             let input = Value::Object(sent.clone());
-            let result = target.command(&["transform", "preview", "-"], Some(&input)).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&["transform", "preview", "-"]), Some(&input)).and_then(|_| target.read());
             let again = move |app: &Arc<MainActivity>, sent: &Map| -> AppResult<()> {
                 if generation == app.selection_generation.get() && !app.transform_commit_queued.get() && app.pending_transform.with(|p| p.as_ref().is_some_and(|p| p != sent)) {
                     app.dispatch_latest_preview()?;
@@ -2615,11 +2726,11 @@ impl MainActivity {
         Ok(())
     }
     /// `void transformSelection(double scale, double dx, double dy, boolean commit)`.
-    pub fn transform_selection(self: &Arc<Self>, scale: f64, dx: f64, dy: f64, commit: bool) -> AppResult<()> {
-        if !commit {
-            return self.preview_selection(scale, dx, dy);
+    fn transform_selection(self: &Arc<Self>, transform: SelectionTransform, commit: TransformCommit) -> AppResult<()> {
+        if commit == TransformCommit::Preview {
+            return self.preview_selection(transform);
         }
-        self.preview_selection(scale, dx, dy)?;
+        self.preview_selection(transform)?;
         self.commit_transform_preview()
     }
     /// `void commitTransformPreview()`.
@@ -2645,8 +2756,8 @@ impl MainActivity {
         replica_service_writes().execute(move || {
             let input = Value::Object(transform);
             let result = (|| -> AppResult<State> {
-                target.command(&["transform", "preview", "-"], Some(&input))?;
-                target.command(&["transform", "commit", "-"], Some(&input))?;
+                target.command(crate::app_replica::CliArgs(&["transform", "preview", "-"]), Some(&input))?;
+                target.command(crate::app_replica::CliArgs(&["transform", "commit", "-"]), Some(&input))?;
                 target.read()
             })();
             match result {
@@ -2695,7 +2806,7 @@ impl MainActivity {
         self.transform_commit_queued.set(false);
         let app = self.clone();
         replica_service_writes().execute(move || {
-            let result = target.command(&["transform", "cancel", &session], None).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&["transform", "cancel", &session]), None).and_then(|_| target.read());
             match result {
                 Ok(snapshot) => app.run_on_ui_thread(move |app| {
                     if app.is_current(&target) {
@@ -2712,17 +2823,20 @@ impl MainActivity {
         self.update()
     }
     /// `void resolveConflict(String id, String choice)`.
-    pub fn resolve_conflict(self: &Arc<Self>, id: &str, choice: &str) -> AppResult<()> {
-        if !["local", "remote", "both"].contains(&choice) {
-            return Ok(());
-        }
+    pub fn resolve_conflict(self: &Arc<Self>, id: &ids::ConflictId, choice: ids::ConflictChoice) -> AppResult<()> {
+        let id: &str = id;
+        let choice = match choice {
+            ids::ConflictChoice::Local => "local",
+            ids::ConflictChoice::Remote => "remote",
+            ids::ConflictChoice::Both => "both",
+        };
         let target = self.replica();
         self.saving_add(1);
         self.update()?;
         let args = owned(&["conflict", "resolve", id, choice]);
         let app = self.clone();
         replica_service_writes().execute(move || {
-            let result = target.command(&argv(&args), None).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&argv(&args)), None).and_then(|_| target.read());
             match result {
                 Ok(snapshot) => app.run_on_ui_thread(move |app| {
                     app.saving_add(-1);
@@ -2780,7 +2894,7 @@ impl MainActivity {
         self.update()?;
         let app = self.clone();
         replica_service_writes().execute(move || {
-            let result = target.command(&["selection", "paste", "-"], Some(&input)).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&["selection", "paste", "-"]), Some(&input)).and_then(|_| target.read());
             match result {
                 Ok(snapshot) => app.run_on_ui_thread(move |app| {
                     app.saving_add(-1);
@@ -2808,7 +2922,7 @@ impl MainActivity {
         Ok(())
     }
     /// `private void selectionClipboardCommand(String command)`.
-    pub fn selection_clipboard_command(self: &Arc<Self>, command: &str) -> AppResult<()> {
+    fn selection_clipboard_command(self: &Arc<Self>, command: &str) -> AppResult<()> {
         let Some(session) = self.selection_session.get() else { return Ok(()) };
         if self.selected_entities.with(Vec::is_empty) {
             return Ok(());
@@ -2820,8 +2934,8 @@ impl MainActivity {
         let app = self.clone();
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<(Map, State)> {
-                let result = into_map(target.command(&["selection", &command, &session], None)?)?;
-                let clipboard = object! {"entities" => list_or(&result, "entities")?, "copiedAt" => jx::current_time_millis()};
+                let result = into_map(target.command(crate::app_replica::CliArgs(&["selection", &command, &session]), None)?)?;
+                let clipboard = object! {"entities" => list_or(&result, "entities")?, "copiedAt" => jx::current_time_millis().0};
                 let snapshot = target.read()?;
                 Ok((clipboard, snapshot))
             })();
@@ -2859,7 +2973,7 @@ impl MainActivity {
         Ok(())
     }
     /// `private void selectionCommand(String command)`.
-    pub fn selection_command(self: &Arc<Self>, command: &str) -> AppResult<()> {
+    fn selection_command(self: &Arc<Self>, command: &str) -> AppResult<()> {
         let Some(session) = self.selection_session.get() else { return Ok(()) };
         let target = self.replica();
         let pending = {
@@ -2872,7 +2986,7 @@ impl MainActivity {
         let command = command.to_string();
         let app = self.clone();
         replica_service_writes().execute(move || {
-            let result = target.command(&["selection", &command, &session], None).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&["selection", &command, &session]), None).and_then(|_| target.read());
             match result {
                 Ok(snapshot) => app.run_on_ui_thread(move |app| {
                     app.saving_add(-1);
@@ -2909,11 +3023,14 @@ impl MainActivity {
     // Drawing actions
 
     /// `void applyErase(String mode, String layer, int erasePage, JSONArray path, float radius)`.
-    pub fn apply_erase(self: &Arc<Self>, mode: &str, layer: &str, erase_page: i32, path: Option<&JSONArray>, radius: f32) -> AppResult<()> {
+    pub fn apply_erase(self: &Arc<Self>, mode: &EraserMode, layer: &ids::LayerId, erase_page: ids::PageNumber, path: Option<&JSONArray>, radius: geometry::Radius) -> AppResult<()> {
+        let (mode, layer, erase_page): (&str, &str, i32) = (mode, layer, erase_page.0);
+        // Callers pass the editor's `float` eraser radius, so this is exact.
+        let radius = radius.0 as f32;
         let trace = self.erase_timings.get();
         trace_put(&trace, "entered");
         let target = self.replica();
-        let preview_id = Self::id();
+        let preview_id = String::from(Self::id());
         let points = match path {
             None => Value::Array(Vec::new()),
             Some(p) => json::parse(&p.to_string())?,
@@ -2958,14 +3075,14 @@ impl MainActivity {
                 if let Some(t) = &trace {
                     let t = t.clone();
                     timing::set_observer(Some(Box::new(move |phase: &str| {
-                        let now = jx::nano_time();
+                        let now = jx::nano_time().0;
                         t.with_mut(|m| {
                             m.insert(phase.to_string(), now);
                         });
                     })));
                 }
                 let input = Value::Object(input);
-                let erased = target.command(&["erase", "-"], Some(&input));
+                let erased = target.command(crate::app_replica::CliArgs(&["erase", "-"]), Some(&input));
                 timing::set_observer(None);
                 erased?;
                 trace_put(&trace, "command_done");
@@ -3016,7 +3133,8 @@ impl MainActivity {
         Ok(())
     }
     /// `void fillAt(float x, float y)`.
-    pub fn fill_at(self: &Arc<Self>, x: f32, y: f32) -> AppResult<()> {
+    pub fn fill_at(self: &Arc<Self>, at: DocPointF) -> AppResult<()> {
+        let DocPointF { x, y } = at;
         let target = self.replica();
         let pending = {
             let _sync = self.lock.enter();
@@ -3031,19 +3149,19 @@ impl MainActivity {
             }
             Ok(())
         });
-        ui::post_delayed(&self.selection_handler, &chrome, 150)?;
+        ui::post_delayed(&self.selection_handler, &chrome, crate::jx::DelayMillis(150))?;
         let fill = self.object_fill_color.get();
         let input = Value::Object(object! {"x" => json::from_float(x), "y" => json::from_float(y), "page" => self.page.get(), "layer" => self.selected.get(), "color" => if fill == COLOR_TRANSPARENT { self.color.get() } else { fill }});
         self.object_command(target, pending, vec![owned(&["fill", "-"])], Some(input), "Could not fill area: ");
         Ok(())
     }
     /// `private void insertSvg(String source, double intrinsicWidth, double intrinsicHeight)`.
-    pub fn insert_svg(self: &Arc<Self>, source: &str, intrinsic_width: f64, intrinsic_height: f64) -> AppResult<()> {
+    fn insert_svg(self: &Arc<Self>, source: &str, intrinsic_width: f64, intrinsic_height: f64) -> AppResult<()> {
         self.insert_svg_template(source, intrinsic_width, intrinsic_height, false)
     }
     /// The shared `(1000-w)/2`, `(1400-h)/2` placement of the import helpers.
     fn placed_object(&self, shape: &str, data: Option<(&str, &str)>, w: f32, h: f32, trailing: Option<(&str, &str)>) -> JSONObject {
-        let mut args: Vec<(&str, JV)> = vec![("kind", JV::from("object")), ("object", JV::from(Self::id())), ("shape", JV::from(shape))];
+        let mut args: Vec<(&str, JV)> = vec![("kind", JV::from("object")), ("object", JV::from(String::from(Self::id()))), ("shape", JV::from(shape))];
         if let Some((k, v)) = data {
             args.push((k, JV::from(v)));
         }
@@ -3065,21 +3183,21 @@ impl MainActivity {
         Self::obj(&args)
     }
     /// `private void insertSvg(String source, double intrinsicWidth, double intrinsicHeight, boolean template)`.
-    pub fn insert_svg_template(self: &Arc<Self>, source: &str, intrinsic_width: f64, intrinsic_height: f64, template: bool) -> AppResult<()> {
+    fn insert_svg_template(self: &Arc<Self>, source: &str, intrinsic_width: f64, intrinsic_height: f64, template: bool) -> AppResult<()> {
         let scale = if template { 1.0 } else { jmath::min(800.0 / intrinsic_width, 1000.0 / intrinsic_height) };
         let (w, h) = ((intrinsic_width * scale) as f32, (intrinsic_height * scale) as f32);
         let object = self.placed_object("svg", None, w, h, Some(("svg", source)));
         self.persist_object(&object)
     }
     /// `private void insertImage(String data, double intrinsicWidth, double intrinsicHeight)`.
-    pub fn insert_image(self: &Arc<Self>, data: &str, intrinsic_width: f64, intrinsic_height: f64) -> AppResult<()> {
+    fn insert_image(self: &Arc<Self>, data: &str, intrinsic_width: f64, intrinsic_height: f64) -> AppResult<()> {
         let scale = jmath::min(800.0 / intrinsic_width, 1000.0 / intrinsic_height);
         let (w, h) = ((intrinsic_width * scale) as f32, (intrinsic_height * scale) as f32);
         let object = self.placed_object("image", Some(("image", data)), w, h, None);
         self.persist_object(&object)
     }
     /// `private void insertGif(String data, double intrinsicWidth, double intrinsicHeight)`.
-    pub fn insert_gif(self: &Arc<Self>, data: &str, intrinsic_width: f64, intrinsic_height: f64) -> AppResult<()> {
+    fn insert_gif(self: &Arc<Self>, data: &str, intrinsic_width: f64, intrinsic_height: f64) -> AppResult<()> {
         let scale = jmath::min(800.0 / intrinsic_width, 1000.0 / intrinsic_height);
         let (w, h) = ((intrinsic_width * scale) as f32, (intrinsic_height * scale) as f32);
         let object = self.placed_object("gif", Some(("gif", data)), w, h, None);
@@ -3095,7 +3213,7 @@ impl MainActivity {
         let size = self.edit_text()?;
         jcall!(size, "android/widget/TextView", "setSingleLine", "(Z)V", true)?;
         jcall!(size, "android/widget/TextView", "setInputType", "(I)V", 8194 | 4096)?;
-        ui::set_text(&size, "24")?;
+        ui::set_text(&size, &ui::UiText::from("24"))?;
         jcall!(size, "android/widget/TextView", "setHint", "(Ljava/lang/CharSequence;)V", "Font size")?;
         let bold = self.check_box("Bold", self.pending_text_bold.get())?;
         let italic = self.check_box("Italic", self.pending_text_italic.get())?;
@@ -3106,27 +3224,27 @@ impl MainActivity {
         let alignment = self.spinner(&["left", "center", "right"])?;
         let a = self.pending_text_alignment.get();
         jcall!(alignment, "android/widget/Spinner", "setSelection", "(I)V", if a == "center" { 1 } else if a == "right" { 2 } else { 0 })?;
-        let box_ = ui::linear_layout(&self.this, 1)?;
-        ui::set_padding(&box_, 24, 8, 24, 8)?;
+        let box_ = ui::linear_layout(&self.this, crate::android_consts::Orientation::Vertical)?;
+        ui::set_padding(&box_, ui::PxInsets { left: 24, top: 8, right: 24, bottom: 8 })?;
         ui::add_view(&box_, &content)?;
         ui::add_view(&box_, &size)?;
         ui::add_view(&box_, &bold)?;
         ui::add_view(&box_, &italic)?;
         ui::add_view(&box_, &underline)?;
         let font_label = ui::text_view(&self.this)?;
-        ui::set_text(&font_label, "Font")?;
+        ui::set_text(&font_label, &ui::UiText::from("Font"))?;
         ui::add_view(&box_, &font_label)?;
         ui::add_view(&box_, &family)?;
         let alignment_label = ui::text_view(&self.this)?;
-        ui::set_text(&alignment_label, "Alignment")?;
+        ui::set_text(&alignment_label, &ui::UiText::from("Alignment"))?;
         ui::add_view(&box_, &alignment_label)?;
         ui::add_view(&box_, &alignment)?;
         let views: Vec<WeakObj> = [&content, &size, &bold, &italic, &underline, &family, &alignment].iter().map(|v| WeakObj::new(v)).collect();
         let place = self.dialog_listener(move |app, _| {
             let result = (|| -> AppResult<()> {
                 let v: Vec<Obj> = views.iter().map(WeakObj::get).collect();
-                let value = ui::text_of(&v[0])?;
-                let font = jfmt::parse_double(&ui::text_of(&v[1])?)? as f32;
+                let value = String::from(ui::text_of(&v[0])?);
+                let font = jfmt::parse_double(&String::from(ui::text_of(&v[1])?))? as f32;
                 if jfmt::java_trim(&value).is_empty() || !font.is_finite() || font < 1.0 || font > 500.0 {
                     return Err(AppError::illegal_argument("Enter text and a font size from 1 to 500"));
                 }
@@ -3137,7 +3255,7 @@ impl MainActivity {
                 app.pending_text_underline.set(Self::is_checked(&v[4])?);
                 app.pending_text_family.set(Self::selected_item(&v[5])?);
                 app.pending_text_alignment.set(Self::selected_item(&v[6])?);
-                app.set_drawing_tool(Some("text"))
+                app.set_drawing_tool(Some(&ids::ShapeId::from("text")))
             })();
             if let Err(e) = result {
                 app.toast(&e.message().unwrap_or_default(), TOAST_LENGTH_LONG)?;
@@ -3167,7 +3285,8 @@ impl MainActivity {
         Ok(())
     }
     /// `void editObject(String id)` (`synchronized(lock)`).
-    pub fn edit_object(self: &Arc<Self>, id: &str) -> AppResult<()> {
+    pub fn edit_object(self: &Arc<Self>, id: &ids::EntityId) -> AppResult<()> {
+        let id: &str = id;
         let _sync = self.lock.enter();
         let model = self.model();
         let Some(original) = model.objects.get(id).cloned() else { return Ok(()) };
@@ -3176,15 +3295,15 @@ impl MainActivity {
             v => json::java_string(v),
         };
         let edit_page = int_or(&original, "page", 0)?;
-        let form = ui::linear_layout(&self.this, 1)?;
-        ui::set_padding(&form, 24, 12, 24, 12)?;
+        let form = ui::linear_layout(&self.this, crate::android_consts::Orientation::Vertical)?;
+        ui::set_padding(&form, ui::PxInsets { left: 24, top: 12, right: 24, bottom: 12 })?;
         let mut fields: Vec<(String, WeakObj)> = Vec::new();
         let svg = same_str(&original, "shape", "svg");
         let keys: &[&str] = if svg { &["x", "y", "w", "h"] } else { &["text", "x", "y", "w", "h", "fontSize"] };
         let labels: &[&str] = if svg { &["X position", "Y position", "Width", "Height"] } else { &["Label", "X position", "Y position", "Width", "Height", "Font size"] };
         for (index, key) in keys.iter().enumerate() {
             let label = ui::text_view(&self.this)?;
-            ui::set_text(&label, labels[index])?;
+            ui::set_text(&label, &ui::UiText::from(labels[index]))?;
             ui::add_view(&form, &label)?;
             let field = self.edit_text()?;
             let value = match original.get(*key) {
@@ -3192,7 +3311,7 @@ impl MainActivity {
                 None if *key == "text" => String::new(),
                 None => "24".to_string(),
             };
-            ui::set_text(&field, &value)?;
+            ui::set_text(&field, &ui::UiText::from(&value))?;
             if *key != "text" {
                 jcall!(field, "android/widget/TextView", "setInputType", "(I)V", 8194 | 4096)?;
             }
@@ -3230,7 +3349,7 @@ impl MainActivity {
                 let _sync = app.lock.enter();
                 let mut patch = Map::new();
                 for (key, field) in &fields {
-                    let text = ui::text_of(&field.get())?;
+                    let text = String::from(ui::text_of(&field.get())?);
                     let value = if key == "text" { Value::String(text) } else { json::double(jfmt::parse_double(&text)?) };
                     patch.insert(key.clone(), value);
                 }
@@ -3266,7 +3385,7 @@ impl MainActivity {
                 app.update()
             })();
             if let Err(e) = result {
-                app.toast(&e.message().unwrap_or_default(), 1)?;
+                app.toast(&e.message().unwrap_or_default(), TOAST_LENGTH_LONG)?;
             }
             Ok(())
         });
@@ -3318,7 +3437,7 @@ pub struct CanvasView {
     pub ink_document: Field<String>,
     pub ink_type: Field<String>,
     pub ink_page: Field<i32>,
-    pub raster_tier: Field<i32>,
+    pub raster_tier: Field<tile_ink_cache::DensityTier>,
     pub input_started: Field<i64>,
     pub draw_latency: Field<Option<LongConsumer>>,
     pub after_draw: Field<Option<Callback>>,
@@ -3380,7 +3499,7 @@ impl CanvasView {
             ink_document: Field::new(String::new()),
             ink_type: Field::new(String::new()),
             ink_page: Field::new(-1),
-            raster_tier: Field::new(1),
+            raster_tier: Field::new(tile_ink_cache::DensityTier(1)),
             input_started: Field::new(0),
             draw_latency: Field::new(None),
             after_draw: Field::new(None),
@@ -3412,7 +3531,7 @@ impl CanvasView {
         let mask = jx::mask::DRAW | jx::mask::TOUCH | jx::mask::DETACHED | jx::mask::SIZE;
         let view = jx::native_view(context, mask, move |method, args| owner.dispatch(method, args))?;
         let _ = canvas.view.set(WeakObj::new(&view));
-        ui::set_background_color(&view, COLOR_WHITE)?;
+        ui::set_background_color(&view, notemaker_core::style::ArgbColor(COLOR_WHITE))?;
         let weak = Arc::downgrade(&canvas);
         let listener = jx::scale_listener(move |method, args| {
             if method == "onScale(ScaleGestureDetector)" {
@@ -3438,17 +3557,18 @@ impl CanvasView {
         Ok(crate::ui::invalidate(&self.view())?)
     }
     /// `invalidate(l, t, r, b)`.
-    pub fn invalidate_rect(&self, l: i32, t: i32, r: i32, b: i32) -> AppResult<()> {
+    pub fn invalidate_rect(&self, dirty: ScreenRect) -> AppResult<()> {
+        let ScreenRect { left: l, top: t, right: r, bottom: b } = dirty;
         jcall!(self.view(), "android/view/View", "invalidate", "(IIII)V", l, t, r, b)?;
         Ok(())
     }
     /// `getWidth()` (tracked through `onSizeChanged`).
-    pub fn width(&self) -> i32 {
-        self.view_width.load(Ordering::SeqCst)
+    pub fn width(&self) -> ui::Px {
+        ui::Px(self.view_width.load(Ordering::SeqCst))
     }
     /// `getHeight()` (tracked through `onSizeChanged`).
-    pub fn height(&self) -> i32 {
-        self.view_height.load(Ordering::SeqCst)
+    pub fn height(&self) -> ui::Px {
+        ui::Px(self.view_height.load(Ordering::SeqCst))
     }
     /// `points = value` (also resets the parallel `point_values` cache).
     pub fn set_points(&self, value: Option<JSONArray>) {
@@ -3468,7 +3588,7 @@ impl CanvasView {
 
     /// Native view callback dispatch (`onDraw(Canvas)`, `onTouchEvent(MotionEvent)`,
     /// `onDetachedFromWindow()`, `onSizeChanged(int,int,int,int)`); args[0] is the view itself.
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         match method {
             "onDraw(Canvas)" => {
                 let canvas = args.get(1).and_then(jx::global).ok_or_else(|| JavaError::new("java.lang.NullPointerException", "canvas"))?;
@@ -3509,7 +3629,7 @@ impl CanvasView {
     }
 
     /// `boolean pendingErase(String kind, String id, String layer)`.
-    pub fn pending_erase(&self, kind: &str, id: &str, layer: &str) -> bool {
+    fn pending_erase(&self, kind: &str, id: &str, layer: &str) -> bool {
         self.erase_previews.with(|p| {
             if p.is_empty() {
                 return false;
@@ -3520,19 +3640,25 @@ impl CanvasView {
         })
     }
     /// `float scale()`.
-    pub fn scale(&self) -> f32 {
-        fmin(self.width() as f32 / 1000.0, self.height() as f32 / 1400.0)
+    pub fn scale(&self) -> ViewScale {
+        ViewScale(fmin(self.width().0 as f32 / 1000.0, self.height().0 as f32 / 1400.0))
     }
     /// `float x(float x)`.
-    pub fn x(&self, x: f32) -> f32 {
-        (x - self.offset_x.get()) / (self.scale() * self.zoom.get())
+    fn x(&self, x: f32) -> f32 {
+        (x - self.offset_x.get()) / (self.scale().0 * self.zoom.get())
     }
     /// `float y(float y)`.
-    pub fn y(&self, y: f32) -> f32 {
-        (y - self.offset_y.get()) / (self.scale() * self.zoom.get())
+    fn y(&self, y: f32) -> f32 {
+        (y - self.offset_y.get()) / (self.scale().0 * self.zoom.get())
+    }
+    /// The document point under a view pixel (`x(sx)`, `y(sy)`) at the
+    /// current pan and zoom.
+    pub fn to_document(&self, p: ScreenPoint) -> DocPointF {
+        DocPointF { x: self.x(p.x), y: self.y(p.y) }
     }
     /// `boolean visible(String layer)`.
-    pub fn visible(&self, layer: &str) -> bool {
+    pub fn visible(&self, layer: &ids::LayerId) -> bool {
+        let layer: &str = layer;
         let app = self.app();
         let Some(l) = app.layers.with(|l| l.get(layer).cloned()) else { return false };
         !app.model.with(|m| is_false_in(&m.layer_active, layer)) && (l.opt_boolean("force") || !app.hidden.with(|h| h.contains(layer)))
@@ -3543,10 +3669,10 @@ impl CanvasView {
         draw_with_png(c, |png| render::draw_stroke(&map, png))
     }
     /// `void drawInfiniteTemplate(Canvas c, Map<String,Object> guide)`.
-    pub fn draw_infinite_template(&self, c: &Obj, guide: &Map) -> AppResult<()> {
+    fn draw_infinite_template(&self, c: &Obj, guide: &Map) -> AppResult<()> {
         let pattern = json::java_string(guide.get("template"));
         let mut spacing = json::as_double(guide.get("spacing"))?;
-        let unit = self.scale() * self.zoom.get();
+        let unit = self.scale().0 * self.zoom.get();
         if unit <= 0.0 {
             return Ok(());
         }
@@ -3605,16 +3731,16 @@ impl CanvasView {
     /// `Map<String,Object> tileCacheMetrics()`.
     pub fn tile_cache_metrics(&self) -> Map {
         let (mut m, clears, resident) = self.tile_ink.with(|t| (t.metrics(), t.cache_clears(), t.resident_page_count()));
-        m.insert("densityTier".into(), Value::from(self.raster_tier.get()));
+        m.insert("densityTier".into(), Value::from(self.raster_tier.get().0));
         m.insert("reusedTileRepaints".into(), Value::from(tile_ink_cache::REUSED_TILE_REPAINTS.load(Ordering::SeqCst)));
-        m.insert("cacheClears".into(), Value::from(clears));
-        m.insert("residentPages".into(), Value::from(resident));
+        m.insert("cacheClears".into(), Value::from(clears.0));
+        m.insert("residentPages".into(), Value::from(resident.0));
         m
     }
     /// `void transform(Canvas c)`.
     pub fn transform(&self, c: &Obj) -> AppResult<()> {
         jcall!(c, "android/graphics/Canvas", "translate", "(FF)V", self.offset_x.get(), self.offset_y.get())?;
-        let s = self.scale() * self.zoom.get();
+        let s = self.scale().0 * self.zoom.get();
         jcall!(c, "android/graphics/Canvas", "scale", "(FF)V", s, s)?;
         if self.app().type_.get() != "infinite" {
             jcall!(c, "android/graphics/Canvas", "clipRect", "(IIII)Z", 0, 0, 1000, 1400)?;
@@ -3623,21 +3749,21 @@ impl CanvasView {
     }
     /// `RectF documentViewport()`.
     pub fn document_viewport(&self) -> RectF {
-        let (w, h) = (self.width() as f32, self.height() as f32);
-        let mut viewport = RectF::new(fmin(self.x(0.0), self.x(w)), fmin(self.y(0.0), self.y(h)), fmax(self.x(0.0), self.x(w)), fmax(self.y(0.0), self.y(h)));
+        let (w, h) = (self.width().0 as f32, self.height().0 as f32);
+        let mut viewport = RectF { left: fmin(self.x(0.0), self.x(w)), top: fmin(self.y(0.0), self.y(h)), right: fmax(self.x(0.0), self.x(w)), bottom: fmax(self.y(0.0), self.y(h)) };
         if self.app().type_.get() != "infinite" && !viewport.intersect(0.0, 0.0, 1000.0, 1400.0) {
             viewport.set_empty();
         }
         viewport
     }
     /// `void settledInk(Canvas c, String layer)`.
-    pub fn settled_ink(&self, c: &Obj, layer: &str) -> AppResult<()> {
+    fn settled_ink(&self, c: &Obj, layer: &str) -> AppResult<()> {
         let app = self.app();
         let model = app.model();
         let page = app.page.get();
         let trace = app.trace_cold_draw.get();
         let epoch = app.startup_epoch.get();
-        let mut visible: Vec<Arc<tile_ink_cache::Item>> = Vec::new();
+        let mut visible = tile_ink_cache::LayerItems::default();
         let mut preview_ids: Vec<String> = Vec::new();
         MainActivity::startup_mark(trace, "first_strokes_start", epoch);
         let current = self.current.get();
@@ -3648,12 +3774,12 @@ impl CanvasView {
                     let cached = match cached {
                         Some(c) => c,
                         None => {
-                            let c = Arc::new(tile_ink_cache::Item::new(key, stroke.clone())?);
+                            let c = Arc::new(tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(key), stroke.clone())?);
                             self.stroke_tile_items.with_mut(|m| m.insert(key.clone(), c.clone()));
                             c
                         }
                     };
-                    visible.push(cached);
+                    visible.0.push(cached);
                 }
             }
             Ok(())
@@ -3663,12 +3789,12 @@ impl CanvasView {
         // as committed ink. Switching to saved state must not change pixels.
         if layer == app.selected.get() && self.points.with(Option::is_some) {
             if let Some(current) = &current {
-                visible.push(Arc::new(tile_ink_cache::Item::with_picture(current, Arc::new(self.stroke_value()), false)?));
+                visible.0.push(Arc::new(tile_ink_cache::Item::with_picture(tile_ink_cache::TileItemId::from(current), Arc::new(self.stroke_value()), tile_ink_cache::PictureCache::Transient)?));
             }
         }
         let player = app.animation_player();
         for (key, o) in &model.objects {
-            if !same_str(o, "shape", "template") && !player.loaded(key) && same_str(o, "layer", layer) && json::as_int(o.get("page"))? == page && !is_false_in(&model.object_active, key) && !self.pending_erase("object", key, layer) {
+            if !same_str(o, "shape", "template") && !player.loaded(&ids::EntityId::from(key)) && same_str(o, "layer", layer) && json::as_int(o.get("page"))? == page && !is_false_in(&model.object_active, key) && !self.pending_erase("object", key, layer) {
                 let cached = self.object_tile_items.with(|m| m.get(key).cloned());
                 let linked = o.contains_key("from") || o.contains_key("to");
                 let same_source = self.object_tile_sources.with(|m| m.get(key).is_some_and(|s| Arc::ptr_eq(s, o)));
@@ -3677,7 +3803,7 @@ impl CanvasView {
                         if linked {
                             let geometry = DrawItem::new(&model, o.clone())?.geometry().clone();
                             if *cached.value != *geometry {
-                                let c = Arc::new(tile_ink_cache::Item::new(&format!("object:{key}"), geometry)?);
+                                let c = Arc::new(tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(format!("object:{key}")), geometry)?);
                                 self.object_tile_items.with_mut(|m| m.insert(key.clone(), c.clone()));
                                 c
                             } else {
@@ -3689,20 +3815,20 @@ impl CanvasView {
                     }
                     _ => {
                         let geometry = DrawItem::new(&model, o.clone())?.geometry().clone();
-                        let c = Arc::new(tile_ink_cache::Item::new(&format!("object:{key}"), geometry)?);
+                        let c = Arc::new(tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(format!("object:{key}")), geometry)?);
                         self.object_tile_sources.with_mut(|m| m.insert(key.clone(), o.clone()));
                         self.object_tile_items.with_mut(|m| m.insert(key.clone(), c.clone()));
                         c
                     }
                 };
-                visible.push(cached);
+                visible.0.push(cached);
             }
         }
         let previews: Vec<(String, Entity)> = app.pending_object_previews.with(|p| p.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
         for (id, preview) in previews {
             if same_str(&preview, "layer", layer) && json::as_int(preview.get("page"))? == page && !model.objects.contains_key(&id) {
                 let geometry = DrawItem::new(&model, preview.clone())?.geometry().clone();
-                visible.push(Arc::new(tile_ink_cache::Item::with_picture(&format!("object:{id}"), geometry, false)?));
+                visible.0.push(Arc::new(tile_ink_cache::Item::with_picture(tile_ink_cache::TileItemId::from(format!("object:{id}")), geometry, tile_ink_cache::PictureCache::Transient)?));
                 preview_ids.push(id);
             }
         }
@@ -3719,8 +3845,8 @@ impl CanvasView {
         match self.monolithic_tile_probe.get() {
             Some(probe) => self.tile_ink.with_mut(|t| t.draw_monolithic(c, &visible, &probe, tier, &mut renderer))?,
             None => {
-                let cull = self.cull_tile_items.get();
-                self.tile_ink.with_mut(|t| t.draw(c, page, layer, &visible, &viewport, tier, cull, &mut renderer))?
+                let cull = if self.cull_tile_items.get() { tile_ink_cache::ItemCulling::Cull } else { tile_ink_cache::ItemCulling::All };
+                self.tile_ink.with_mut(|t| t.draw(c, ids::PageNumber(page), &ids::LayerId::from(layer), &visible, &viewport, tier, cull, &mut renderer))?
             }
         }
         jcall!(c, "android/graphics/Canvas", "restore", "()V")?;
@@ -3746,7 +3872,7 @@ impl CanvasView {
         }
         let erase_timings = app.erase_timings.get();
         trace_put(&erase_timings, "draw_start");
-        if self.width() == 0 || self.height() == 0 {
+        if self.width().0 == 0 || self.height().0 == 0 {
             return Ok(());
         }
         let player = app.animation_player();
@@ -3789,7 +3915,7 @@ impl CanvasView {
             self.object_tile_items.with_mut(|m| m.retain(|k, _| model.objects.contains_key(k)));
             self.pruned_generation.set(generation);
         }
-        self.raster_tier.set(TileInkCache::density_tier(self.scale() * self.zoom.get()));
+        self.raster_tier.set(TileInkCache::density_tier(ViewScale(self.scale().0 * self.zoom.get())));
         MainActivity::startup_mark(trace, "first_tile_config", epoch);
         let infinite = type_ == "infinite";
         jcall!(c, "android/graphics/Canvas", "save", "()I")?;
@@ -3805,7 +3931,7 @@ impl CanvasView {
         MainActivity::startup_mark(trace, "first_page_border", epoch);
         let previewing = {
             let previews: Vec<Value> = app.transform_previews.with(|p| p.values().cloned().collect());
-            previews.iter().any(|raw| matches!(expires(raw), Ok(e) if e > jx::current_time_millis()))
+            previews.iter().any(|raw| matches!(expires(raw), Ok(e) if e > jx::current_time_millis().0))
         };
         let preview_viewport = if previewing { Some(self.document_viewport()) } else { None };
         let probe = self.monolithic_tile_probe.get();
@@ -3824,7 +3950,7 @@ impl CanvasView {
         let selected = app.selected.get();
         let layer_ids: Vec<String> = app.layers.with(|l| l.keys().cloned().collect());
         for layer in &layer_ids {
-            if !self.visible(layer) {
+            if !self.visible(&ids::LayerId::from(layer)) {
                 continue;
             }
             MainActivity::startup_mark(trace, "first_layer_visible", epoch);
@@ -3850,7 +3976,7 @@ impl CanvasView {
                     if current.as_deref() != Some(key.as_str()) && *layer == s.opt_string("layer") && s.opt_int("page") == page && active.get(key) != Some(&false) && !self.pending_erase("stroke", key, layer) && !(previewing && self.previewed("stroke", key)) {
                         if let (true, Some(pv)) = (previewing, &preview_viewport) {
                             let item = parse_map(&s.to_string())?;
-                            if !RectF::intersects(pv, &tile_ink_cache::Item::new(key, Arc::new(item))?.bounds) {
+                            if !RectF::intersects(pv, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(key), Arc::new(item))?.bounds) {
                                 continue;
                             }
                         }
@@ -3873,10 +3999,10 @@ impl CanvasView {
             }
             if !use_ink_cache || previewing {
                 for (key, o) in &model.objects {
-                    if same_str(o, "layer", layer) && !player.loaded(key) && json::as_int(o.get("page"))? == page && !is_false_in(&model.object_active, key) && !self.pending_erase("object", key, layer) && !(previewing && self.previewed("object", key)) {
+                    if same_str(o, "layer", layer) && !player.loaded(&ids::EntityId::from(key)) && json::as_int(o.get("page"))? == page && !is_false_in(&model.object_active, key) && !self.pending_erase("object", key, layer) && !(previewing && self.previewed("object", key)) {
                         if let (true, Some(pv)) = (previewing, &preview_viewport) {
                             let geometry = DrawItem::new(&model, o.clone())?.geometry().clone();
-                            if !RectF::intersects(pv, &tile_ink_cache::Item::new(&format!("object:{key}"), geometry)?.bounds) {
+                            if !RectF::intersects(pv, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(format!("object:{key}")), geometry)?.bounds) {
                                 continue;
                             }
                         }
@@ -3891,7 +4017,7 @@ impl CanvasView {
                     }
                 }
             }
-            player.draw(c, layer)?;
+            player.draw(c, &ids::LayerId::from(layer))?;
             jcall!(c, "android/graphics/Canvas", "restore", "()V")?;
             jcall!(c, "android/graphics/Canvas", "restore", "()V")?;
         }
@@ -3930,7 +4056,7 @@ impl CanvasView {
         let input_started = self.input_started.get();
         if input_started != 0 {
             if let Some(latency) = self.draw_latency.get() {
-                latency(jx::nano_time() - input_started);
+                latency(jx::nano_time().0 - input_started);
             }
             self.input_started.set(0);
         }
@@ -3975,7 +4101,7 @@ impl CanvasView {
             let ms = |v: &std::sync::atomic::AtomicI64| jfmt::double(v.load(Ordering::SeqCst) as f64 / 1e6);
             let shape = tile_ink_cache::TRACED_OTHER_MAX_SHAPE.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "null".into());
             jx::log::i(
-                "NoteMakerStartup",
+                crate::jx::log::STARTUP,
                 &format!(
                     "tile_compile_ms={} tile_play_ms={} tile_other_ms={} other_max_ms={} other_shape={} compiles={} plays={} other_renders={}",
                     ms(&tile_ink_cache::TRACED_COMPILE_NS),
@@ -4023,7 +4149,7 @@ impl CanvasView {
         o
     }
     /// `Map<String,Object> strokeValue()`.
-    pub fn stroke_value(&self) -> Map {
+    fn stroke_value(&self) -> Map {
         let app = self.app();
         let coordinates = match self.points.get() {
             None => Vec::new(),
@@ -4049,8 +4175,8 @@ impl CanvasView {
         }
     }
     /// `boolean previewed(String kind, String id)`.
-    pub fn previewed(&self, kind: &str, id: &str) -> bool {
-        let now = jx::current_time_millis();
+    fn previewed(&self, kind: &str, id: &str) -> bool {
+        let now = jx::current_time_millis().0;
         let previews: Vec<Value> = self.app().transform_previews.with(|p| p.values().cloned().collect());
         for raw in previews {
             let hit = (|| -> AppResult<bool> {
@@ -4073,7 +4199,7 @@ impl CanvasView {
         false
     }
     /// `RectF inversePreviewViewport(RectF viewport, double px, double py, double dx, double dy, double factor, double rotation, boolean flipX, boolean flipY)`.
-    pub fn inverse_preview_viewport(&self, viewport: &RectF, px: f64, py: f64, dx: f64, dy: f64, factor: f64, rotation: f64, flip_x: bool, flip_y: bool) -> RectF {
+    fn inverse_preview_viewport(&self, viewport: &RectF, px: f64, py: f64, dx: f64, dy: f64, factor: f64, rotation: f64, flip_x: bool, flip_y: bool) -> RectF {
         let a = jmath::to_radians(rotation);
         let (cos, sin) = (jmath::cos(a), jmath::sin(a));
         let sx = factor * if flip_x { -1.0 } else { 1.0 };
@@ -4090,12 +4216,12 @@ impl CanvasView {
             t = jmath::min(t, ry);
             b = jmath::max(b, ry);
         }
-        RectF::new(l as f32, t as f32, r as f32, b as f32)
+        RectF { left: l as f32, top: t as f32, right: r as f32, bottom: b as f32 }
     }
     /// `void drawTransformPreviews(Canvas c)`.
     pub fn draw_transform_previews(&self, c: &Obj) -> AppResult<()> {
         let app = self.app();
-        let now = jx::current_time_millis();
+        let now = jx::current_time_millis().0;
         let viewport = self.document_viewport();
         if viewport.is_empty() {
             return Ok(());
@@ -4176,14 +4302,14 @@ impl CanvasView {
                     if kind == "object" {
                         if let Some(o) = model.objects.get(&id) {
                             let geometry = DrawItem::new(&model, o.clone())?.geometry().clone();
-                            if RectF::intersects(&source_viewport, &tile_ink_cache::Item::new(&format!("object:{id}"), geometry)?.bounds) {
+                            if RectF::intersects(&source_viewport, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(format!("object:{id}")), geometry)?.bounds) {
                                 draw_with_png(c, |png| render::draw_object(&model, o, png))?;
                             }
                         }
                     } else if kind == "stroke" {
                         if let Some(s) = app.strokes.with(|s| s.get(&id).cloned()) {
                             let item = parse_map(&s.to_string())?;
-                            if RectF::intersects(&source_viewport, &tile_ink_cache::Item::new(&id, Arc::new(item))?.bounds) {
+                            if RectF::intersects(&source_viewport, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(&id), Arc::new(item))?.bounds) {
                                 self.draw_stroke(c, &s)?;
                             }
                         }
@@ -4251,7 +4377,7 @@ impl CanvasView {
         self.emit_final(false)
     }
     /// `void emit(boolean finalStroke)`.
-    pub fn emit_final(&self, final_stroke: bool) -> AppResult<()> {
+    fn emit_final(&self, final_stroke: bool) -> AppResult<()> {
         if self.points.with(|p| p.as_ref().is_some_and(|p| p.length() > 0)) {
             let app = self.app();
             let snapshot = self.stroke_value();
@@ -4260,13 +4386,14 @@ impl CanvasView {
             } else {
                 app.enqueue_with(&json_object(&snapshot), &snapshot)?;
             }
-            self.last_sent.set(jx::current_time_millis());
+            self.last_sent.set(jx::current_time_millis().0);
         }
         Ok(())
     }
     /// `void point(float sx, float sy, float pressure)`.
-    pub fn point(&self, sx: f32, sy: f32, pressure: f32) -> AppResult<()> {
-        let (dx, dy) = (self.x(sx), self.y(sy));
+    fn point(&self, touch: ScreenPoint, pressure: StylusPressure) -> AppResult<()> {
+        let DocPointF { x: dx, y: dy } = self.to_document(touch);
+        let pressure = pressure.0;
         if self.app().type_.get() != "infinite" && (dx < 0.0 || dy < 0.0 || dx > 1000.0 || dy > 1400.0) {
             return Ok(());
         }
@@ -4293,8 +4420,8 @@ impl CanvasView {
         Ok(())
     }
     /// `void erasePoint(float sx, float sy)`.
-    pub fn erase_point(&self, sx: f32, sy: f32) -> AppResult<()> {
-        let (dx, dy) = (self.x(sx), self.y(sy));
+    fn erase_point(&self, touch: ScreenPoint) -> AppResult<()> {
+        let DocPointF { x: dx, y: dy } = self.to_document(touch);
         if self.app().type_.get() == "infinite" || (dx >= 0.0 && dy >= 0.0 && dx <= 1000.0 && dy <= 1400.0) {
             let point = JSONArray::new();
             point.put(JV::Float(dx))?;
@@ -4304,14 +4431,15 @@ impl CanvasView {
         Ok(())
     }
     /// `void eraseAt(float sx, float sy)`.
-    pub fn erase_at(&self, sx: f32, sy: f32) -> AppResult<()> {
+    pub fn erase_at(&self, touch: ScreenPoint) -> AppResult<()> {
         let path = JSONArray::new();
         let point = JSONArray::new();
-        point.put(JV::Float(self.x(sx)))?;
-        point.put(JV::Float(self.y(sy)))?;
+        let at = self.to_document(touch);
+        point.put(JV::Float(at.x))?;
+        point.put(JV::Float(at.y))?;
         path.put(point)?;
         let app = self.app();
-        app.apply_erase("stroke", &app.selected.get(), app.page.get(), Some(&path), app.eraser_radius.get())
+        app.apply_erase(&EraserMode::from("stroke"), &ids::LayerId::from(app.selected.get()), ids::PageNumber(app.page.get()), Some(&path), geometry::Radius(app.eraser_radius.get() as f64))
     }
     /// `boolean scribble(JSONArray path)`.
     pub fn scribble(&self, path: Option<&JSONArray>) -> bool {
@@ -4359,7 +4487,7 @@ impl CanvasView {
             return Ok(true);
         }
         if self.input_started.get() == 0 {
-            self.input_started.set(jx::nano_time());
+            self.input_started.set(jx::nano_time().0);
         }
         let _sync = app.lock.enter();
         let scaling = self.scaling.get().ok_or_else(npe)?;
@@ -4367,11 +4495,12 @@ impl CanvasView {
         let action = jcall!(event, "android/view/MotionEvent", "getActionMasked", "()I")?.int();
         let sx = jcall!(event, "android/view/MotionEvent", "getX", "()F")?.float();
         let sy = jcall!(event, "android/view/MotionEvent", "getY", "()F")?.float();
+        let touch = ScreenPoint { x: sx, y: sy };
         let pointer_count = jcall!(event, "android/view/MotionEvent", "getPointerCount", "()I")?.int();
         let editor = app.editor();
         if pointer_count > 1 {
             if editor.selected_tool() == "interact" {
-                app.animation_player().touch(MOTIONEVENT_ACTION_CANCEL, self.x(sx), self.y(sy))?;
+                app.animation_player().touch(MotionAction(MOTIONEVENT_ACTION_CANCEL), DocPointF { x: self.x(sx), y: self.y(sy) })?;
             }
             if action == MOTIONEVENT_ACTION_POINTER_DOWN {
                 self.last_gesture_x.set(self.centroid_x(event)?);
@@ -4402,12 +4531,12 @@ impl CanvasView {
         let stylus = tool_type == MOTIONEVENT_TOOL_TYPE_STYLUS || tool_type == MOTIONEVENT_TOOL_TYPE_ERASER;
         if editor.selected_tool() == "interact" {
             self.input_started.set(0);
-            return app.animation_player().touch(action, self.x(sx), self.y(sy));
+            return app.animation_player().touch(MotionAction(action), DocPointF { x: self.x(sx), y: self.y(sy) });
         }
         let history_size = || -> AppResult<i32> { Ok(jcall!(event, "android/view/MotionEvent", "getHistorySize", "()I")?.int()) };
         let historical_x = |i: i32| -> AppResult<f32> { Ok(jcall!(event, "android/view/MotionEvent", "getHistoricalX", "(I)F", i)?.float()) };
         let historical_y = |i: i32| -> AppResult<f32> { Ok(jcall!(event, "android/view/MotionEvent", "getHistoricalY", "(I)F", i)?.float()) };
-        let pressure = || -> AppResult<f32> { Ok(jcall!(event, "android/view/MotionEvent", "getPressure", "()F")?.float()) };
+        let pressure = || -> AppResult<StylusPressure> { Ok(StylusPressure(jcall!(event, "android/view/MotionEvent", "getPressure", "()F")?.float())) };
         let infinite = app.type_.get() == "infinite";
         if app.pan.get() {
             if action == MOTIONEVENT_ACTION_DOWN {
@@ -4425,13 +4554,13 @@ impl CanvasView {
         }
         if action == MOTIONEVENT_ACTION_DOWN {
             let selected = app.selected.get();
-            if !self.visible(&selected) {
-                app.toast("Show the selected layer to draw on it", 0)?;
+            if !self.visible(&ids::LayerId::from(&selected)) {
+                app.toast("Show the selected layer to draw on it", TOAST_LENGTH_SHORT)?;
                 return Ok(true);
             }
             if app.fill_tap_mode.get() {
                 app.fill_tap_mode.set(false);
-                app.fill_at(self.x(sx), self.y(sy))?;
+                app.fill_at(self.to_document(touch))?;
                 self.invalidate()?;
                 return Ok(true);
             }
@@ -4445,8 +4574,8 @@ impl CanvasView {
                     self.lasso_end_y.set(y);
                     self.lasso_path.set(vec![[x, y]]);
                 } else {
-                    if let Some(hit) = app.selected_entity_at(self.x(sx), self.y(sy))? {
-                        app.deselect_entity(&json::java_string(hit.get("kind")), &json::java_string(hit.get("id")))?;
+                    if let Some(hit) = app.selected_entity_at(self.to_document(touch))? {
+                        app.deselect_entity(&ids::EntityKind::from(json::java_string(hit.get("kind"))), &ids::EntityId::from(json::java_string(hit.get("id"))))?;
                         return Ok(true);
                     }
                     self.transforming.set(true);
@@ -4475,12 +4604,12 @@ impl CanvasView {
             }
             if app.erase.get() {
                 self.eraser_points.set(Some(JSONArray::new()));
-                self.erase_point(sx, sy)?;
+                self.erase_point(touch)?;
                 self.invalidate()?;
             } else {
-                self.current.set(Some(MainActivity::id()));
+                self.current.set(Some(String::from(MainActivity::id())));
                 self.set_points(Some(JSONArray::new()));
-                self.point(sx, sy, pressure()?)?;
+                self.point(touch, pressure()?)?;
                 if !app.scribble_to_erase.get() {
                     self.emit()?;
                 }
@@ -4502,9 +4631,9 @@ impl CanvasView {
             if self.transforming.get() {
                 self.transform_delta_x.set(self.x(sx) - self.transform_start_x.get());
                 self.transform_delta_y.set(self.y(sy) - self.transform_start_y.get());
-                if jx::current_time_millis() - self.last_preview_at.get() > 100 {
-                    app.preview_selection(1.0, self.transform_delta_x.get() as f64, self.transform_delta_y.get() as f64)?;
-                    self.last_preview_at.set(jx::current_time_millis());
+                if jx::current_time_millis().0 - self.last_preview_at.get() > 100 {
+                    app.preview_selection(SelectionTransform { scale: 1.0, dx: self.transform_delta_x.get() as f64, dy: self.transform_delta_y.get() as f64 })?;
+                    self.last_preview_at.set(jx::current_time_millis().0);
                 }
                 self.invalidate()?;
                 return Ok(true);
@@ -4521,17 +4650,17 @@ impl CanvasView {
             }
             if app.erase.get() && self.eraser_points.with(Option::is_some) {
                 for i in 0..history_size()? {
-                    self.erase_point(historical_x(i)?, historical_y(i)?)?;
+                    self.erase_point(ScreenPoint { x: historical_x(i)?, y: historical_y(i)? })?;
                 }
-                self.erase_point(sx, sy)?;
+                self.erase_point(touch)?;
                 self.invalidate()?;
             } else if self.points.with(Option::is_some) {
                 for i in 0..history_size()? {
                     let p = jcall!(event, "android/view/MotionEvent", "getHistoricalPressure", "(I)F", i)?.float();
-                    self.point(historical_x(i)?, historical_y(i)?, p)?;
+                    self.point(ScreenPoint { x: historical_x(i)?, y: historical_y(i)? }, StylusPressure(p))?;
                 }
-                self.point(sx, sy, pressure()?)?;
-                if !app.scribble_to_erase.get() && jx::current_time_millis() - self.last_sent.get() > 100 {
+                self.point(touch, pressure()?)?;
+                if !app.scribble_to_erase.get() && jx::current_time_millis().0 - self.last_sent.get() > 100 {
                     self.emit()?;
                 }
                 self.invalidate()?;
@@ -4552,7 +4681,7 @@ impl CanvasView {
             } else if self.eraser_points.with(Option::is_some) {
                 self.eraser_points.set(None);
             } else if self.points.with(Option::is_some) && !app.scribble_to_erase.get() {
-                self.point(sx, sy, pressure()?)?;
+                self.point(touch, pressure()?)?;
                 let current = self.current.get().unwrap_or_else(|| "null".into());
                 app.undo.with_mut(|u| u.push(current));
                 app.redo.with_mut(Vec::clear);
@@ -4597,7 +4726,7 @@ impl CanvasView {
                         app.select_within(lx, ly, rx, ry)?;
                     }
                 } else {
-                    app.select_at(rx, ry)?;
+                    app.select_at(DocPointF { x: rx, y: ry })?;
                 }
                 self.invalidate()?;
                 return Ok(true);
@@ -4608,7 +4737,7 @@ impl CanvasView {
                 self.transforming.set(false);
                 let (dx, dy) = (self.transform_delta_x.get(), self.transform_delta_y.get());
                 if dx.abs() + dy.abs() > 1.0 {
-                    app.transform_selection(1.0, dx as f64, dy as f64, true)?;
+                    app.transform_selection(SelectionTransform { scale: 1.0, dx: dx as f64, dy: dy as f64 }, TransformCommit::Commit)?;
                 } else {
                     app.cancel_transform_preview()?;
                 }
@@ -4626,7 +4755,7 @@ impl CanvasView {
                 let (sx0, sy0, ex, ey) = (self.shape_start_x.get(), self.shape_start_y.get(), self.shape_end_x.get(), self.shape_end_y.get());
                 if shape == "text" {
                     if let Some(text) = app.pending_text.get() {
-                        app.place_text(Some(&text), app.pending_text_size.get(), sx0, sy0)?;
+                        app.place_text(Some(&notemaker_core::style::TextContent::from(text)), notemaker_core::style::FontSize(app.pending_text_size.get() as f64), DocPointF { x: sx0, y: sy0 })?;
                         app.pending_text.set(None);
                     }
                     app.drawing_shape.set(None);
@@ -4657,17 +4786,17 @@ impl CanvasView {
                 return Ok(true);
             }
             if self.eraser_points.with(Option::is_some) {
-                self.erase_point(sx, sy)?;
+                self.erase_point(touch)?;
                 let path = self.eraser_points.take();
                 let mode = app.eraser_mode.get();
                 if mode != "page" {
-                    app.apply_erase(&mode, &app.selected.get(), app.page.get(), path.as_ref(), app.eraser_radius.get())?;
+                    app.apply_erase(&EraserMode::from(mode), &ids::LayerId::from(app.selected.get()), ids::PageNumber(app.page.get()), path.as_ref(), geometry::Radius(app.eraser_radius.get() as f64))?;
                 }
             } else if self.points.with(Option::is_some) {
-                self.point(sx, sy, pressure()?)?;
+                self.point(touch, pressure()?)?;
                 let points = self.points.get();
                 if app.scribble_to_erase.get() && self.scribble(points.as_ref()) {
-                    app.apply_erase("area", &app.selected.get(), app.page.get(), points.as_ref(), app.eraser_radius.get())?;
+                    app.apply_erase(&EraserMode::from("area"), &ids::LayerId::from(app.selected.get()), ids::PageNumber(app.page.get()), points.as_ref(), geometry::Radius(app.eraser_radius.get() as f64))?;
                 } else {
                     let current = self.current.get().unwrap_or_else(|| "null".into());
                     app.undo.with_mut(|u| u.push(current));
@@ -4685,7 +4814,7 @@ impl CanvasView {
         Ok(true)
     }
     /// `float centroidX(MotionEvent e)`.
-    pub fn centroid_x(&self, e: &Obj) -> AppResult<f32> {
+    fn centroid_x(&self, e: &Obj) -> AppResult<f32> {
         let count = jcall!(e, "android/view/MotionEvent", "getPointerCount", "()I")?.int();
         let mut value = 0.0f32;
         for i in 0..count {
@@ -4694,522 +4823,13 @@ impl CanvasView {
         Ok(value / count as f32)
     }
     /// `float centroidY(MotionEvent e)`.
-    pub fn centroid_y(&self, e: &Obj) -> AppResult<f32> {
+    fn centroid_y(&self, e: &Obj) -> AppResult<f32> {
         let count = jcall!(e, "android/view/MotionEvent", "getPointerCount", "()I")?.int();
         let mut value = 0.0f32;
         for i in 0..count {
             value += jcall!(e, "android/view/MotionEvent", "getY", "(I)F", i)?.float();
         }
         Ok(value / count as f32)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// java.net.URI (OpenJDK `URI.Parser`), only the parts the server-address
-// helpers read: scheme, raw authority/user info/host/port/path/query/fragment.
-
-mod uri {
-    /// The components of a parsed `java.net.URI` (`null` → `None`).
-    #[derive(Debug, Default, Clone, PartialEq)]
-    pub struct Uri {
-        pub scheme: Option<String>,
-        pub authority: Option<String>,
-        pub user_info: Option<String>,
-        pub host: Option<String>,
-        /// `getPort()`: -1 when undefined.
-        pub port: i32,
-        pub path: Option<String>,
-        pub query: Option<String>,
-        pub fragment: Option<String>,
-    }
-
-    /// `URISyntaxException` (the message is not used by the callers).
-    #[derive(Debug)]
-    pub struct SyntaxError;
-    type R<T> = Result<T, SyntaxError>;
-
-    fn is_alpha(c: char) -> bool {
-        c.is_ascii_alphabetic()
-    }
-    fn is_digit(c: char) -> bool {
-        c.is_ascii_digit()
-    }
-    fn is_alphanum(c: char) -> bool {
-        c.is_ascii_alphanumeric()
-    }
-    fn is_hex(c: char) -> bool {
-        c.is_ascii_hexdigit()
-    }
-    fn is_mark(c: char) -> bool {
-        "-_.!~*'()".contains(c)
-    }
-    fn is_unreserved(c: char) -> bool {
-        is_alphanum(c) || is_mark(c)
-    }
-    fn is_reserved(c: char) -> bool {
-        ";/?:@&=+$,[]".contains(c)
-    }
-    fn is_uric(c: char) -> bool {
-        is_reserved(c) || is_unreserved(c)
-    }
-    fn is_pchar(c: char) -> bool {
-        is_unreserved(c) || ":@&=+$,".contains(c)
-    }
-    fn is_path(c: char) -> bool {
-        is_pchar(c) || ";/".contains(c)
-    }
-    fn is_userinfo(c: char) -> bool {
-        is_unreserved(c) || ";:&=+$,".contains(c)
-    }
-    fn is_reg_name(c: char) -> bool {
-        is_unreserved(c) || "$,;:@&=+".contains(c)
-    }
-    fn is_server(c: char) -> bool {
-        is_userinfo(c) || is_alphanum(c) || c == '-' || ".:@[]".contains(c)
-    }
-    fn is_server_percent(c: char) -> bool {
-        is_server(c) || c == '%'
-    }
-    fn is_scheme(c: char) -> bool {
-        is_alpha(c) || is_digit(c) || "+-.".contains(c)
-    }
-    fn is_scope_id(c: char) -> bool {
-        is_alphanum(c) || "_.".contains(c)
-    }
-    fn is_digit_or_dot(c: char) -> bool {
-        is_digit(c) || c == '.'
-    }
-    fn is_alphanum_dash(c: char) -> bool {
-        is_alphanum(c) || c == '-'
-    }
-
-    struct Parser {
-        input: Vec<char>,
-        uri: Uri,
-        ipv6_byte_count: i32,
-    }
-
-    impl Parser {
-        fn sub(&self, start: usize, end: usize) -> String {
-            self.input[start..end].iter().collect()
-        }
-        fn at(&self, start: usize, end: usize, c: char) -> bool {
-            start < end && self.input[start] == c
-        }
-        fn at_str(&self, start: usize, end: usize, s: &str) -> bool {
-            let s: Vec<char> = s.chars().collect();
-            start + s.len() <= end && self.input[start..start + s.len()] == s[..]
-        }
-        /// `scan(start, end, char c)`.
-        fn scan_char(&self, start: usize, end: usize, c: char) -> usize {
-            if start < end && self.input[start] == c {
-                start + 1
-            } else {
-                start
-            }
-        }
-        /// `scan(start, end, err, stop)`: `None` when an `err` char comes first.
-        fn scan_stop(&self, start: usize, end: usize, err: &str, stop: &str) -> Option<usize> {
-            let mut p = start;
-            while p < end {
-                let c = self.input[p];
-                if err.contains(c) {
-                    return None;
-                }
-                if stop.contains(c) {
-                    break;
-                }
-                p += 1;
-            }
-            Some(p)
-        }
-        /// `scanEscape(start, n, first)`.
-        fn scan_escape(&self, start: usize, n: usize, c: char) -> R<usize> {
-            if c == '%' {
-                if start + 3 <= n && is_hex(self.input[start + 1]) && is_hex(self.input[start + 2]) {
-                    return Ok(start + 3);
-                }
-                return Err(SyntaxError);
-            }
-            let u = c as u32;
-            // Visible non-US-ASCII: not Character.isSpaceChar, not isISOControl.
-            if u > 128 && !c.is_whitespace() && !(0x7f..=0x9f).contains(&u) {
-                return Ok(start + 1);
-            }
-            Ok(start)
-        }
-        /// `scan(start, n, lowMask, highMask)`; `escaped` = mask has `L_ESCAPED`.
-        fn scan(&self, start: usize, n: usize, matches: fn(char) -> bool, escaped: bool) -> R<usize> {
-            let mut p = start;
-            while p < n {
-                let c = self.input[p];
-                if (c as u32) < 128 && c != '\0' && matches(c) {
-                    p += 1;
-                    continue;
-                }
-                if escaped {
-                    let q = self.scan_escape(p, n, c)?;
-                    if q > p {
-                        p = q;
-                        continue;
-                    }
-                }
-                break;
-            }
-            Ok(p)
-        }
-        fn check_chars(&self, start: usize, end: usize, matches: fn(char) -> bool, escaped: bool) -> R<()> {
-            if self.scan(start, end, matches, escaped)? < end {
-                return Err(SyntaxError);
-            }
-            Ok(())
-        }
-
-        fn parse(&mut self) -> R<()> {
-            let n = self.input.len();
-            let p = self.scan_stop(0, n, "/?#", ":");
-            let mut p = match p {
-                Some(p) if self.at(p, n, ':') => {
-                    if p == 0 || !is_alpha(self.input[0]) {
-                        return Err(SyntaxError);
-                    }
-                    self.check_chars(1, p, is_scheme, false)?;
-                    self.uri.scheme = Some(self.sub(0, p));
-                    let p = p + 1;
-                    if self.at(p, n, '/') {
-                        self.parse_hierarchical(p, n)?
-                    } else {
-                        let q = self.scan_stop(p, n, "", "#").unwrap_or(n);
-                        if q == p {
-                            return Err(SyntaxError);
-                        }
-                        self.check_chars(p, q, is_uric, true)?;
-                        q
-                    }
-                }
-                _ => self.parse_hierarchical(0, n)?,
-            };
-            if self.at(p, n, '#') {
-                self.check_chars(p + 1, n, is_uric, true)?;
-                self.uri.fragment = Some(self.sub(p + 1, n));
-                p = n;
-            }
-            if p < n {
-                return Err(SyntaxError);
-            }
-            Ok(())
-        }
-
-        fn parse_hierarchical(&mut self, start: usize, n: usize) -> R<usize> {
-            let mut p = start;
-            if self.at(p, n, '/') && self.at(p + 1, n, '/') {
-                p += 2;
-                let q = self.scan_stop(p, n, "", "/?#").unwrap_or(n);
-                if q > p {
-                    p = self.parse_authority(p, q)?;
-                } else if q >= n {
-                    return Err(SyntaxError);
-                }
-            }
-            let q = self.scan_stop(p, n, "", "?#").unwrap_or(n);
-            self.check_chars(p, q, is_path, true)?;
-            self.uri.path = Some(self.sub(p, q));
-            p = q;
-            if self.at(p, n, '?') {
-                p += 1;
-                let q = self.scan_stop(p, n, "", "#").unwrap_or(n);
-                self.check_chars(p, q, is_uric, true)?;
-                self.uri.query = Some(self.sub(p, q));
-                p = q;
-            }
-            Ok(p)
-        }
-
-        fn parse_authority(&mut self, start: usize, n: usize) -> R<usize> {
-            let p = start;
-            let mut q = p;
-            // Java tests `scan(p, n, "]") > p`: true unless the authority starts with ']'.
-            let first_bracket = self.input[p..n].iter().position(|&c| c == ']').map_or(n, |i| p + i);
-            let server_chars = if first_bracket > p {
-                self.scan(p, n, is_server_percent, true)? == n
-            } else {
-                self.scan(p, n, is_server, true)? == n
-            };
-            let reg_chars = self.scan(p, n, is_reg_name, true)? == n;
-            if reg_chars && !server_chars {
-                self.uri.authority = Some(self.sub(p, n));
-                return Ok(n);
-            }
-            if server_chars {
-                match self.parse_server(p, n) {
-                    Ok(end) if end >= n => {
-                        q = end;
-                        self.uri.authority = Some(self.sub(p, n));
-                    }
-                    _ => {
-                        self.uri.user_info = None;
-                        self.uri.host = None;
-                        self.uri.port = -1;
-                        q = p;
-                    }
-                }
-            }
-            if q < n {
-                if reg_chars {
-                    self.uri.authority = Some(self.sub(p, n));
-                } else {
-                    return Err(SyntaxError);
-                }
-            }
-            Ok(n)
-        }
-
-        fn parse_server(&mut self, start: usize, n: usize) -> R<usize> {
-            let mut p = start;
-            if let Some(q) = self.scan_stop(p, n, "/?#", "@") {
-                if q >= p && self.at(q, n, '@') {
-                    self.check_chars(p, q, is_userinfo, true)?;
-                    self.uri.user_info = Some(self.sub(p, q));
-                    p = q + 1;
-                }
-            }
-            if self.at(p, n, '[') {
-                p += 1;
-                let q = self.scan_stop(p, n, "/?#", "]");
-                match q {
-                    Some(q) if q > p && self.at(q, n, ']') => {
-                        let r = self.scan_stop(p, q, "", "%").unwrap_or(q);
-                        if r > p && r < q {
-                            self.parse_ipv6_reference(p, r)?;
-                            if r + 1 == q {
-                                return Err(SyntaxError);
-                            }
-                            self.check_chars(r + 1, q, is_scope_id, false)?;
-                        } else {
-                            self.parse_ipv6_reference(p, q)?;
-                        }
-                        self.uri.host = Some(self.sub(p - 1, q + 1));
-                        p = q + 1;
-                    }
-                    _ => return Err(SyntaxError),
-                }
-            } else {
-                let q = self.parse_ipv4_address(p, n);
-                let q = match q {
-                    Some(q) if q > p => q,
-                    _ => self.parse_hostname(p, n)?,
-                };
-                p = q;
-            }
-            if self.at(p, n, ':') {
-                p += 1;
-                let q = self.scan_stop(p, n, "", "/").unwrap_or(n);
-                if q > p {
-                    self.check_chars(p, q, is_digit, false)?;
-                    let digits = self.sub(p, q);
-                    self.uri.port = digits.parse::<i32>().map_err(|_| SyntaxError)?;
-                    p = q;
-                }
-            }
-            if p < n {
-                return Err(SyntaxError);
-            }
-            Ok(p)
-        }
-
-        fn scan_byte(&self, start: usize, n: usize) -> R<usize> {
-            let q = self.scan(start, n, is_digit, false)?;
-            if q <= start {
-                return Ok(q);
-            }
-            match self.sub(start, q).parse::<i32>() {
-                Ok(v) if v > 255 => Ok(start),
-                Ok(_) => Ok(q),
-                Err(_) => Err(SyntaxError),
-            }
-        }
-
-        /// `scanIPv4Address(start, n, strict)`: `Ok(None)` is Java's `-1`.
-        fn scan_ipv4_address(&self, start: usize, n: usize, strict: bool) -> R<Option<usize>> {
-            let mut p = start;
-            let m = self.scan(p, n, is_digit_or_dot, false)?;
-            if m <= p || (strict && m != n) {
-                return Ok(None);
-            }
-            let mut steps = 0;
-            loop {
-                let q = if steps % 2 == 0 { self.scan_byte(p, m)? } else { self.scan_char(p, m, '.') };
-                if q <= p {
-                    break;
-                }
-                p = q;
-                steps += 1;
-                if steps == 7 {
-                    if q < m {
-                        break;
-                    }
-                    return Ok(Some(q));
-                }
-            }
-            Err(SyntaxError)
-        }
-
-        fn parse_ipv4_address(&mut self, start: usize, n: usize) -> Option<usize> {
-            let p = match self.scan_ipv4_address(start, n, false) {
-                Ok(Some(p)) => p,
-                _ => return None,
-            };
-            let p = if p > start && p < n && self.input[p] != ':' { return None } else { p };
-            if p > start {
-                self.uri.host = Some(self.sub(start, p));
-            }
-            Some(p)
-        }
-
-        fn parse_hostname(&mut self, start: usize, n: usize) -> R<usize> {
-            let mut p = start;
-            let mut l: Option<usize> = None;
-            loop {
-                let q = self.scan(p, n, is_alphanum, false)?;
-                if q <= p {
-                    break;
-                }
-                l = Some(p);
-                p = q;
-                let q = self.scan(p, n, is_alphanum_dash, false)?;
-                if q > p {
-                    if self.input[q - 1] == '-' {
-                        return Err(SyntaxError);
-                    }
-                    p = q;
-                }
-                let q = self.scan_char(p, n, '.');
-                if q <= p {
-                    break;
-                }
-                p = q;
-                if p >= n {
-                    break;
-                }
-            }
-            if p < n && !self.at(p, n, ':') {
-                return Err(SyntaxError);
-            }
-            let l = l.ok_or(SyntaxError)?;
-            if l > start && !is_alpha(self.input[l]) {
-                return Err(SyntaxError);
-            }
-            self.uri.host = Some(self.sub(start, p));
-            Ok(p)
-        }
-
-        fn parse_ipv6_reference(&mut self, start: usize, n: usize) -> R<usize> {
-            let mut p = start;
-            let mut compressed_zeros = false;
-            let q = self.scan_hex_seq(p, n)?;
-            if let Some(q) = q.filter(|&q| q > p) {
-                p = q;
-                if self.at_str(p, n, "::") {
-                    compressed_zeros = true;
-                    p = self.scan_hex_post(p + 2, n)?;
-                } else if self.at(p, n, ':') {
-                    p = self.take_ipv4_address(p + 1, n)?;
-                    self.ipv6_byte_count += 4;
-                }
-            } else if self.at_str(p, n, "::") {
-                compressed_zeros = true;
-                p = self.scan_hex_post(p + 2, n)?;
-            }
-            if p < n {
-                return Err(SyntaxError);
-            }
-            if self.ipv6_byte_count > 16 {
-                return Err(SyntaxError);
-            }
-            if !compressed_zeros && self.ipv6_byte_count < 16 {
-                return Err(SyntaxError);
-            }
-            if compressed_zeros && self.ipv6_byte_count == 16 {
-                return Err(SyntaxError);
-            }
-            Ok(p)
-        }
-
-        fn scan_hex_post(&mut self, start: usize, n: usize) -> R<usize> {
-            let mut p = start;
-            if p == n {
-                return Ok(p);
-            }
-            match self.scan_hex_seq(p, n)?.filter(|&q| q > p) {
-                Some(q) => {
-                    p = q;
-                    if self.at(p, n, ':') {
-                        p += 1;
-                        p = self.take_ipv4_address(p, n)?;
-                        self.ipv6_byte_count += 4;
-                    }
-                }
-                None => {
-                    p = self.take_ipv4_address(p, n)?;
-                    self.ipv6_byte_count += 4;
-                }
-            }
-            Ok(p)
-        }
-
-        /// `scanHexSeq`: `Ok(None)` is Java's `-1`.
-        fn scan_hex_seq(&mut self, start: usize, n: usize) -> R<Option<usize>> {
-            let mut p = start;
-            let q = self.scan(p, n, is_hex, false)?;
-            if q <= p {
-                return Ok(None);
-            }
-            if self.at(q, n, '.') {
-                return Ok(None);
-            }
-            if q > p + 4 {
-                return Err(SyntaxError);
-            }
-            self.ipv6_byte_count += 2;
-            p = q;
-            while p < n {
-                if !self.at(p, n, ':') {
-                    break;
-                }
-                if self.at(p + 1, n, ':') {
-                    break;
-                }
-                p += 1;
-                let q = self.scan(p, n, is_hex, false)?;
-                if q <= p {
-                    return Err(SyntaxError);
-                }
-                if self.at(q, n, '.') {
-                    p -= 1;
-                    break;
-                }
-                if q > p + 4 {
-                    return Err(SyntaxError);
-                }
-                self.ipv6_byte_count += 2;
-                p = q;
-            }
-            Ok(Some(p))
-        }
-
-        fn take_ipv4_address(&self, start: usize, n: usize) -> R<usize> {
-            match self.scan_ipv4_address(start, n, true)? {
-                Some(p) if p > start => Ok(p),
-                _ => Err(SyntaxError),
-            }
-        }
-    }
-
-    /// `new URI(input)`.
-    pub fn parse(input: &str) -> Result<Uri, SyntaxError> {
-        let mut parser = Parser { input: input.chars().collect(), uri: Uri { port: -1, ..Uri::default() }, ipv6_byte_count: 0 };
-        parser.parse()?;
-        Ok(parser.uri)
     }
 }
 

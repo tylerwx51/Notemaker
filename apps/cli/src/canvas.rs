@@ -6,7 +6,78 @@
 //! ([`RasterCanvas`](crate::raster::RasterCanvas)) and the Android app's JNI
 //! `android.graphics.Canvas` backend. Geometry is `f32`, as on Android.
 
+use notemaker_core::style::ArgbColor;
 use resvg::{tiny_skia, usvg};
+
+/// A point in canvas (local, pre-matrix) coordinates, `f32` as on Android.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CanvasPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A line from `start` to `end` in canvas coordinates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CanvasSegment {
+    pub start: CanvasPoint,
+    pub end: CanvasPoint,
+}
+
+/// A width and height in canvas units.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CanvasSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+/// A `Canvas.translate(dx, dy)` offset.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Translation {
+    pub dx: f32,
+    pub dy: f32,
+}
+
+/// `Canvas.scale(sx, sy)` factors.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScaleFactors {
+    pub sx: f32,
+    pub sy: f32,
+}
+
+/// A `Canvas.rotate` angle in degrees, clockwise in a y-down space.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rotation(pub f32);
+
+/// The save-stack depth `Canvas.save()` reports and `restoreToCount` takes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SaveCount(pub i32);
+
+/// The local → device matrix of a canvas (`getMatrix()`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CanvasMatrix(pub tiny_skia::Transform);
+
+/// Premultiplied RGBA pixels drawn by [`Canvas::draw_bitmap`].
+#[derive(Clone)]
+pub struct Bitmap(pub tiny_skia::Pixmap);
+
+/// A parsed SVG document drawn by [`Canvas::draw_svg`].
+pub struct SvgTree(pub usvg::Tree);
+
+/// A [`Path`] converted for tiny-skia: the path and its fill rule.
+#[derive(Clone, Debug)]
+pub struct SkiaPath {
+    pub path: tiny_skia::Path,
+    pub rule: tiny_skia::FillRule,
+}
+
+/// Maximum distance, in path units, between a curve and its flattened
+/// line segments (see [`Path::flatten`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlattenTolerance(pub f32);
+
+/// Flattened contours of a [`Path`], each implicitly closed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Contours(pub Vec<Vec<CanvasPoint>>);
 
 /// `Path.FillType` (only the two types the Java code used).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -48,23 +119,24 @@ impl Path {
     pub fn set_fill_type(&mut self, fill_type: FillType) {
         self.fill_type = fill_type;
     }
-    pub fn verbs(&self) -> &[Verb] {
-        &self.verbs
+    /// The verbs in order.
+    pub fn verbs(&self) -> impl ExactSizeIterator<Item = &Verb> + '_ {
+        self.verbs.iter()
     }
-    pub fn move_to(&mut self, x: f32, y: f32) {
-        self.verbs.push(Verb::Move(x, y));
+    pub fn move_to(&mut self, point: CanvasPoint) {
+        self.verbs.push(Verb::Move(point.x, point.y));
     }
-    pub fn line_to(&mut self, x: f32, y: f32) {
+    pub fn line_to(&mut self, point: CanvasPoint) {
         self.inject_move();
-        self.verbs.push(Verb::Line(x, y));
+        self.verbs.push(Verb::Line(point.x, point.y));
     }
-    pub fn quad_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32) {
+    pub fn quad_to(&mut self, control: CanvasPoint, end: CanvasPoint) {
         self.inject_move();
-        self.verbs.push(Verb::Quad(x1, y1, x2, y2));
+        self.verbs.push(Verb::Quad(control.x, control.y, end.x, end.y));
     }
-    pub fn cubic_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32) {
+    pub fn cubic_to(&mut self, control1: CanvasPoint, control2: CanvasPoint, end: CanvasPoint) {
         self.inject_move();
-        self.verbs.push(Verb::Cubic(x1, y1, x2, y2, x3, y3));
+        self.verbs.push(Verb::Cubic(control1.x, control1.y, control2.x, control2.y, end.x, end.y));
     }
     pub fn close(&mut self) {
         if !self.verbs.is_empty() && !matches!(self.verbs.last(), Some(Verb::Close)) {
@@ -128,7 +200,7 @@ impl Path {
     pub fn compute_bounds(&self) -> RectF {
         let mut b: Option<RectF> = None;
         let mut add = |x: f32, y: f32| match &mut b {
-            None => b = Some(RectF::new(x, y, x, y)),
+            None => b = Some(RectF { left: x, top: y, right: x, bottom: y }),
             Some(r) => {
                 r.left = r.left.min(x);
                 r.top = r.top.min(y);
@@ -154,7 +226,8 @@ impl Path {
         b.unwrap_or_default()
     }
     /// The same path transformed by `t`.
-    pub fn transform(&self, t: tiny_skia::Transform) -> Path {
+    pub fn transform(&self, t: CanvasMatrix) -> Path {
+        let t = t.0;
         let p = |x: f32, y: f32| {
             let mut pt = [tiny_skia::Point::from_xy(x, y)];
             t.map_points(&mut pt);
@@ -192,7 +265,7 @@ impl Path {
         }
     }
     /// tiny-skia path and fill rule; `None` for an empty path.
-    pub fn to_skia(&self) -> Option<(tiny_skia::Path, tiny_skia::FillRule)> {
+    pub fn to_skia(&self) -> Option<SkiaPath> {
         let mut b = tiny_skia::PathBuilder::new();
         for v in &self.verbs {
             match *v {
@@ -207,10 +280,16 @@ impl Path {
             FillType::Winding => tiny_skia::FillRule::Winding,
             FillType::EvenOdd => tiny_skia::FillRule::EvenOdd,
         };
-        b.finish().map(|p| (p, rule))
+        b.finish().map(|path| SkiaPath { path, rule })
     }
-    /// Path from a tiny-skia path (e.g. a stroker result).
-    pub fn from_skia(path: &tiny_skia::Path, fill_type: FillType) -> Path {
+    /// Path from a tiny-skia path (e.g. a stroker result); the fill rule
+    /// becomes the fill type.
+    pub fn from_skia(skia: &SkiaPath) -> Path {
+        let path = &skia.path;
+        let fill_type = match skia.rule {
+            tiny_skia::FillRule::Winding => FillType::Winding,
+            tiny_skia::FillRule::EvenOdd => FillType::EvenOdd,
+        };
         let mut out = Path {
             fill_type,
             verbs: Vec::new(),
@@ -232,7 +311,8 @@ impl Path {
     }
     /// Contours flattened to line segments (`tolerance` in path units), for
     /// boolean geometry. Each contour is implicitly closed.
-    pub fn flatten(&self, tolerance: f32) -> Vec<Vec<[f32; 2]>> {
+    pub fn flatten(&self, tolerance: FlattenTolerance) -> Contours {
+        let tolerance = tolerance.0;
         let mut out: Vec<Vec<[f32; 2]>> = Vec::new();
         let mut current: Vec<[f32; 2]> = Vec::new();
         let mut last = [0f32, 0f32];
@@ -299,7 +379,7 @@ impl Path {
         if current.len() > 1 {
             out.push(current);
         }
-        out
+        Contours(out.into_iter().map(|c| c.into_iter().map(|[x, y]| CanvasPoint { x, y }).collect()).collect())
     }
 }
 
@@ -313,14 +393,6 @@ pub struct RectF {
 }
 
 impl RectF {
-    pub fn new(left: f32, top: f32, right: f32, bottom: f32) -> RectF {
-        RectF {
-            left,
-            top,
-            right,
-            bottom,
-        }
-    }
     /// `isEmpty()`: `left >= right || top >= bottom`.
     pub fn is_empty(&self) -> bool {
         !(self.left < self.right && self.top < self.bottom)
@@ -375,8 +447,8 @@ pub enum Join {
 /// here: text is converted to glyph outlines by [`crate::typeface`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Paint {
-    /// ARGB, as `setColor(int)`.
-    pub color: i32,
+    /// As `setColor(int)`.
+    pub color: ArgbColor,
     pub style: Style,
     /// `0` is a hairline, as on Android.
     pub stroke_width: f32,
@@ -389,7 +461,7 @@ impl Default for Paint {
     /// `new Paint()`: black fill, hairline, butt cap, miter join, no AA.
     fn default() -> Paint {
         Paint {
-            color: 0xff00_0000u32 as i32,
+            color: ArgbColor::BLACK,
             style: Style::Fill,
             stroke_width: 0.0,
             cap: Cap::Butt,
@@ -414,34 +486,33 @@ impl Paint {
 /// local (pre-matrix) units.
 pub trait Canvas {
     /// `save()`: returns the save count before the push.
-    fn save(&mut self) -> i32;
+    fn save(&mut self) -> SaveCount;
     fn restore(&mut self);
-    fn restore_to_count(&mut self, count: i32);
-    fn translate(&mut self, dx: f32, dy: f32);
-    /// Degrees, clockwise in a y-down space.
-    fn rotate(&mut self, degrees: f32);
-    fn scale(&mut self, sx: f32, sy: f32);
+    fn restore_to_count(&mut self, count: SaveCount);
+    fn translate(&mut self, offset: Translation);
+    fn rotate(&mut self, degrees: Rotation);
+    fn scale(&mut self, factors: ScaleFactors);
     /// Current local → device matrix (`getMatrix()`).
-    fn matrix(&self) -> tiny_skia::Transform;
+    fn matrix(&self) -> CanvasMatrix;
     /// `clipRect(l,t,r,b)` (intersect).
-    fn clip_rect(&mut self, left: f32, top: f32, right: f32, bottom: f32);
+    fn clip_rect(&mut self, rect: RectF);
     /// `clipOutPath(path)` (difference).
     fn clip_out_path(&mut self, path: &Path);
     /// `drawColor(color)`: fill the clip with `color` (source-over).
-    fn draw_color(&mut self, color: i32);
+    fn draw_color(&mut self, color: ArgbColor);
     fn draw_path(&mut self, path: &Path, paint: &Paint);
-    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, paint: &Paint);
+    fn draw_line(&mut self, line: CanvasSegment, paint: &Paint);
     fn draw_rect(&mut self, rect: RectF, paint: &Paint);
     fn draw_oval(&mut self, rect: RectF, paint: &Paint);
     /// `drawBitmap(bitmap, null, dst, paint)`: premultiplied RGBA scaled
     /// into `dst` with bilinear filtering.
-    fn draw_bitmap(&mut self, bitmap: &tiny_skia::Pixmap, dst: RectF, paint: &Paint);
+    fn draw_bitmap(&mut self, bitmap: &Bitmap, dst: RectF, paint: &Paint);
     /// Render a parsed SVG into the local box `(0,0,w,h)` (the caller has
     /// already translated and clipped). The default rasterizes with resvg at
     /// the current device scale and calls [`Canvas::draw_bitmap`]; a raster
     /// backend overrides it to render directly with its matrix and clip.
-    fn draw_svg(&mut self, tree: &usvg::Tree, w: f32, h: f32) {
-        draw_svg_raster(self, tree, w, h);
+    fn draw_svg(&mut self, tree: &SvgTree, size: CanvasSize) {
+        draw_svg_raster(self, tree, size);
     }
 }
 
@@ -449,8 +520,9 @@ pub trait Canvas {
 /// device scale and draw the result into `(0,0,w,h)` with
 /// [`Canvas::draw_bitmap`]. Backends that override `draw_svg` for the common
 /// case can fall back to this.
-pub fn draw_svg_raster<C: Canvas + ?Sized>(canvas: &mut C, tree: &usvg::Tree, w: f32, h: f32) {
-    let m = canvas.matrix();
+pub fn draw_svg_raster<C: Canvas + ?Sized>(canvas: &mut C, tree: &SvgTree, size: CanvasSize) {
+    let (tree, w, h) = (&tree.0, size.width, size.height);
+    let m = canvas.matrix().0;
     let sx = (m.sx * m.sx + m.ky * m.ky).sqrt().max(1e-3);
     let sy = (m.kx * m.kx + m.sy * m.sy).sqrt().max(1e-3);
     let pw = (w * sx).ceil().clamp(1.0, 8192.0) as u32;
@@ -464,5 +536,5 @@ pub fn draw_svg_raster<C: Canvas + ?Sized>(canvas: &mut C, tree: &usvg::Tree, w:
         tiny_skia::Transform::from_scale(pw as f32 / size.width(), ph as f32 / size.height()),
         &mut pixmap.as_mut(),
     );
-    canvas.draw_bitmap(&pixmap, RectF::new(0.0, 0.0, w, h), &Paint::anti_alias());
+    canvas.draw_bitmap(&Bitmap(pixmap), RectF { left: 0.0, top: 0.0, right: w, bottom: h }, &Paint::anti_alias());
 }

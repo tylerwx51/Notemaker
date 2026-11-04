@@ -7,7 +7,8 @@ use crate::android_consts::*;
 use crate::concurrent::CountDownLatch;
 use crate::error::{AppError, AppResult};
 use crate::ink_cache::InkCache;
-use crate::integration::{self as it, alpha, red, Integration};
+use crate::ink_cache::BitmapSize;
+use crate::integration::{self as it, BitmapPoint, Integration};
 use crate::jx::{self, Obj};
 use crate::main_activity::MainActivity;
 use crate::org_json::{JSONArray, JV};
@@ -16,7 +17,7 @@ use indexmap::IndexMap;
 use notemaker_cli::item_coverage::FACTORY;
 use notemaker_cli::png::{Png, USE_SVG_PICTURES};
 use notemaker_core::draw_item::DrawItem;
-use notemaker_core::geometry;
+use notemaker_core::ids::PageNumber;
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::layer_editor::LayerEditor;
 use notemaker_core::model::{Entity, Model};
@@ -31,14 +32,14 @@ use std::time::Duration;
 pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     cache_pixels_sized(true)?;
     let replica = app.replica();
-    replica.command(&["layer", "put", "-"], Some(&Value::Object(object! {"layer" => "under", "name" => "Under", "force" => false, "order" => -1})))?;
+    replica.command(crate::app_replica::CliArgs(&["layer", "put", "-"]), Some(&Value::Object(object! {"layer" => "under", "name" => "Under", "force" => false, "order" => -1})))?;
     for layer in ["base", "under"] {
         let fill = if layer == "base" { COLOR_BLACK } else { COLOR_RED };
-        replica.command(&["object", "put", "-"], Some(&Value::Object(object! {"object" => format!("{layer}-box"), "layer" => layer, "shape" => "rect", "x" => 0, "y" => 0, "w" => 100, "h" => 100, "fill" => fill})))?;
+        replica.command(crate::app_replica::CliArgs(&["object", "put", "-"]), Some(&Value::Object(object! {"object" => format!("{layer}-box"), "layer" => layer, "shape" => "rect", "x" => 0, "y" => 0, "w" => 100, "h" => 100, "fill" => fill})))?;
     }
-    replica.command(&["object", "put", "-"], Some(&Value::Object(object! {"object" => "ring", "shape" => "ellipse", "x" => 120, "y" => 120, "w" => 100, "h" => 100, "width" => 4})))?;
-    replica.command(&["stroke", "put", "-"], Some(&Value::Object(object! {"stroke" => "ink", "layer" => "base", "page" => 0, "width" => 4, "color" => COLOR_BLACK, "points" => vec![Value::from(vec![0, 50, 1]), Value::from(vec![100, 50, 1])]})))?;
-    let source = it::create_bitmap(4, 4)?;
+    replica.command(crate::app_replica::CliArgs(&["object", "put", "-"]), Some(&Value::Object(object! {"object" => "ring", "shape" => "ellipse", "x" => 120, "y" => 120, "w" => 100, "h" => 100, "width" => 4})))?;
+    replica.command(crate::app_replica::CliArgs(&["stroke", "put", "-"]), Some(&Value::Object(object! {"stroke" => "ink", "layer" => "base", "page" => 0, "width" => 4, "color" => COLOR_BLACK, "points" => vec![Value::from(vec![0, 50, 1]), Value::from(vec![100, 50, 1])]})))?;
+    let source = it::create_bitmap(BitmapSize { width: 4, height: 4 })?;
     jcall!(source, "android/graphics/Bitmap", "eraseColor", "(I)V", COLOR_WHITE)?;
     for (x, y) in [(1, 1), (2, 1), (1, 2), (2, 2)] {
         jcall!(source, "android/graphics/Bitmap", "setPixel", "(III)V", x, y, COLOR_TRANSPARENT)?;
@@ -49,62 +50,64 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     it::recycle_bitmap(&source)?;
     let data = jcall!(bytes, "java/io/ByteArrayOutputStream", "toByteArray", "()[B")?.some();
     let image = image_asset::from_bytes(&jx::byte_array(data.as_obj()))?;
-    replica.command(&["object", "put", "-"], Some(&Value::Object(object! {"object" => "image", "shape" => "image", "image" => image, "x" => 300, "y" => 100, "w" => 40, "h" => 40})))?;
+    replica.command(crate::app_replica::CliArgs(&["object", "put", "-"]), Some(&Value::Object(object! {"object" => "image", "shape" => "image", "image" => image, "x" => 300, "y" => 100, "w" => 40, "h" => 40})))?;
     require(query(app, 320.0, 120.0)?.is_empty(), "Transparent image hole selected")?;
     require(query(app, 302.0, 102.0)?.len() == 1, "Opaque white image pixel missed")?;
     require(query(app, 170.0, 170.0)?.is_empty(), "Hollow shape interior selected")?;
     require(query(app, 120.0, 170.0)?.len() == 1, "Shape outline missed")?;
-    replica.command(&["erase", "-"], Some(&Value::Object(object! {"layer" => "base", "page" => 0, "mode" => "partial", "radius" => 10, "points" => vec![Value::from(vec![50, 0]), Value::from(vec![50, 100])]})))?;
+    replica.command(crate::app_replica::CliArgs(&["erase", "-"]), Some(&Value::Object(object! {"layer" => "base", "page" => 0, "mode" => "partial", "radius" => 10, "points" => vec![Value::from(vec![50, 0]), Value::from(vec![50, 100])]})))?;
     require(query(app, 50.0, 50.0)?.is_empty(), "Erased area still selects")?;
     require(query(app, 20.0, 50.0)?.len() == 2, "Remaining coverage lost")?;
     let snapshot = replica.read()?;
     let model = store::model(&snapshot)?;
     for layer in ["base", "under"] {
         for topmost in [true, false] {
-            for region in [geometry::rect(0.0, 0.0, 110.0, 110.0), geometry::rect(115.0, 115.0, 120.0, 120.0), geometry::rect(300.0, 100.0, 40.0, 40.0)] {
-                let expected = LayerEditor::new(&model, layer, 0)?.select(Some(&region), topmost, &FACTORY)?;
-                let actual = LayerEditor::select_in(&model, layer, 0, Some(&region), topmost, &FACTORY)?;
+            let hits = if topmost { notemaker_core::layer_editor::HitMode::Topmost } else { notemaker_core::layer_editor::HitMode::All };
+            let layer = notemaker_core::ids::LayerId::from(layer);
+            for region in [notemaker_core::geometry::DocRect { x: 0.0, y: 0.0, width: 110.0, height: 110.0 }.polygon(), notemaker_core::geometry::DocRect { x: 115.0, y: 115.0, width: 120.0, height: 120.0 }.polygon(), notemaker_core::geometry::DocRect { x: 300.0, y: 100.0, width: 40.0, height: 40.0 }.polygon()] {
+                let expected = LayerEditor::new(&model, &layer, PageNumber(0))?.select(Some(&region), hits, &FACTORY)?;
+                let actual = LayerEditor::select_in(&model, &layer, PageNumber(0), Some(&region), hits, &FACTORY)?;
                 require(expected == actual, "Lazy selection changed ordered coverage hits")?;
             }
         }
     }
-    let rendered = it::create_bitmap(400, 250)?;
+    let rendered = it::create_bitmap(BitmapSize { width: 400, height: 250 })?;
     let c = jnew!("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", &rendered)?;
     jcall!(c, "android/graphics/Canvas", "drawColor", "(I)V", COLOR_WHITE)?;
-    render::draw(&model, 0, &HashSet::new(), &mut Png::new(&mut AndroidCanvas::new(c)))?;
+    render::draw(&model, PageNumber(0), &notemaker_core::render::HiddenLayers(HashSet::new()), &mut Png::new(&mut AndroidCanvas::new(c)))?;
     require(pixel(&rendered, 50, 50)? == COLOR_RED, "Partial erase damaged or hid underlying layer")?;
     require(pixel(&rendered, 20, 50)? == COLOR_BLACK, "Partial erase lost untouched pixels")?;
     it::recycle_bitmap(&rendered)?;
     test.run_on_main_sync(|| app.refresh_shared(&snapshot))??;
     preview_rollback(test, app)?;
     object_preview(test, app)?;
-    test.run_on_main_sync(|| app.select_at(120.0, 170.0))??;
-    let until = jx::uptime_millis() + 10000;
-    while app.selection_session.with(|s| s.is_none()) && jx::uptime_millis() < until {
+    test.run_on_main_sync(|| app.select_at(crate::main_activity::DocPointF { x: 120.0, y: 170.0 }))??;
+    let until = jx::uptime_millis().0 + 10000;
+    while app.selection_session.with(|s| s.is_none()) && jx::uptime_millis().0 < until {
         std::thread::sleep(Duration::from_millis(25));
     }
     require(app.selection_session.with(|s| s.is_some()), "Activity did not select outline")?;
-    test.run_on_main_sync(|| app.select_layer("under"))??;
+    test.run_on_main_sync(|| app.select_layer(&notemaker_core::ids::LayerId::from("under")))??;
     replica_service::writes().submit(|| ()).get()?;
     require(app.selection_session.with(|s| s.is_none()) && app.selected_entities.with(|s| s.is_empty()), "Layer switch retained selection")?;
     require(app.selecting.get(), "Layer switch unexpectedly left the selection tool")?;
     require(json::map_at(&*app.replica().read()?, "leases")?.is_empty(), "Layer switch retained leases")
 }
 /// `private static List<Object> query(MainActivity app, double x, double y) throws Exception`.
-pub fn query(app: &Arc<MainActivity>, x: f64, y: f64) -> AppResult<Vec<Value>> {
-    let result = app.replica().command(&["selection", "query", "-"], Some(&Value::Object(object! {"layer" => "base", "region" => geometry::json(&geometry::rect(x - 0.1, y - 0.1, 0.2, 0.2))})))?;
+fn query(app: &Arc<MainActivity>, x: f64, y: f64) -> AppResult<Vec<Value>> {
+    let result = app.replica().command(crate::app_replica::CliArgs(&["selection", "query", "-"]), Some(&Value::Object(object! {"layer" => "base", "region" => notemaker_core::geometry::DocRect { x: x - 0.1, y: y - 0.1, width: 0.2, height: 0.2 }.polygon().to_json()})))?;
     let items = json::map(&result)?.get("items").cloned().unwrap_or(Value::Null);
     Ok(json::list(&items)?.clone())
 }
 /// `private static void require(boolean condition, String message)`.
-pub fn require(condition: bool, message: &str) -> AppResult<()> {
+fn require(condition: bool, message: &str) -> AppResult<()> {
     if !condition {
         return Err(AppError::illegal_state(message));
     }
     Ok(())
 }
 /// `private static void objectPreview(Integration test, MainActivity app) throws Exception`.
-pub fn object_preview(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
+fn object_preview(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     let id = "preview-created-box";
     let paused = Arc::new(CountDownLatch::new(1));
     let release = Arc::new(CountDownLatch::new(1));
@@ -128,9 +131,9 @@ pub fn object_preview(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppRe
     }
     require(paused.await_timeout(Duration::from_secs(5)), "Object writer did not pause")?;
     let coalesced_before = app.coalesced_object_frames.get();
-    let before = it::create_bitmap(800, 800)?;
-    let during = it::create_bitmap(800, 800)?;
-    let after = it::create_bitmap(800, 800)?;
+    let before = it::create_bitmap(BitmapSize { width: 800, height: 800 })?;
+    let during = it::create_bitmap(BitmapSize { width: 800, height: 800 })?;
+    let after = it::create_bitmap(BitmapSize { width: 800, height: 800 })?;
     let body = (|| -> AppResult<()> {
         test.run_on_main_sync(|| -> AppResult<()> {
             draw_canvas(app, &before)?;
@@ -183,7 +186,7 @@ pub fn object_preview(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppRe
     require(app.coalesced_object_frames.get() == coalesced_before + 1, "Matching committed object still redrew the canvas")
 }
 /// `private static void previewRollback(Integration test, MainActivity app) throws Exception`.
-pub fn preview_rollback(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
+fn preview_rollback(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     let paused = Arc::new(CountDownLatch::new(1));
     let release = Arc::new(CountDownLatch::new(1));
     {
@@ -197,13 +200,13 @@ pub fn preview_rollback(test: &Arc<Integration>, app: &Arc<MainActivity>) -> App
     let before = store::model(&app.replica().read()?)?;
     let mut locked = false;
     let body = (|| -> AppResult<()> {
-        test.run_on_main_sync(|| app.apply_erase("partial", "base", 0, Some(&JSONArray::parse("[[20,20]]")?), 8.0))??;
+        test.run_on_main_sync(|| app.apply_erase(&crate::main_activity::EraserMode::from("partial"), &notemaker_core::ids::LayerId::from("base"), PageNumber(0), Some(&JSONArray::parse("[[20,20]]")?), notemaker_core::geometry::Radius(8.0)))??;
         let canvas = app.canvas();
         require(canvas.erase_previews.with(|p| p.len()) == 1, "Missing pending feedback")?;
         let preview = canvas.erase_previews.with(|p| p.values().next().map(|e| (e.layer.clone(), e.page, e.paths.clone())));
         let (layer, page, paths) = preview.ok_or_else(|| AppError::java("java.util.NoSuchElementException", ""))?;
         require(layer == "base" && page == 0 && paths.len() == 1, "Preview scope changed")?;
-        let pixels = it::create_bitmap(100, 100)?;
+        let pixels = it::create_bitmap(BitmapSize { width: 100, height: 100 })?;
         let c = jnew!("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", &pixels)?;
         jcall!(c, "android/graphics/Canvas", "drawColor", "(I)V", COLOR_RED)?;
         jcall!(c, "android/graphics/Canvas", "save", "()I")?;
@@ -216,7 +219,7 @@ pub fn preview_rollback(test: &Arc<Integration>, app: &Arc<MainActivity>) -> App
         it::recycle_bitmap(&pixels)?;
         require(before.objects == store::model(&app.replica().read()?)?.objects, "Preview mutated durable state")?;
         let replica = app.replica();
-        replica_service::ensure(&app.this)?.execute(&object! {"document" => replica.document.as_str(), "actor" => "racer", "args" => vec!["selection", "select", "-"], "input" => object! {"session" => "preview-race", "layer" => "base", "page" => 0, "entities" => vec![Value::Object(object! {"kind" => "object", "id" => "base-box"})]}})?;
+        replica_service::ensure(&app.this)?.execute(&object! {"document" => replica.document.clone(), "actor" => "racer", "args" => vec!["selection", "select", "-"], "input" => object! {"session" => "preview-race", "layer" => "base", "page" => 0, "entities" => vec![Value::Object(object! {"kind" => "object", "id" => "base-box"})]}})?;
         locked = true;
         Ok(())
     })();
@@ -232,7 +235,7 @@ pub fn preview_rollback(test: &Arc<Integration>, app: &Arc<MainActivity>) -> App
     let cleanup = (|| -> AppResult<()> {
         let replica = app.replica();
         if locked {
-            replica_service::ensure(&app.this)?.execute(&object! {"document" => replica.document.as_str(), "actor" => "racer", "args" => vec!["selection", "deselect", "preview-race"], "input" => Value::Null})?;
+            replica_service::ensure(&app.this)?.execute(&object! {"document" => replica.document.clone(), "actor" => "racer", "args" => vec!["selection", "deselect", "preview-race"], "input" => Value::Null})?;
         }
         let restored = replica.read()?;
         test.run_on_main_sync(|| {
@@ -253,10 +256,10 @@ pub fn cache_pixels() -> AppResult<()> {
     cache_pixels_sized(false)
 }
 /// `private static void cachePixels(boolean fullSize)`.
-pub fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
+fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
     let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"><circle cx=\"50\" cy=\"50\" r=\"30\" fill=\"none\" stroke=\"black\"/><text x=\"5\" y=\"20\">Cache</text></svg>";
-    let direct = it::create_bitmap(200, 200)?;
-    let recorded = it::create_bitmap(200, 200)?;
+    let direct = it::create_bitmap(BitmapSize { width: 200, height: 200 })?;
+    let recorded = it::create_bitmap(BitmapSize { width: 200, height: 200 })?;
     USE_SVG_PICTURES.store(false, Ordering::SeqCst);
     draw_svg(&direct, 5.25, 10.5, 150.5, 160.25, svg)?;
     USE_SVG_PICTURES.store(true, Ordering::SeqCst);
@@ -275,8 +278,8 @@ pub fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
         }
     }
     dots.push_str("</g></svg>");
-    let fast_dots = it::create_bitmap(240, 240)?;
-    let dom_dots = it::create_bitmap(240, 240)?;
+    let fast_dots = it::create_bitmap(BitmapSize { width: 240, height: 240 })?;
+    let dom_dots = it::create_bitmap(BitmapSize { width: 240, height: 240 })?;
     draw_svg(&fast_dots, 5.25, 10.5, 210.0, 210.0, &dots)?;
     draw_svg(&dom_dots, 5.25, 10.5, 210.0, 210.0, &format!(" {dots}"))?;
     let (changed, max_alpha_difference, max_color_difference) = compare(&bitmap_pixels(&fast_dots)?, &bitmap_pixels(&dom_dots)?);
@@ -295,8 +298,8 @@ pub fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
     it::recycle_bitmap(&fast_dots)?;
     it::recycle_bitmap(&dom_dots)?;
     if full_size {
-        let full_fast = it::create_bitmap(1000, 1400)?;
-        let full_reference = it::create_bitmap(1000, 1400)?;
+        let full_fast = it::create_bitmap(BitmapSize { width: 1000, height: 1400 })?;
+        let full_reference = it::create_bitmap(BitmapSize { width: 1000, height: 1400 })?;
         draw_svg(&full_fast, 0.0, 0.0, 1000.0, 1400.0, &dots)?;
         draw_svg(&full_reference, 0.0, 0.0, 1000.0, 1400.0, &format!(" {dots}"))?;
         let (changed, max_alpha_difference, max_color_difference) = compare(&bitmap_pixels(&full_fast)?, &bitmap_pixels(&full_reference)?);
@@ -308,8 +311,8 @@ pub fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
         it::recycle_bitmap(&full_reference)?;
     }
     let translucent = dots.replace("#999999", "#336699").replace("stroke-opacity=\"1.0\"", "stroke-opacity=\"0.5\"");
-    let alpha_fast = it::create_bitmap(240, 240)?;
-    let alpha_reference = it::create_bitmap(240, 240)?;
+    let alpha_fast = it::create_bitmap(BitmapSize { width: 240, height: 240 })?;
+    let alpha_reference = it::create_bitmap(BitmapSize { width: 240, height: 240 })?;
     draw_svg(&alpha_fast, 5.25, 10.5, 210.0, 210.0, &translucent)?;
     draw_svg(&alpha_reference, 5.25, 10.5, 210.0, 210.0, &format!(" {translucent}"))?;
     let (changed, max_alpha_difference, max_color_difference) = compare(&bitmap_pixels(&alpha_fast)?, &bitmap_pixels(&alpha_reference)?);
@@ -330,13 +333,13 @@ pub fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
         let brush = if i == 2 { "square" } else { "pen" };
         visible.insert(format!("s{i}"), Arc::new(object! {"kind" => "stroke", "stroke" => format!("s{i}"), "layer" => "base", "page" => 0, "points" => points, "width" => 12, "color" => color, "brush" => brush}));
     }
-    visible.insert("object:box".into(), Arc::new(notemaker_core::actions::drawing(&object! {"object" => "box", "shape" => "rect", "x" => 50, "y" => 50, "w" => 90, "h" => 90, "fill" => 0x80ff0000u32 as i32}, "base")?));
+    visible.insert("object:box".into(), Arc::new(notemaker_core::actions::drawing(&object! {"object" => "box", "shape" => "rect", "x" => 50, "y" => 50, "w" => 90, "h" => 90, "fill" => 0x80ff0000u32 as i32}, &notemaker_core::ids::LayerId::from("base"))?));
     let original = visible.get("s1").cloned().ok_or_else(|| AppError::Core(notemaker_core::Error::null_pointer()))?;
-    let mut cache = InkCache::new(320, 320)?;
+    let mut cache = InkCache::new(crate::ink_cache::BitmapSize { width: 320, height: 320 })?;
     for step in 0..10 {
         jx::frame(|| -> AppResult<()> {
             if step == 1 {
-                let erased = DrawItem::new(&Model::new(), original.clone())?.erase(&[geometry::rect(75.0, 30.0, 25.0, 130.0)])?;
+                let erased = DrawItem::new(&Model::new(), original.clone())?.erase(&notemaker_core::geometry::Erasures::from(vec![notemaker_core::geometry::DocRect { x: 75.0, y: 30.0, width: 25.0, height: 130.0 }.polygon()]))?;
                 visible.insert("s1".into(), Arc::new(erased));
             }
             if step == 2 {
@@ -381,15 +384,15 @@ pub fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
                 bx.insert("rotation".into(), Value::from(33));
                 visible.insert("object:box".into(), Arc::new(bx));
             }
-            let actual = it::create_bitmap(320, 320)?;
-            let expected = it::create_bitmap(320, 320)?;
+            let actual = it::create_bitmap(BitmapSize { width: 320, height: 320 })?;
+            let expected = it::create_bitmap(BitmapSize { width: 320, height: 320 })?;
             let mut transform = |c: &Obj| -> AppResult<()> {
                 jcall!(c, "android/graphics/Canvas", "translate", "(FF)V", 10.5f32, 5.25f32)?;
                 jcall!(c, "android/graphics/Canvas", "scale", "(FF)V", 1.3f32, 1.3f32)?;
                 Ok(())
             };
             let actual_canvas = jnew!("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", &actual)?;
-            cache.draw(&actual_canvas, visible.clone(), &mut transform, &mut |c: &Obj, s: &Entity| -> AppResult<()> {
+            cache.draw(&actual_canvas, crate::ink_cache::VisibleInk(visible.clone()), &mut transform, &mut |c: &Obj, s: &Entity| -> AppResult<()> {
                 render::draw_item(&Model::new(), s, &mut Png::new(&mut AndroidCanvas::new(c.clone())))?;
                 Ok(())
             })?;
@@ -427,16 +430,16 @@ pub fn cache_pixels_sized(full_size: bool) -> AppResult<()> {
 /// `new Png(new Canvas(bitmap)).svg(x, y, w, h, source)`.
 fn draw_svg(bitmap: &Obj, x: f64, y: f64, w: f64, h: f64, source: &str) -> AppResult<()> {
     let c = jnew!("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", bitmap)?;
-    Png::new(&mut AndroidCanvas::new(c)).svg(x, y, w, h, source)?;
+    Png::new(&mut AndroidCanvas::new(c)).svg(notemaker_core::geometry::DocRect { x, y, width: w, height: h }, source)?;
     Ok(())
 }
 /// `app.canvas.draw(new Canvas(bitmap))` (UI thread).
 fn draw_canvas(app: &Arc<MainActivity>, bitmap: &Obj) -> AppResult<()> {
     it::draw_view(&app.canvas().view(), bitmap)
 }
-/// `bitmap.getPixel(x, y)`.
+/// `bitmap.getPixel(x, y)` as Java's `int`.
 fn pixel(bitmap: &Obj, x: i32, y: i32) -> AppResult<i32> {
-    Ok(jcall!(bitmap, "android/graphics/Bitmap", "getPixel", "(II)I", x, y)?.int())
+    Ok(it::pixel(bitmap, BitmapPoint { x, y })?.0)
 }
 /// `new LinkedHashMap<>(visible.get(key))`.
 fn copy_of(entity: Option<&Entity>) -> AppResult<Map> {
@@ -452,8 +455,9 @@ fn compare(fast: &[i32], reference: &[i32]) -> (i32, i32, i32) {
             continue;
         }
         changed += 1;
-        max_alpha_difference = max_alpha_difference.max((alpha(f) - alpha(r)).abs());
-        max_color_difference = max_color_difference.max((red(f) * alpha(f) - red(r) * alpha(r)).abs() / 255);
+        let (f, r) = (notemaker_core::style::ArgbColor(f).channels(), notemaker_core::style::ArgbColor(r).channels());
+        max_alpha_difference = max_alpha_difference.max((f.alpha - r.alpha).abs());
+        max_color_difference = max_color_difference.max((f.red * f.alpha - r.red * r.alpha).abs() / 255);
     }
     (changed, max_alpha_difference, max_color_difference)
 }

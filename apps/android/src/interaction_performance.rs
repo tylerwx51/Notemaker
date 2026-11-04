@@ -13,7 +13,7 @@ use crate::integration::Integration;
 use crate::jx::{self, Reply};
 use crate::main_activity::MainActivity;
 use crate::org_json::JV;
-use crate::performance::{self, async_main_handler, dispatch_touch, drain_writes, frame_metric, handler_thread, quit_safely, recycle_event, sleep, thread_handler, window};
+use crate::performance::{self, async_main_handler, FrameMetricId, FrameMetrics, LatencySamples, StrokeCount, dispatch_touch, drain_writes, frame_metric, handler_thread, quit_safely, recycle_event, sleep, thread_handler, window};
 use indexmap::IndexMap;
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::{ids, object, store};
@@ -44,7 +44,7 @@ fn shared_values(lists: &SharedLists, name: &str) -> Vec<f64> {
     lists.lock().unwrap().get(name).cloned().unwrap_or_default()
 }
 fn command(app: &MainActivity, args: &[&str], input: Map) -> AppResult<Value> {
-    app.replica().command(args, Some(&Value::Object(input)))
+    app.replica().command(crate::app_replica::CliArgs(args), Some(&Value::Object(input)))
 }
 /// `test.runOnMainSync(()->{try{app.refreshShared(state);...}catch(Exception error){throw new RuntimeException(error);}})`.
 fn refresh<S: crate::main_activity::SharedState + ?Sized>(app: &Arc<MainActivity>, state: &S, then: impl FnOnce() -> AppResult<()>) -> AppResult<()> {
@@ -62,7 +62,7 @@ fn not_false(map: &IndexMap<String, bool>, id: &str) -> bool {
 /// `static Map<String,Object> run(Instrumentation test, MainActivity app) throws Exception`.
 pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     let input = async_main_handler()?;
-    let frames = handler_thread("interaction-frames")?;
+    let frames = handler_thread(&jx::ThreadName::from("interaction-frames"))?;
     let mut draw: Lists = IndexMap::new();
     let mut handler: Lists = IndexMap::new();
     let mut queue: Lists = IndexMap::new();
@@ -131,9 +131,9 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                 let name = current.lock().unwrap().clone();
                 if let Some(name) = name {
                     let metrics = &args[1];
-                    shared_push(&frame, &name, frame_metric(metrics, FRAMEMETRICS_TOTAL_DURATION)? as f64 / 1e6);
-                    shared_push(&frame_draw, &name, frame_metric(metrics, FRAMEMETRICS_DRAW_DURATION)? as f64 / 1e6);
-                    shared_push(&frame_command, &name, frame_metric(metrics, FRAMEMETRICS_COMMAND_ISSUE_DURATION)? as f64 / 1e6);
+                    shared_push(&frame, &name, frame_metric(FrameMetrics(metrics), FrameMetricId(FRAMEMETRICS_TOTAL_DURATION))?.0 as f64 / 1e6);
+                    shared_push(&frame_draw, &name, frame_metric(FrameMetrics(metrics), FrameMetricId(FRAMEMETRICS_DRAW_DURATION))?.0 as f64 / 1e6);
+                    shared_push(&frame_command, &name, frame_metric(FrameMetrics(metrics), FrameMetricId(FRAMEMETRICS_COMMAND_ISSUE_DURATION))?.0 as f64 / 1e6);
                 }
             }
             Ok(Reply::Void)
@@ -155,18 +155,18 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         Ok(())
     })??;
     test.wait_for_idle_sync()?;
-    let start = performance::resources(0)?;
+    let start = performance::resources(StrokeCount(0))?;
     let coalesced_before = app.coalesced_object_frames.get();
     let mut mode_resources = Map::new();
     let mut page_tiles = Map::new();
     let original_layer = app.selected.get();
-    let extra_layer = format!("performance-{}", ids::random_uuid());
-    let history_id = format!("performance-history-{}", ids::random_uuid());
-    let stroke_history_id = format!("performance-stroke-history-{}", ids::random_uuid());
-    let create_prefix = format!("performance-create-{}-", ids::random_uuid());
-    let selection_id = format!("performance-selection-{}", ids::random_uuid());
-    let page_document = format!("performance-pages-{}", ids::random_uuid());
-    let fill_document = format!("performance-fill-{}", ids::random_uuid());
+    let extra_layer = format!("performance-{}", String::from(ids::Uuid::random()));
+    let history_id = format!("performance-history-{}", String::from(ids::Uuid::random()));
+    let stroke_history_id = format!("performance-stroke-history-{}", String::from(ids::Uuid::random()));
+    let create_prefix = format!("performance-create-{}-", String::from(ids::Uuid::random()));
+    let selection_id = format!("performance-selection-{}", String::from(ids::Uuid::random()));
+    let page_document = format!("performance-pages-{}", String::from(ids::Uuid::random()));
+    let fill_document = format!("performance-fill-{}", String::from(ids::Uuid::random()));
     let body = (|| -> AppResult<()> {
         for name in NAMES {
             if name == "layer_switch" {
@@ -247,7 +247,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
             }
             if name == "page_switch" {
                 drain_writes()?;
-                test.run_on_main_sync(|| app.open_document(&page_document, "pages"))??;
+                test.run_on_main_sync(|| app.open_document(&notemaker_core::ids::DocumentName::from(&page_document), &crate::main_activity::DocumentType::from("pages")))??;
                 drain_writes()?;
                 for page_number in 0..2 {
                     command(
@@ -270,7 +270,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
             }
             if name == "fill_region" {
                 drain_writes()?;
-                test.run_on_main_sync(|| app.open_document(&fill_document, "fixed"))??;
+                test.run_on_main_sync(|| app.open_document(&notemaker_core::ids::DocumentName::from(&fill_document), &crate::main_activity::DocumentType::from("fixed")))??;
                 drain_writes()?;
                 command(
                     app,
@@ -283,7 +283,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                 test.run_on_main_sync(|| refresh(app, &state, || app.update()))??;
                 test.wait_for_idle_sync()?;
             }
-            let mode_start = performance::resources(0)?;
+            let mode_start = performance::resources(StrokeCount(0))?;
             let tile_start = if name == "page_switch" { Some(tile_metrics(test, app)?) } else { None };
             *current.lock().unwrap() = Some(name.to_string());
             let history_mode = name == "history_toggle" || name == "stroke_history_toggle";
@@ -316,7 +316,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                 let started = Arc::new(AtomicI64::new(0));
                 let completed = Arc::new(AtomicI64::new(0));
                 let committed_at = Arc::new(AtomicI64::new(0));
-                let queued = jx::nano_time();
+                let queued = jx::nano_time().0;
                 let runnable = {
                     let app = app.clone();
                     let (painted, handled, ui_painted, committed) = (painted.clone(), handled.clone(), ui_painted.clone(), committed.clone());
@@ -326,7 +326,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                     let (extra_layer, original_layer, create_prefix) = (extra_layer.clone(), original_layer.clone(), create_prefix.clone());
                     jx::try_once_runnable(move || -> jx::JResult<()> {
                         (|| -> AppResult<()> {
-                            started.store(jx::nano_time(), Ordering::SeqCst);
+                            started.store(jx::nano_time().0, Ordering::SeqCst);
                             let history = history_mode;
                             let stroke_history = name == "stroke_history_toggle";
                             let object_create = name == "object_create";
@@ -372,7 +372,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                             {
                                 let (ui_drawn, ui_painted) = (ui_drawn.clone(), ui_painted.clone());
                                 *ui_draw_ack.lock().unwrap() = Some(Arc::new(move || {
-                                    ui_drawn.store(jx::nano_time(), Ordering::SeqCst);
+                                    ui_drawn.store(jx::nano_time().0, Ordering::SeqCst);
                                     ui_painted.count_down();
                                 }));
                             }
@@ -385,16 +385,16 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                                     if drawn.load(Ordering::SeqCst) == 0
                                         && (if object_create { app.drawn_object_previews.with(|d| d.contains(&create_id)) || draw_ready() } else { draw_ready() })
                                     {
-                                        drawn.store(jx::nano_time(), Ordering::SeqCst);
+                                        drawn.store(jx::nano_time().0, Ordering::SeqCst);
                                         painted.count_down();
                                     }
                                 })));
                             }
                             if name == "pan" {
                                 app.pan.set(true);
-                                let x = canvas.width() as f32 / 2.0;
-                                let y = canvas.height() as f32 / 2.0;
-                                let when = jx::uptime_millis();
+                                let x = canvas.width().0 as f32 / 2.0;
+                                let y = canvas.height().0 as f32 / 2.0;
+                                let when = jx::uptime_millis().0;
                                 let down = jstatic!("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", when, when, MOTIONEVENT_ACTION_DOWN, x, y, 0)?.some();
                                 let move_ = jstatic!("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", when, when + 8, MOTIONEVENT_ACTION_MOVE, x + if index % 2 == 0 { 8.0 } else { -8.0 }, y, 0)?.some();
                                 let view = canvas.view();
@@ -406,9 +406,10 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                                 canvas.zoom.set(if index % 2 == 0 { 1.2 } else { 1.0 });
                                 canvas.invalidate()?;
                             } else if name == "tool_switch" {
-                                app.set_drawing_tool(if index % 2 == 0 { Some("rectangle") } else { None })?;
+                                let rectangle = notemaker_core::ids::ShapeId::from("rectangle");
+                                app.set_drawing_tool(if index % 2 == 0 { Some(&rectangle) } else { None })?;
                             } else if name == "layer_switch" {
-                                app.select_layer(if index % 2 == 0 { &extra_layer } else { &original_layer })?;
+                                app.select_layer(&notemaker_core::ids::LayerId::from(if index % 2 == 0 { &extra_layer } else { &original_layer }))?;
                             } else if name == "page_switch" {
                                 app.deselect()?;
                                 app.reset_drawing_gesture()?;
@@ -417,15 +418,15 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                                 app.update()?;
                             } else if name == "selection_tap" {
                                 app.selecting.set(true);
-                                app.select_at(480.0, 300.0)?;
+                                app.select_at(crate::main_activity::DocPointF { x: 480.0, y: 300.0 })?;
                             } else if history {
-                                app.history(forward)?;
+                                app.history(if forward { notemaker_core::store::HistoryDirection::Redo } else { notemaker_core::store::HistoryDirection::Undo })?;
                             } else if object_create {
                                 {
                                     let (create_id, committed_at, committed) = (create_id.clone(), committed_at.clone(), committed.clone());
                                     app.object_commit_ack.set(Some(Arc::new(move |id: &str| {
                                         if create_id == id {
-                                            committed_at.store(jx::nano_time(), Ordering::SeqCst);
+                                            committed_at.store(jx::nano_time().0, Ordering::SeqCst);
                                             committed.count_down();
                                         }
                                     })));
@@ -447,14 +448,14 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                                 ]);
                                 app.persist_object(&object)?;
                             } else if fill_region {
-                                app.fill_at(500.0, 480.0)?;
+                                app.fill_at(crate::main_activity::DocPointF { x: 500.0, y: 480.0 })?;
                             } else {
                                 let type_ = app.type_.get();
-                                app.load(&type_)?;
+                                app.load(&crate::main_activity::DocumentType::from(&type_))?;
                                 app.configure_proxy()?;
                                 app.update()?;
                             }
-                            completed.store(jx::nano_time(), Ordering::SeqCst);
+                            completed.store(jx::nano_time().0, Ordering::SeqCst);
                             handled.count_down();
                             Ok(())
                         })()
@@ -493,9 +494,9 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                 }
                 if name == "selection_tap" {
                     let hit_ns = test.run_on_main_sync(|| -> AppResult<i64> {
-                        let began = jx::nano_time();
-                        let hit = app.selected_entity_at(480.0, 300.0)?;
-                        let hit_ns = jx::nano_time() - began;
+                        let began = jx::nano_time().0;
+                        let hit = app.selected_entity_at(crate::main_activity::DocPointF { x: 480.0, y: 300.0 })?;
+                        let hit_ns = jx::nano_time().0 - began;
                         error::require(
                             hit.as_ref().and_then(|h| h.get("id")).and_then(|v| v.as_str()) == Some(selection_id.as_str()),
                             "Selected-object hit test missed the fixture",
@@ -510,7 +511,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                     test.wait_for_idle_sync()?;
                     error::require(app.selection_session.get().is_none() && app.selected_entities.with(|e| e.is_empty()), "Selection benchmark left a lease active")?;
                 }
-                sleep(25);
+                sleep(jx::DelayMillis(25));
             }
             if name == "history_toggle" {
                 drain_writes()?;
@@ -552,7 +553,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
                 test.run_on_main_sync(|| error::require(app.undo.with(|u| u.len()) == 20 && app.redo.with(|r| r.is_empty()), "Fill benchmark did not persist editor history"))??;
             }
             test.wait_for_idle_sync()?;
-            mode_resources.insert(name.into(), Value::Object(object! {"before" => mode_start, "after" => performance::resources(0)?}));
+            mode_resources.insert(name.into(), Value::Object(object! {"before" => mode_start, "after" => performance::resources(StrokeCount(0))?}));
             if let Some(tile_start) = tile_start {
                 let tile_end = tile_metrics(test, app)?;
                 let get = |key: &str| tile_end.get(key).cloned().unwrap_or(Value::Null);
@@ -575,7 +576,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
             app.set_drawing_tool(None)
         })??;
         test.wait_for_idle_sync()?;
-        sleep(250);
+        sleep(jx::DelayMillis(250));
         Ok(())
     })();
     // finally
@@ -594,30 +595,30 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     })??;
     quit_safely(&frames)?;
     body?;
-    let end = performance::resources(0)?;
+    let end = performance::resources(StrokeCount(0))?;
     let mut modes = Map::new();
     performance::gc()?;
-    sleep(500);
-    let post_gc = performance::resources(0)?;
+    sleep(jx::DelayMillis(500));
+    let post_gc = performance::resources(StrokeCount(0))?;
     for name in NAMES {
         modes.insert(
             name.into(),
             Value::Object(object! {
-                "handler" => performance::stats(&handler[name]),
-                "input_to_draw" => performance::stats(&draw[name]),
-                "input_to_ui_draw" => performance::stats(&ui_draw[name]),
-                "window_frame" => performance::stats(&shared_values(&frame, name)),
-                "queue" => performance::stats(&queue[name]),
-                "action" => performance::stats(&action_lists[name]),
-                "handler_to_draw" => performance::stats(&draw_wait[name]),
-                "frame_draw" => performance::stats(&shared_values(&frame_draw, name)),
-                "frame_command_issue" => performance::stats(&shared_values(&frame_command, name)),
+                "handler" => performance::stats(LatencySamples(&handler[name])),
+                "input_to_draw" => performance::stats(LatencySamples(&draw[name])),
+                "input_to_ui_draw" => performance::stats(LatencySamples(&ui_draw[name])),
+                "window_frame" => performance::stats(LatencySamples(&shared_values(&frame, name))),
+                "queue" => performance::stats(LatencySamples(&queue[name])),
+                "action" => performance::stats(LatencySamples(&action_lists[name])),
+                "handler_to_draw" => performance::stats(LatencySamples(&draw_wait[name])),
+                "frame_draw" => performance::stats(LatencySamples(&shared_values(&frame_draw, name))),
+                "frame_command_issue" => performance::stats(LatencySamples(&shared_values(&frame_command, name))),
             }),
         );
     }
     let history_directions = object! {
-        "undo" => object! {"input_to_ui_draw" => performance::stats(&undo_ui_draw), "input_to_draw" => performance::stats(&undo_canvas_draw)},
-        "redo" => object! {"input_to_ui_draw" => performance::stats(&redo_ui_draw), "input_to_draw" => performance::stats(&redo_canvas_draw)},
+        "undo" => object! {"input_to_ui_draw" => performance::stats(LatencySamples(&undo_ui_draw)), "input_to_draw" => performance::stats(LatencySamples(&undo_canvas_draw))},
+        "redo" => object! {"input_to_ui_draw" => performance::stats(LatencySamples(&redo_ui_draw)), "input_to_draw" => performance::stats(LatencySamples(&redo_canvas_draw))},
     };
     let state_revision = app.replica().read()?.get("revision").cloned().unwrap_or(Value::Null);
     Ok(object! {
@@ -625,8 +626,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         "mode_resources" => mode_resources,
         "page_tile_cache" => page_tiles,
         "coalesced_object_frames" => app.coalesced_object_frames.get() - coalesced_before,
-        "object_create_commit_ack" => performance::stats(&object_commit_ack_latency),
-        "selected_hit_test" => performance::stats(&selected_hit_test),
+        "object_create_commit_ack" => performance::stats(LatencySamples(&object_commit_ack_latency)),
+        "selected_hit_test" => performance::stats(LatencySamples(&selected_hit_test)),
         "start_resources" => start,
         "end_resources" => end,
         "post_gc_resources" => post_gc,
@@ -637,11 +638,11 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     })
 }
 /// `private static Map<String,Object> tileMetrics(Instrumentation test, MainActivity app)`.
-pub fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     Ok(test.run_on_main_sync(|| app.canvas().tile_cache_metrics())?)
 }
 /// `private static long delta(Map before, Map after, String key)`.
-pub fn delta(before: &Map, after: &Map, key: &str) -> i64 {
+fn delta(before: &Map, after: &Map, key: &str) -> i64 {
     performance::long_metric(after, key) - performance::long_metric(before, key)
 }
 

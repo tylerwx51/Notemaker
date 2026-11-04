@@ -19,10 +19,17 @@ use crate::ui;
 use notemaker_cli::png::Png;
 use notemaker_core::draw_item::DrawItem;
 use notemaker_core::json::{self, Map, Value};
+use notemaker_core::ids::{DocumentName, PageNumber};
 use notemaker_core::{jmath, object, render};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
+
+notemaker_core::string_newtype! {
+    /// The `files.mode` display mode: `grid` or `list` (kept as the
+    /// requested string so other values fail in [`DocumentBrowser::mode`]).
+    pub struct BrowserMode;
+}
 
 /// `final class DocumentBrowser`. The anonymous `BaseAdapter`
 /// (`DocumentBrowser$1`) is a `jx::adapter` closure and the search
@@ -58,7 +65,7 @@ pub struct DocumentBrowser {
 
 fn text_view_with(context: &Obj, value: &str) -> JResult<Obj> {
     let v = ui::text_view(context)?;
-    ui::set_text(&v, value)?;
+    ui::set_text(&v, &ui::UiText::from(value))?;
     Ok(v)
 }
 fn set_hint(view: &Obj, hint: &str) -> JResult<()> {
@@ -215,8 +222,8 @@ impl DocumentBrowser {
         let ctx = app.this.clone();
         let editor = app.editor();
         let body = ui::column(&ctx)?;
-        let padding = editor.dp(20.0)?;
-        ui::set_padding(&body, padding, 0, padding, 0)?;
+        let padding = ui::dp(&editor.context(), ui::Dp(20.0))?.0;
+        ui::set_padding(&body, ui::PxInsets { left: padding, top: 0, right: padding, bottom: 0 })?;
         let scope = text_view_with(&ctx, if self.source.remote() { "Files on the selected editing proxy" } else { "Files on this device · available offline" })?;
         ui::add_view(&body, &scope)?;
         let search = jnew!("android/widget/EditText", "(Landroid/content/Context;)V", &ctx)?;
@@ -224,16 +231,16 @@ impl DocumentBrowser {
         set_hint(&search, "Search files")?;
         ui::add_view(&body, &search)?;
         self.search.set(Some(search.clone()));
-        self.grid_mode.set(ui::pref_bool(&ctx, "filesGrid", true)?);
+        self.grid_mode.set(ui::pref_bool(&ctx, &ui::PrefKey::from("filesGrid"), ui::PrefSwitch::from(true))?);
         let modes = jnew!("android/widget/RadioGroup", "(Landroid/content/Context;)V", &ctx)?;
         jcall!(modes, "android/widget/LinearLayout", "setOrientation", "(I)V", LINEARLAYOUT_HORIZONTAL)?;
         let grid = jnew!("android/widget/RadioButton", "(Landroid/content/Context;)V", &ctx)?;
         jcall!(grid, "android/view/View", "setId", "(I)V", jstatic!("android/view/View", "generateViewId", "()I")?.int())?;
-        ui::set_text(&grid, "Grid")?;
+        ui::set_text(&grid, &ui::UiText::from("Grid"))?;
         ui::add_view(&modes, &grid)?;
         let list = jnew!("android/widget/RadioButton", "(Landroid/content/Context;)V", &ctx)?;
         jcall!(list, "android/view/View", "setId", "(I)V", jstatic!("android/view/View", "generateViewId", "()I")?.int())?;
-        ui::set_text(&list, "List")?;
+        ui::set_text(&list, &ui::UiText::from("List"))?;
         ui::add_view(&modes, &list)?;
         let grid_id = jcall!(grid, "android/view/View", "getId", "()I")?.int();
         let list_id = jcall!(list, "android/view/View", "getId", "()I")?.int();
@@ -247,9 +254,9 @@ impl DocumentBrowser {
         self.status.set(Some(status));
         let files = jnew!("android/widget/GridView", "(Landroid/content/Context;)V", &ctx)?;
         jcall!(files, "android/widget/GridView", "setStretchMode", "(I)V", GRIDVIEW_STRETCH_COLUMN_WIDTH)?;
-        jcall!(files, "android/widget/GridView", "setColumnWidth", "(I)V", editor.dp(150.0)?)?;
-        jcall!(files, "android/widget/GridView", "setHorizontalSpacing", "(I)V", editor.dp(12.0)?)?;
-        jcall!(files, "android/widget/GridView", "setVerticalSpacing", "(I)V", editor.dp(12.0)?)?;
+        jcall!(files, "android/widget/GridView", "setColumnWidth", "(I)V", ui::dp(&editor.context(), ui::Dp(150.0))?.0)?;
+        jcall!(files, "android/widget/GridView", "setHorizontalSpacing", "(I)V", ui::dp(&editor.context(), ui::Dp(12.0))?.0)?;
+        jcall!(files, "android/widget/GridView", "setVerticalSpacing", "(I)V", ui::dp(&editor.context(), ui::Dp(12.0))?.0)?;
         self.files.set(Some(files.clone()));
         let weak = Arc::downgrade(self);
         let adapter = jx::adapter(move |method, args| {
@@ -279,13 +286,13 @@ impl DocumentBrowser {
             me.grid_mode.set(id == grid_id);
             let app = me.app();
             let editor = ui::edit(&app.this)?;
-            ui::put_bool(&editor, "filesGrid", me.grid_mode.get())?;
+            ui::put_bool(&editor, &ui::PrefKey::from("filesGrid"), ui::PrefSwitch::from(me.grid_mode.get()))?;
             ui::apply(&editor)?;
             me.display_mode()?;
             Ok(Reply::Void)
         });
         jcall!(modes, "android/widget/RadioGroup", "setOnCheckedChangeListener", "(Landroid/widget/RadioGroup$OnCheckedChangeListener;)V", &checked)?;
-        let params = ui::linear_params(LAYOUT_PARAMS_MATCH_PARENT, editor.dp(360.0)?)?;
+        let params = ui::linear_params(ui::LayoutSize { width: LAYOUT_PARAMS_MATCH_PARENT, height: ui::dp(&editor.context(), ui::Dp(360.0))?.0 })?;
         ui::add_view_params(&body, &files, &params)?;
         let weak = Arc::downgrade(self);
         let click = jx::callback(move |_, args| {
@@ -293,7 +300,7 @@ impl DocumentBrowser {
             let position = jx::unbox_int(&args[2]) as usize;
             let name = me.visible.with(|v| v[position].clone());
             dismiss_dialog(&me.dialog_obj())?;
-            me.app().open_document(&name, "fixed")?;
+            me.app().open_document(&DocumentName::from(&name), &crate::main_activity::DocumentType::from("fixed"))?;
             Ok(Reply::Void)
         });
         jcall!(files, "android/widget/AdapterView", "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", &click)?;
@@ -369,14 +376,15 @@ impl DocumentBrowser {
             None => false,
         })
     }
-    /// `void search(String query)`.
-    pub fn search(self: &Arc<Self>, query: &str) -> AppResult<()> {
+    /// `void search(String query)`: the text typed into the search field.
+    pub fn search(self: &Arc<Self>, query: &ui::UiText) -> AppResult<()> {
         let search = self.search.get().ok_or_else(|| AppError::java("java.lang.NullPointerException", "search"))?;
         ui::set_text(&search, query)?;
         Ok(())
     }
     /// `void mode(String value)`.
-    pub fn mode(self: &Arc<Self>, value: &str) -> AppResult<()> {
+    pub fn mode(self: &Arc<Self>, value: &BrowserMode) -> AppResult<()> {
+        let value: &str = value;
         if value != "grid" && value != "list" {
             return Err(AppError::illegal_argument("Mode must be grid or list"));
         }
@@ -394,7 +402,7 @@ impl DocumentBrowser {
         let visible: Vec<Value> = self.visible.with(|v| v.iter().map(|s| Value::from(s.as_str())).collect());
         Ok(object! {
             "mode" => if self.grid_mode.get() { "grid" } else { "list" },
-            "query" => ui::text_of(&search)?,
+            "query" => String::from(ui::text_of(&search)?),
             "loaded" => self.loaded.get(),
             "visible" => visible,
         })
@@ -411,21 +419,21 @@ impl DocumentBrowser {
         let files = self.files.get().expect("files");
         let grid = self.grid_mode.get();
         jcall!(files, "android/widget/GridView", "setNumColumns", "(I)V", if grid { GRIDVIEW_AUTO_FIT } else { 1 })?;
-        ui::set_content_description(&files, if grid { "Files grid" } else { "Files list" })?;
+        ui::set_content_description(&files, &ui::UiText::from(if grid { "Files grid" } else { "Files list" }))?;
         notify_changed(&self.adapter.get().expect("adapter"))?;
         Ok(())
     }
     /// `private View fileView(String name)` (adapter `getView`).
-    pub fn file_view(self: &Arc<Self>, name: &str) -> AppResult<Obj> {
+    fn file_view(self: &Arc<Self>, name: &str) -> AppResult<Obj> {
         let app = self.app();
         let ctx = app.this.clone();
         let editor = app.editor();
         let tile = ui::column(&ctx)?;
-        let pad = editor.dp(8.0)?;
-        ui::set_padding(&tile, pad, pad, pad, pad)?;
+        let pad = ui::dp(&editor.context(), ui::Dp(8.0))?.0;
+        ui::set_padding(&tile, ui::PxInsets { left: pad, top: pad, right: pad, bottom: pad })?;
         let border = jnew!("android/graphics/drawable/GradientDrawable", "()V")?;
         jcall!(border, "android/graphics/drawable/GradientDrawable", "setColor", "(I)V", COLOR_WHITE)?;
-        jcall!(border, "android/graphics/drawable/GradientDrawable", "setStroke", "(II)V", editor.dp(1.0)?, COLOR_LTGRAY)?;
+        jcall!(border, "android/graphics/drawable/GradientDrawable", "setStroke", "(II)V", ui::dp(&editor.context(), ui::Dp(1.0))?.0, COLOR_LTGRAY)?;
         jcall!(tile, "android/view/View", "setBackground", "(Landroid/graphics/drawable/Drawable;)V", &border)?;
         if self.grid_mode.get() {
             let key = jx::jstr(name);
@@ -435,14 +443,14 @@ impl DocumentBrowser {
                 jcall!(image, "android/widget/ImageView", "setImageBitmap", "(Landroid/graphics/Bitmap;)V", &bitmap)?;
                 let fit = jsget!("android/widget/ImageView$ScaleType", "FIT_CENTER", "Landroid/widget/ImageView$ScaleType;")?.some();
                 jcall!(image, "android/widget/ImageView", "setScaleType", "(Landroid/widget/ImageView$ScaleType;)V", &fit)?;
-                ui::set_content_description(&image, &format!("Preview of {name}"))?;
-                ui::add_view_params(&tile, &image, &ui::linear_params(-1, editor.dp(160.0)?)?)?;
+                ui::set_content_description(&image, &ui::UiText::from(&format!("Preview of {name}")))?;
+                ui::add_view_params(&tile, &image, &ui::linear_params(ui::LayoutSize { width: -1, height: ui::dp(&editor.context(), ui::Dp(160.0))?.0 })?)?;
             } else {
                 let failed = self.failed.with(|f| f.contains(name));
                 let placeholder = ui::text_view(&ctx)?;
                 jcall!(placeholder, "android/widget/TextView", "setGravity", "(I)V", GRAVITY_CENTER)?;
-                ui::set_text(&placeholder, if failed { "Preview unavailable" } else { "Loading preview…" })?;
-                ui::add_view_params(&tile, &placeholder, &ui::linear_params(-1, editor.dp(160.0)?)?)?;
+                ui::set_text(&placeholder, &ui::UiText::from(if failed { "Preview unavailable" } else { "Loading preview…" }))?;
+                ui::add_view_params(&tile, &placeholder, &ui::linear_params(ui::LayoutSize { width: -1, height: ui::dp(&editor.context(), ui::Dp(160.0))?.0 })?)?;
                 if !failed {
                     self.preview(name);
                 }
@@ -454,13 +462,13 @@ impl DocumentBrowser {
         jcall!(label, "android/widget/TextView", "setMaxLines", "(I)V", 2)?;
         let end = jsget!("android/text/TextUtils$TruncateAt", "END", "Landroid/text/TextUtils$TruncateAt;")?.some();
         jcall!(label, "android/widget/TextView", "setEllipsize", "(Landroid/text/TextUtils$TruncateAt;)V", &end)?;
-        jcall!(label, "android/widget/TextView", "setMinHeight", "(I)V", editor.dp(48.0)?)?;
+        jcall!(label, "android/widget/TextView", "setMinHeight", "(I)V", ui::dp(&editor.context(), ui::Dp(48.0))?.0)?;
         jcall!(label, "android/widget/TextView", "setGravity", "(I)V", GRAVITY_CENTER_VERTICAL)?;
         ui::add_view(&tile, &label)?;
         Ok(tile)
     }
     /// `private void preview(String name)`: queues a thumbnail on `previews`.
-    pub fn preview(self: &Arc<Self>, name: &str) {
+    fn preview(self: &Arc<Self>, name: &str) {
         if self.closed.get() || !self.loading.with_mut(|l| l.insert(name.to_string())) {
             return;
         }
@@ -473,14 +481,14 @@ impl DocumentBrowser {
                 return;
             }
             let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> AppResult<Obj> {
-                let snapshot = me.source.command_named(&name, &["snapshot"], None)?;
+                let snapshot = me.source.command_named(&DocumentName::from(&name), crate::app_replica::CliArgs(&["snapshot"]), None)?;
                 DocumentBrowser::thumbnail(json::map(&snapshot)?)
             }))
             .unwrap_or_else(|p| Err(panic_message(p)));
             let bitmap = match rendered {
                 Ok(b) => Some(b),
                 Err(e) => {
-                    jx::log::w_err("NoteMaker", "File preview unavailable", &e);
+                    jx::log::w_err(crate::jx::log::NOTEMAKER, "File preview unavailable", &e);
                     None
                 }
             };
@@ -525,23 +533,23 @@ impl DocumentBrowser {
                 if model.layer_active.get(layer) == Some(&false) || (hidden.contains(layer) && !json::is_true(value.get("force"))) {
                     continue;
                 }
-                for content in model.layer_items(layer, 0).iter() {
+                for content in model.layer_items(&notemaker_core::ids::LayerId::from(layer), PageNumber(0)).iter() {
                     let item = DrawItem::new(&model, content.clone())?;
                     if !item.active() {
                         continue;
                     }
                     let b = item.paint_bounds(&notemaker_cli::item_coverage::FACTORY)?;
                     if !found {
-                        left = b[0];
-                        top = b[1];
-                        right = b[2];
-                        bottom = b[3];
+                        left = b.left;
+                        top = b.top;
+                        right = b.right;
+                        bottom = b.bottom;
                         found = true;
                     } else {
-                        left = jmath::min(left, b[0]);
-                        top = jmath::min(top, b[1]);
-                        right = jmath::max(right, b[2]);
-                        bottom = jmath::max(bottom, b[3]);
+                        left = jmath::min(left, b.left);
+                        top = jmath::min(top, b.top);
+                        right = jmath::max(right, b.right);
+                        bottom = jmath::max(bottom, b.bottom);
                     }
                 }
             }
@@ -560,13 +568,13 @@ impl DocumentBrowser {
         jcall!(canvas, "android/graphics/Canvas", "scale", "(FF)V", scale, scale)?;
         jcall!(canvas, "android/graphics/Canvas", "translate", "(FF)V", -left as f32, -top as f32)?;
         let mut target = AndroidCanvas::new(canvas);
-        render::draw(&model, 0, &hidden, &mut Png::new(&mut target))?;
+        render::draw(&model, PageNumber(0), &notemaker_core::render::HiddenLayers(hidden), &mut Png::new(&mut target))?;
         Ok(bitmap)
     }
     /// `private void filter()`.
     pub fn filter(self: &Arc<Self>) -> AppResult<()> {
         let search = self.search.get().expect("search");
-        let query = trim(&ui::text_of(&search)?).to_lowercase();
+        let query = trim(&String::from(ui::text_of(&search)?)).to_lowercase();
         let names = self.names.get();
         let visible: Vec<String> = names.iter().filter(|n| n.to_lowercase().contains(&query)).cloned().collect();
         let count = visible.len();
@@ -580,12 +588,12 @@ impl DocumentBrowser {
             } else {
                 format!("{count} files · tap to open · hold to delete")
             };
-            ui::set_text(&self.status.get().expect("status"), &text)?;
+            ui::set_text(&self.status.get().expect("status"), &ui::UiText::from(&text))?;
         }
         Ok(())
     }
     /// `private void delete(String name)`.
-    pub fn delete(self: &Arc<Self>, name: &str) -> AppResult<()> {
+    fn delete(self: &Arc<Self>, name: &str) -> AppResult<()> {
         let app = self.app();
         let b = builder(&app.this, "Delete file?")?;
         let message = jx::jstr(&format!("Delete “{name}” from this replica and the server when synchronized? This cannot be undone, and this name cannot be reused."));
@@ -610,8 +618,8 @@ impl DocumentBrowser {
                 let app = me.app();
                 replica_service::writes().execute(move || {
                     let work = || -> AppResult<Option<notemaker_core::store::State>> {
-                        me.source.command_named(&name, &["document", "delete"], None)?;
-                        Ok(if name == me.source.document { Some(me.source.read()?) } else { None })
+                        me.source.command_named(&DocumentName::from(&name), crate::app_replica::CliArgs(&["document", "delete"]), None)?;
+                        Ok(if me.source.document == *name { Some(me.source.read()?) } else { None })
                     };
                     match work() {
                         Ok(snapshot) => app.run_on_ui_thread(move |app| {
@@ -621,7 +629,7 @@ impl DocumentBrowser {
                             }
                             if let Some(snapshot) = snapshot {
                                 if let Err(e) = app.refresh_shared(&snapshot).and_then(|_| app.update()) {
-                                    jx::log::w_err("NoteMaker", "Deleted file refresh failed", &e);
+                                    jx::log::w_err(crate::jx::log::NOTEMAKER, "Deleted file refresh failed", &e);
                                 }
                             }
                             me.refresh()
@@ -631,7 +639,7 @@ impl DocumentBrowser {
                             if !me.current() {
                                 return Ok(());
                             }
-                            ui::toast(&app.this, &format!("Could not delete file: {}", e.message_or_null()), TOAST_LENGTH_LONG)?;
+                            ui::toast(&app.this, &ui::UiText::from(&format!("Could not delete file: {}", e.message_or_null())), TOAST_LENGTH_LONG)?;
                             Ok(())
                         }),
                     }
@@ -650,13 +658,13 @@ impl DocumentBrowser {
         self.failed.with_mut(|f| f.clear());
         self.loading.with_mut(|l| l.clear());
         self.loaded.set(false);
-        ui::set_text(&self.status.get().expect("status"), "Loading files…")?;
+        ui::set_text(&self.status.get().expect("status"), &ui::UiText::from("Loading files…"))?;
         set_enabled(&button(&self.dialog_obj(), DIALOGINTERFACE_BUTTON_NEUTRAL)?, false)?;
         let me = self.clone();
         let app = self.app();
         replica_service::writes().execute(move || {
             let work = || -> AppResult<Vec<String>> {
-                let listed = me.source.command(&["document", "list"], None)?;
+                let listed = me.source.command(crate::app_replica::CliArgs(&["document", "list"]), None)?;
                 let mut result: Vec<String> = Vec::new();
                 for name in json::list(json::map(&listed)?.get("documents").unwrap_or(&Value::Null))? {
                     result.push(json::java_string(Some(name)));
@@ -679,7 +687,7 @@ impl DocumentBrowser {
                     if !me.current() {
                         return Ok(());
                     }
-                    ui::set_text(&me.status.get().expect("status"), "Could not load files. Check the editing proxy and tap Refresh.")?;
+                    ui::set_text(&me.status.get().expect("status"), &ui::UiText::from("Could not load files. Check the editing proxy and tap Refresh."))?;
                     set_enabled(&button(&me.dialog_obj(), DIALOGINTERFACE_BUTTON_NEUTRAL)?, true)?;
                     Ok(())
                 }),
@@ -692,8 +700,8 @@ impl DocumentBrowser {
         let app = self.app();
         let ctx = app.this.clone();
         let fields = ui::column(&ctx)?;
-        let padding = app.editor().dp(20.0)?;
-        ui::set_padding(&fields, padding, 0, padding, 0)?;
+        let padding = ui::dp(&app.editor().context(), ui::Dp(20.0))?.0;
+        ui::set_padding(&fields, ui::PxInsets { left: padding, top: 0, right: padding, bottom: 0 })?;
         let name = jnew!("android/widget/EditText", "(Landroid/content/Context;)V", &ctx)?;
         jcall!(name, "android/widget/TextView", "setSingleLine", "()V")?;
         set_hint(&name, "File name")?;
@@ -717,9 +725,9 @@ impl DocumentBrowser {
             let (create, name, kind, error) = (dialog.clone(), name.clone(), kind.clone(), error.clone());
             ui::on_click(&button(&dialog, DIALOGINTERFACE_BUTTON_POSITIVE)?, move |_| {
                 let Some(me) = weak.upgrade() else { return Ok(()) };
-                let next = trim(&ui::text_of(&name)?).to_string();
+                let next = trim(&String::from(ui::text_of(&name)?)).to_string();
                 if next.is_empty() || json::jlen(&next) > 200 {
-                    ui::set_text(&error, "Enter a file name between 1 and 200 characters")?;
+                    ui::set_text(&error, &ui::UiText::from("Enter a file name between 1 and 200 characters"))?;
                     return Ok(());
                 }
                 let position = jcall!(kind, "android/widget/AdapterView", "getSelectedItemPosition", "()I")?.int();
@@ -734,8 +742,8 @@ impl DocumentBrowser {
                 let app = me.app();
                 replica_service::writes().execute(move || {
                     let work = || -> AppResult<()> {
-                        let target = AppReplica::new(&app, &next, &app.proxy_url.get(), &app.proxy_token.get())?;
-                        target.command(&["document", "create", &document_kind], None)?;
+                        let target = AppReplica::new(&app, &DocumentName::from(&next), &app.proxy_url.get(), &app.proxy_token.get())?;
+                        target.command(crate::app_replica::CliArgs(&["document", "create", &document_kind]), None)?;
                         Ok(())
                     };
                     match work() {
@@ -745,13 +753,13 @@ impl DocumentBrowser {
                                 return Ok(());
                             }
                             dismiss_dialog(&me.dialog_obj())?;
-                            app.open_document(&next, &document_kind)
+                            app.open_document(&DocumentName::from(&next), &crate::main_activity::DocumentType::from(&document_kind))
                         }),
                         Err(e) => app.run_on_ui_thread(move |_| {
                             if !is_showing(&create)? {
                                 return Ok(());
                             }
-                            ui::set_text(&error, &format!("Could not create file: {}", e.message_or_null()))?;
+                            ui::set_text(&error, &ui::UiText::from(&format!("Could not create file: {}", e.message_or_null())))?;
                             set_enabled(&button(&create, DIALOGINTERFACE_BUTTON_POSITIVE)?, true)?;
                             set_enabled(&button(&create, DIALOGINTERFACE_BUTTON_NEGATIVE)?, true)?;
                             set_cancelable(&create, true)?;

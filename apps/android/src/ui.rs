@@ -8,37 +8,113 @@
 //! behavior; the per-class Java helpers stay as methods of their Rust structs
 //! and delegate here.
 
-use crate::jx::{self, JResult, Local, Obj, Reply};
+use crate::android_consts::{Gravity, Orientation, ToastDuration, Visibility, TYPEFACE_NORMAL};
+use crate::jx::{self, DelayMillis, JResult, Local, Obj, Reply};
+use notemaker_core::style::ArgbColor;
 use std::path::PathBuf;
 
-// ---------------------------------------------------------------------------
-// Numbers
+pub use crate::java_port::math::round_f32;
 
-/// Java `Math.round(float)`: `(int) floor(x + 0.5f)` with NaN → 0 and
-/// saturation at the `int` range.
-pub fn round_f32(x: f32) -> i32 {
-    if x.is_nan() {
-        return 0;
+// ---------------------------------------------------------------------------
+// Values
+
+/// A length in density-independent pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct Dp(pub f32);
+
+/// A length in device pixels (`int` view geometry).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Px(pub i32);
+
+/// A text size in scaled pixels (`TextView.setTextSize(float)`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct Sp(pub f32);
+
+/// `ViewGroup.LayoutParams` width and height: device pixels or
+/// `LAYOUT_PARAMS_MATCH_PARENT` (`-1`) / `LAYOUT_PARAMS_WRAP_CONTENT` (`-2`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayoutSize {
+    pub width: i32,
+    pub height: i32,
+}
+
+/// `LinearLayout.LayoutParams.weight`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct LayoutWeight(pub f32);
+
+/// Margins or padding in device pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PxInsets {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+notemaker_core::string_newtype! {
+    /// Text shown to the user (labels, messages, content descriptions,
+    /// `TextView` contents).
+    pub struct UiText;
+}
+
+/// The weight of [`text`] labels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextWeight {
+    Normal,
+    /// `sans-serif-medium`.
+    Bold,
+}
+
+/// A rounded [`surface`] background.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceStyle {
+    pub fill: ArgbColor,
+    pub border: ArgbColor,
+    pub radius: Dp,
+    /// Border width; no border when not positive.
+    pub stroke: Dp,
+}
+
+notemaker_core::string_newtype! {
+    /// A `SharedPreferences` key in the `settings` file.
+    pub struct PrefKey;
+}
+
+notemaker_core::string_newtype! {
+    /// The stored value of a string preference.
+    pub struct PrefText;
+}
+
+/// The stored value of a boolean preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrefSwitch {
+    On,
+    Off,
+}
+impl From<bool> for PrefSwitch {
+    fn from(on: bool) -> PrefSwitch {
+        if on { PrefSwitch::On } else { PrefSwitch::Off }
     }
-    let r = (x + 0.5).floor();
-    if r >= i32::MAX as f32 {
-        i32::MAX
-    } else if r <= i32::MIN as f32 {
-        i32::MIN
-    } else {
-        r as i32
+}
+impl From<PrefSwitch> for bool {
+    fn from(switch: PrefSwitch) -> bool {
+        switch == PrefSwitch::On
     }
 }
 
+/// The stored value of an integer preference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrefNumber(pub i32);
+
 /// `context.getResources().getDisplayMetrics().density`.
-pub fn density(context: &Obj) -> JResult<f32> {
+fn density(context: &Obj) -> JResult<f32> {
     let resources = jcall!(context, "android/content/Context", "getResources", "()Landroid/content/res/Resources;")?.some();
     let metrics = jcall!(resources, "android/content/res/Resources", "getDisplayMetrics", "()Landroid/util/DisplayMetrics;")?.some();
     Ok(jget!(metrics, "android/util/DisplayMetrics", "density", "F")?.float())
 }
 /// `EditorUi.dp(float)` / `AgentUi.dp(int)`: `Math.round(value * density)`.
-pub fn dp(context: &Obj, value: f32) -> JResult<i32> {
-    Ok(round_f32(value * density(context)?))
+pub fn dp(context: &Obj, value: Dp) -> JResult<Px> {
+    Ok(Px(round_f32(value.0 * density(context)?)))
 }
 
 // ---------------------------------------------------------------------------
@@ -49,18 +125,18 @@ pub fn view(context: &Obj) -> JResult<Obj> {
     jnew!("android/view/View", "(Landroid/content/Context;)V", context)
 }
 /// `new LinearLayout(context); setOrientation(orientation)`.
-pub fn linear_layout(context: &Obj, orientation: i32) -> JResult<Obj> {
+pub fn linear_layout(context: &Obj, orientation: Orientation) -> JResult<Obj> {
     let v = jnew!("android/widget/LinearLayout", "(Landroid/content/Context;)V", context)?;
     jcall!(v, "android/widget/LinearLayout", "setOrientation", "(I)V", orientation)?;
     Ok(v)
 }
 /// `EditorUi.column()` / `AgentUi.column()`: vertical `LinearLayout`.
 pub fn column(context: &Obj) -> JResult<Obj> {
-    linear_layout(context, 1)
+    linear_layout(context, Orientation::Vertical)
 }
 /// `EditorUi.row()`: horizontal `LinearLayout`.
 pub fn row(context: &Obj) -> JResult<Obj> {
-    linear_layout(context, 0)
+    linear_layout(context, Orientation::Horizontal)
 }
 /// `new FrameLayout(context)`.
 pub fn frame_layout(context: &Obj) -> JResult<Obj> {
@@ -71,23 +147,28 @@ pub fn text_view(context: &Obj) -> JResult<Obj> {
     jnew!("android/widget/TextView", "(Landroid/content/Context;)V", context)
 }
 /// `new LinearLayout.LayoutParams(width, height)`.
-pub fn linear_params(width: i32, height: i32) -> JResult<Obj> {
+pub fn linear_params(size: LayoutSize) -> JResult<Obj> {
+    let LayoutSize { width, height } = size;
     jnew!("android/widget/LinearLayout$LayoutParams", "(II)V", width, height)
 }
 /// `new LinearLayout.LayoutParams(width, height, weight)`.
-pub fn linear_params_weight(width: i32, height: i32, weight: f32) -> JResult<Obj> {
+pub fn linear_params_weight(size: LayoutSize, weight: LayoutWeight) -> JResult<Obj> {
+    let (LayoutSize { width, height }, weight) = (size, weight.0);
     jnew!("android/widget/LinearLayout$LayoutParams", "(IIF)V", width, height, weight)
 }
 /// `new FrameLayout.LayoutParams(width, height)`.
-pub fn frame_params(width: i32, height: i32) -> JResult<Obj> {
+pub fn frame_params(size: LayoutSize) -> JResult<Obj> {
+    let LayoutSize { width, height } = size;
     jnew!("android/widget/FrameLayout$LayoutParams", "(II)V", width, height)
 }
 /// `new FrameLayout.LayoutParams(width, height, gravity)`.
-pub fn frame_params_gravity(width: i32, height: i32, gravity: i32) -> JResult<Obj> {
+pub fn frame_params_gravity(size: LayoutSize, gravity: Gravity) -> JResult<Obj> {
+    let LayoutSize { width, height } = size;
     jnew!("android/widget/FrameLayout$LayoutParams", "(III)V", width, height, gravity)
 }
 /// `params.setMargins(l, t, r, b)` on any `MarginLayoutParams`.
-pub fn set_margins(params: &Obj, left: i32, top: i32, right: i32, bottom: i32) -> JResult<()> {
+pub fn set_margins(params: &Obj, margins: PxInsets) -> JResult<()> {
+    let PxInsets { left, top, right, bottom } = margins;
     jcall!(params, "android/view/ViewGroup$MarginLayoutParams", "setMargins", "(IIII)V", left, top, right, bottom)?;
     Ok(())
 }
@@ -102,22 +183,23 @@ pub fn add_view_params(parent: &Obj, child: &Obj, params: &Obj) -> JResult<()> {
     Ok(())
 }
 /// `view.setPadding(l, t, r, b)`.
-pub fn set_padding(view: &Obj, left: i32, top: i32, right: i32, bottom: i32) -> JResult<()> {
+pub fn set_padding(view: &Obj, padding: PxInsets) -> JResult<()> {
+    let PxInsets { left, top, right, bottom } = padding;
     jcall!(view, "android/view/View", "setPadding", "(IIII)V", left, top, right, bottom)?;
     Ok(())
 }
 /// `view.setBackgroundColor(color)`.
-pub fn set_background_color(view: &Obj, color: i32) -> JResult<()> {
+pub fn set_background_color(view: &Obj, color: ArgbColor) -> JResult<()> {
     jcall!(view, "android/view/View", "setBackgroundColor", "(I)V", color)?;
     Ok(())
 }
 /// `view.setVisibility(visibility)`.
-pub fn set_visibility(view: &Obj, visibility: i32) -> JResult<()> {
+pub fn set_visibility(view: &Obj, visibility: Visibility) -> JResult<()> {
     jcall!(view, "android/view/View", "setVisibility", "(I)V", visibility)?;
     Ok(())
 }
 /// `view.setContentDescription(text)`.
-pub fn set_content_description(view: &Obj, text: &str) -> JResult<()> {
+pub fn set_content_description(view: &Obj, text: &UiText) -> JResult<()> {
     let s = jx::jstr(text);
     jcall!(view, "android/view/View", "setContentDescription", "(Ljava/lang/CharSequence;)V", &s)?;
     Ok(())
@@ -128,12 +210,12 @@ pub fn invalidate(view: &Obj) -> JResult<()> {
     Ok(())
 }
 /// `view.getWidth()`.
-pub fn width(view: &Obj) -> JResult<i32> {
-    Ok(jcall!(view, "android/view/View", "getWidth", "()I")?.int())
+pub fn width(view: &Obj) -> JResult<Px> {
+    Ok(Px(jcall!(view, "android/view/View", "getWidth", "()I")?.int()))
 }
 /// `view.getHeight()`.
-pub fn height(view: &Obj) -> JResult<i32> {
-    Ok(jcall!(view, "android/view/View", "getHeight", "()I")?.int())
+pub fn height(view: &Obj) -> JResult<Px> {
+    Ok(Px(jcall!(view, "android/view/View", "getHeight", "()I")?.int()))
 }
 /// `view.setOnClickListener(v -> f(v))`. The listener belongs to the view;
 /// capture owners weakly (see `jx::native_view`).
@@ -144,36 +226,37 @@ pub fn on_click(view: &Obj, f: impl Fn(&Local) -> JResult<()> + Send + Sync + 's
 }
 
 /// `textView.setText(value)` (the `CharSequence` overload).
-pub fn set_text(view: &Obj, value: &str) -> JResult<()> {
+pub fn set_text(view: &Obj, value: &UiText) -> JResult<()> {
     let s = jx::jstr(value);
     jcall!(view, "android/widget/TextView", "setText", "(Ljava/lang/CharSequence;)V", &s)?;
     Ok(())
 }
 /// `textView.getText().toString()`.
-pub fn text_of(view: &Obj) -> JResult<String> {
+pub fn text_of(view: &Obj) -> JResult<UiText> {
     let t = jcall!(view, "android/widget/TextView", "getText", "()Ljava/lang/CharSequence;")?.global();
-    Ok(t.and_then(|t| jx::to_string(t.as_obj())).unwrap_or_default())
+    Ok(UiText::from(t.and_then(|t| jx::to_string(t.as_obj())).unwrap_or_default()))
 }
 /// `EditorUi.text(value, size, color, bold)`.
-pub fn text(context: &Obj, value: &str, size: f32, color: i32, bold: bool) -> JResult<Obj> {
+pub fn text(context: &Obj, value: &UiText, size: Sp, color: ArgbColor, weight: TextWeight) -> JResult<Obj> {
     let view = text_view(context)?;
     set_text(&view, value)?;
-    jcall!(view, "android/widget/TextView", "setTextSize", "(F)V", size)?;
+    jcall!(view, "android/widget/TextView", "setTextSize", "(F)V", size.0)?;
     jcall!(view, "android/widget/TextView", "setTextColor", "(I)V", color)?;
-    if bold {
-        let face = jstatic!("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "sans-serif-medium", crate::android_consts::TYPEFACE_NORMAL)?.global();
+    if weight == TextWeight::Bold {
+        let face = jstatic!("android/graphics/Typeface", "create", "(Ljava/lang/String;I)Landroid/graphics/Typeface;", "sans-serif-medium", TYPEFACE_NORMAL)?.global();
         jcall!(view, "android/widget/TextView", "setTypeface", "(Landroid/graphics/Typeface;)V", &face)?;
     }
     Ok(view)
 }
 /// `EditorUi.surface(fill, border, radius, stroke)`: a rounded
 /// `GradientDrawable` (radius and stroke in dp).
-pub fn surface(context: &Obj, fill: i32, border: i32, radius: i32, stroke: i32) -> JResult<Obj> {
+pub fn surface(context: &Obj, style: SurfaceStyle) -> JResult<Obj> {
+    let SurfaceStyle { fill, border, radius, stroke } = style;
     let shape = jnew!("android/graphics/drawable/GradientDrawable", "()V")?;
     jcall!(shape, "android/graphics/drawable/GradientDrawable", "setColor", "(I)V", fill)?;
-    jcall!(shape, "android/graphics/drawable/GradientDrawable", "setCornerRadius", "(F)V", dp(context, radius as f32)? as f32)?;
-    if stroke > 0 {
-        jcall!(shape, "android/graphics/drawable/GradientDrawable", "setStroke", "(II)V", dp(context, stroke as f32)?, border)?;
+    jcall!(shape, "android/graphics/drawable/GradientDrawable", "setCornerRadius", "(F)V", dp(context, radius)?.0 as f32)?;
+    if stroke.0 > 0.0 {
+        jcall!(shape, "android/graphics/drawable/GradientDrawable", "setStroke", "(II)V", dp(context, stroke)?.0, border)?;
     }
     Ok(shape)
 }
@@ -182,7 +265,7 @@ pub fn surface(context: &Obj, fill: i32, border: i32, radius: i32, stroke: i32) 
 // Context
 
 /// `Toast.makeText(context, text, duration).show()`.
-pub fn toast(context: &Obj, text: &str, duration: i32) -> JResult<()> {
+pub fn toast(context: &Obj, text: &UiText, duration: ToastDuration) -> JResult<()> {
     let s = jx::jstr(text);
     let t = jstatic!("android/widget/Toast", "makeText", "(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;", context, &s, duration)?.some();
     jcall!(t, "android/widget/Toast", "show", "()V")?;
@@ -193,22 +276,26 @@ pub fn prefs(context: &Obj) -> JResult<Obj> {
     Ok(jcall!(context, "android/content/Context", "getSharedPreferences", "(Ljava/lang/String;I)Landroid/content/SharedPreferences;", "settings", 0)?.some())
 }
 /// `prefs.getString(key, fallback)` (`None` when stored/fallback null).
-pub fn pref_string(context: &Obj, key: &str, fallback: Option<&str>) -> JResult<Option<String>> {
+pub fn pref_string(context: &Obj, key: &PrefKey, fallback: Option<&PrefText>) -> JResult<Option<PrefText>> {
+    let (key, fallback): (&str, Option<&str>) = (key, fallback.map(|f| &**f));
     let p = prefs(context)?;
-    Ok(jcall!(p, "android/content/SharedPreferences", "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", key, fallback)?.string())
+    Ok(jcall!(p, "android/content/SharedPreferences", "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", key, fallback)?.string().map(PrefText::from))
 }
 /// `prefs.getBoolean(key, fallback)`.
-pub fn pref_bool(context: &Obj, key: &str, fallback: bool) -> JResult<bool> {
+pub fn pref_bool(context: &Obj, key: &PrefKey, fallback: PrefSwitch) -> JResult<bool> {
+    let (key, fallback): (&str, bool) = (key, fallback.into());
     let p = prefs(context)?;
     Ok(jcall!(p, "android/content/SharedPreferences", "getBoolean", "(Ljava/lang/String;Z)Z", key, fallback)?.bool())
 }
 /// `prefs.getInt(key, fallback)`.
-pub fn pref_int(context: &Obj, key: &str, fallback: i32) -> JResult<i32> {
+pub fn pref_int(context: &Obj, key: &PrefKey, fallback: PrefNumber) -> JResult<PrefNumber> {
+    let (key, fallback): (&str, i32) = (key, fallback.0);
     let p = prefs(context)?;
-    Ok(jcall!(p, "android/content/SharedPreferences", "getInt", "(Ljava/lang/String;I)I", key, fallback)?.int())
+    Ok(PrefNumber(jcall!(p, "android/content/SharedPreferences", "getInt", "(Ljava/lang/String;I)I", key, fallback)?.int()))
 }
 /// `prefs.contains(key)`.
-pub fn pref_contains(context: &Obj, key: &str) -> JResult<bool> {
+pub fn pref_contains(context: &Obj, key: &PrefKey) -> JResult<bool> {
+    let key: &str = key;
     let p = prefs(context)?;
     Ok(jcall!(p, "android/content/SharedPreferences", "contains", "(Ljava/lang/String;)Z", key)?.bool())
 }
@@ -217,19 +304,23 @@ pub fn edit(context: &Obj) -> JResult<Obj> {
     let p = prefs(context)?;
     Ok(jcall!(p, "android/content/SharedPreferences", "edit", "()Landroid/content/SharedPreferences$Editor;")?.some())
 }
-pub fn put_string(editor: &Obj, key: &str, value: &str) -> JResult<()> {
+pub fn put_string(editor: &Obj, key: &PrefKey, value: &PrefText) -> JResult<()> {
+    let (key, value): (&str, &str) = (key, value);
     jcall!(editor, "android/content/SharedPreferences$Editor", "putString", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", key, value)?;
     Ok(())
 }
-pub fn put_bool(editor: &Obj, key: &str, value: bool) -> JResult<()> {
+pub fn put_bool(editor: &Obj, key: &PrefKey, value: PrefSwitch) -> JResult<()> {
+    let (key, value): (&str, bool) = (key, value.into());
     jcall!(editor, "android/content/SharedPreferences$Editor", "putBoolean", "(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;", key, value)?;
     Ok(())
 }
-pub fn put_int(editor: &Obj, key: &str, value: i32) -> JResult<()> {
+pub fn put_int(editor: &Obj, key: &PrefKey, value: PrefNumber) -> JResult<()> {
+    let (key, value): (&str, i32) = (key, value.0);
     jcall!(editor, "android/content/SharedPreferences$Editor", "putInt", "(Ljava/lang/String;I)Landroid/content/SharedPreferences$Editor;", key, value)?;
     Ok(())
 }
-pub fn remove_pref(editor: &Obj, key: &str) -> JResult<()> {
+pub fn remove_pref(editor: &Obj, key: &PrefKey) -> JResult<()> {
+    let key: &str = key;
     jcall!(editor, "android/content/SharedPreferences$Editor", "remove", "(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", key)?;
     Ok(())
 }
@@ -275,8 +366,8 @@ pub fn post(handler: &Obj, runnable: &Obj) -> JResult<bool> {
     Ok(jcall!(handler, "android/os/Handler", "post", "(Ljava/lang/Runnable;)Z", runnable)?.bool())
 }
 /// `handler.postDelayed(runnable, delay)`.
-pub fn post_delayed(handler: &Obj, runnable: &Obj, delay_millis: i64) -> JResult<bool> {
-    Ok(jcall!(handler, "android/os/Handler", "postDelayed", "(Ljava/lang/Runnable;J)Z", runnable, delay_millis)?.bool())
+pub fn post_delayed(handler: &Obj, runnable: &Obj, delay: DelayMillis) -> JResult<bool> {
+    Ok(jcall!(handler, "android/os/Handler", "postDelayed", "(Ljava/lang/Runnable;J)Z", runnable, delay.0)?.bool())
 }
 /// `handler.removeCallbacks(runnable)`.
 pub fn remove_callbacks(handler: &Obj, runnable: &Obj) -> JResult<()> {

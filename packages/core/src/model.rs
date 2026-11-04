@@ -7,6 +7,7 @@
 //! `Model::clone` is O(1) until a copy mutates.
 
 use crate::error::{require, require_with, Error, Result};
+use crate::ids::{LayerId, PageNumber, ShapeId};
 use crate::ids;
 use crate::jmath;
 use crate::json::{self, jlen, Map, Value};
@@ -202,7 +203,8 @@ impl Model {
     }
 
     /// `layerItems(layer, page)`: strokes first, then objects, each in first-seen order.
-    pub fn layer_items(&self, layer: &str, page: i32) -> Arc<Vec<Entity>> {
+    pub fn layer_items(&self, layer: &LayerId, page: PageNumber) -> Arc<Vec<Entity>> {
+        let (layer, page) = (&**layer, page.0);
         let mut idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
         if idx.item_index.is_none() {
             idx.item_index = Some(HashMap::new());
@@ -374,7 +376,7 @@ impl Model {
             {
                 if let (Some(previous), Some(next)) = (previous, &next) {
                     if previous != next || before_active[key] != self.is_active(key) {
-                        let id = ids::name_uuid_from_bytes(format!("{}:{}:{}", key, prior, operation).as_bytes());
+                        let id = String::from(ids::Uuid::from_name(format!("{}:{}:{}", key, prior, operation)));
                         let colon = key.find(':').unwrap_or(0);
                         if !self.conflicts.contains_key(&id) {
                             let zero = Value::from(0);
@@ -633,7 +635,7 @@ impl Model {
                 id(o, "object")?;
                 drawing(o)?;
                 let shape = json::string(o, "shape")?;
-                require(shape_catalog::known(shape) || shape == "template", "Unknown shape")?;
+                require(shape_catalog::known(&ShapeId::from(shape)) || shape == "template", "Unknown shape")?;
                 if shape == "svg" {
                     svg_asset::validate(json::string(o, "svg")?)?;
                 }
@@ -718,7 +720,7 @@ pub fn drawing(o: &Map) -> Result<()> {
         require(masks.len() <= 2000, "Too many erasure regions")?;
         let mut count = 0usize;
         for mask in masks {
-            count += crate::geometry::polygon(mask)?.len();
+            count += crate::geometry::Polygon::from_json(mask)?.len();
             require(count <= 64000, "Erasure mask too complex")?;
         }
     }

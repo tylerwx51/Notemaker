@@ -4,7 +4,8 @@
 use crate::actions;
 use crate::draw_item::DrawItem;
 use crate::error::{require, Error, Result};
-use crate::geometry::{self, Polygon};
+use crate::geometry::{DocPoint, Erasures, Polygon};
+use crate::ids::{LayerId, PageNumber, ShapeId};
 use crate::jfmt;
 use crate::jmath;
 use crate::json::{self, Map, Value};
@@ -53,10 +54,10 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
     require(x.is_finite() && y.is_finite() && x.abs() <= 1000000.0 && y.abs() <= 1000000.0, "Invalid fill point")?;
     let mut lines: Vec<[f64; 5]> = Vec::new();
     let mut bounds = [x, y, x, y];
-    let editor = LayerEditor::new(model, &layer, page)?;
+    let editor = LayerEditor::new(model, &LayerId::from(&layer), PageNumber(page))?;
     let items: Vec<&DrawItem> = editor.items().collect();
     let mut owners: Vec<usize> = Vec::new();
-    let mut masks: Vec<Vec<Polygon>> = vec![Vec::new(); items.len()];
+    let mut masks: Vec<Erasures> = vec![Erasures::default(); items.len()];
     for (index, item) in items.iter().enumerate() {
         if item.kind != "stroke" {
             continue;
@@ -90,19 +91,19 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
         let w = json::number(o, "w")?;
         let h = json::number(o, "h")?;
         let width = json::number(o, "width")?;
-        let vertices: Polygon = if shape_catalog::polygon(shape) {
-            shape_catalog::vertices(shape)?
+        let vertices: Polygon = if shape_catalog::polygon(&ShapeId::from(shape)) {
+            shape_catalog::vertices(&ShapeId::from(shape))?
         } else if matches!(shape, "rect" | "rectangle") {
-            vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+            Polygon::from(vec![DocPoint { x: 0.0, y: 0.0 }, DocPoint { x: 1.0, y: 0.0 }, DocPoint { x: 1.0, y: 1.0 }, DocPoint { x: 0.0, y: 1.0 }])
         } else if matches!(shape, "ellipse" | "circle") {
             (0..128)
                 .map(|i| {
                     let a = i as f64 * PI / 64.0;
-                    [0.5 + 0.5 * jmath::cos(a), 0.5 + 0.5 * jmath::sin(a)]
+                    DocPoint { x: 0.5 + 0.5 * jmath::cos(a), y: 0.5 + 0.5 * jmath::sin(a) }
                 })
                 .collect()
         } else if matches!(shape, "line" | "arrow" | "arrowLine") {
-            vec![[0.0, 0.0], [1.0, 1.0]]
+            Polygon::from(vec![DocPoint { x: 0.0, y: 0.0 }, DocPoint { x: 1.0, y: 1.0 }])
         } else {
             continue;
         };
@@ -118,16 +119,16 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
         let transformed: Polygon = vertices
             .iter()
             .map(|v| {
-                let vx = (v[0] - 0.5) * w * fx;
-                let vy = (v[1] - 0.5) * h * fy;
-                [ox + w / 2.0 + vx * cos - vy * sin, oy + h / 2.0 + vx * sin + vy * cos]
+                let vx = (v.x - 0.5) * w * fx;
+                let vy = (v.y - 0.5) * h * fy;
+                DocPoint { x: ox + w / 2.0 + vx * cos - vy * sin, y: oy + h / 2.0 + vx * sin + vy * cos }
             })
             .collect();
         let closed = !matches!(shape, "line" | "arrow" | "arrowLine" | "polyline");
         for i in 1..vertices.len() + if closed { 1 } else { 0 } {
             let a = transformed[i - 1];
             let b = transformed[i % vertices.len()];
-            add(&mut lines, &mut bounds, a[0], a[1], b[0], b[1], width);
+            add(&mut lines, &mut bounds, a.x, a.y, b.x, b.y, width);
         }
         masks[index] = DrawItem::erasures(&*item.local_content()?)?;
         owners.resize(lines.len(), index);
@@ -164,9 +165,9 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
                 if jmath::hypot(xx as f64 - ax - t * dx, yy as f64 - ay - t * dy) <= r {
                     let mut erased = false;
                     if !holes.is_empty() {
-                        let local = items[owner].local(left + xx as f64 * scale, top + yy as f64 * scale)?;
+                        let local = items[owner].local(DocPoint { x: left + xx as f64 * scale, y: top + yy as f64 * scale })?;
                         for hole in holes {
-                            if geometry::contains(hole, local[0], local[1]) {
+                            if hole.contains(local) {
                                 erased = true;
                                 break;
                             }
@@ -244,7 +245,7 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
     let svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\"><path d=\"{}\" fill=\"{}\" fill-opacity=\"{}\"/></svg>",
         path,
-        jfmt::hex_color(color),
+        crate::style::ArgbColor(color).to_hex(),
         jfmt::double(((color as u32) >> 24) as f64 / 255.0),
         w = width,
         h = height
@@ -259,7 +260,7 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
             "h" => json::double(height as f64 * scale),
             "page" => page,
         },
-        &layer,
+        &LayerId::from(&layer),
     )?;
     Ok(vec![Value::Object(drawing)])
 }

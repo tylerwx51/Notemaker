@@ -51,11 +51,37 @@ pub type BooleanSupplier = Arc<dyn Fn() -> bool + Send + Sync>;
 /// `Runnable` callbacks passed to the builders.
 pub type Action = Arc<dyn Fn() -> AppResult<()> + Send + Sync>;
 
+notemaker_core::string_newtype! {
+    /// An editor tool kind (`pen`, `eraser`, `move`, `shapes`, `text`,
+    /// `fill`, `select`, `interact`) or another rail/header entry with a
+    /// popup (`document`, `layers`, `more`, ...).
+    pub struct ToolKind;
+}
+
+notemaker_core::string_newtype! {
+    /// A `panel.open` name: a [`ToolKind`] or one of the secondary panels
+    /// `history`, `conflicts`, `network`, `preferences`, `presets`,
+    /// `brushes`.
+    pub struct PanelName;
+}
+
+notemaker_core::string_newtype! {
+    /// The name of a pen preset (built-in such as `Black · 5`, or saved).
+    pub struct PenPresetName;
+}
+
+/// Whether the rail shows a text label under each tool icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolLabels {
+    Shown,
+    Hidden,
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (host-testable)
 
 /// `EditorUi.actionIcon(label)`.
-pub fn action_icon_for(label: &str) -> &'static str {
+fn action_icon_for(label: &str) -> &'static str {
     let s = label.to_lowercase();
     if s == "agent" {
         return "agent";
@@ -124,7 +150,7 @@ pub fn action_icon_for(label: &str) -> &'static str {
 }
 
 /// `brush.replaceAll("([a-z])([A-Z])", "$1 $2")`.
-pub fn split_camel(s: &str) -> String {
+fn split_camel(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len() + 4);
     let mut i = 0;
@@ -143,7 +169,7 @@ pub fn split_camel(s: &str) -> String {
 }
 
 /// `Character.toUpperCase(s.charAt(0)) + s.substring(1)` for ASCII names.
-pub fn capitalize(s: &str) -> String {
+fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         Some(first) => first.to_uppercase().chain(c).collect(),
@@ -152,13 +178,13 @@ pub fn capitalize(s: &str) -> String {
 }
 
 /// `id.substring(0, Math.min(8, id.length()))`.
-pub fn short_id(id: &str) -> String {
+fn short_id(id: &str) -> String {
     let units: Vec<u16> = id.encode_utf16().collect();
     String::from_utf16_lossy(&units[..units.len().min(8)])
 }
 
 /// `EditorUi.materialDescription()` range for a brush.
-pub fn material_range(brush: &str) -> &'static str {
+fn material_range(brush: &str) -> &'static str {
     match brush {
         "pencil" => "Graphite grade · HB to 6B",
         "marker" => "Opacity · light to saturated",
@@ -316,11 +342,11 @@ fn super_on_draw(view: &Obj, canvas: &Obj) -> AppResult<()> {
     Ok(())
 }
 
-fn linear_set_gravity(v: &Obj, gravity: i32) -> AppResult<()> {
+fn linear_set_gravity(v: &Obj, gravity: crate::android_consts::Gravity) -> AppResult<()> {
     jcall!(v, "android/widget/LinearLayout", "setGravity", "(I)V", gravity)?;
     Ok(())
 }
-fn text_set_gravity(v: &Obj, gravity: i32) -> AppResult<()> {
+fn text_set_gravity(v: &Obj, gravity: crate::android_consts::Gravity) -> AppResult<()> {
     jcall!(v, "android/widget/TextView", "setGravity", "(I)V", gravity)?;
     Ok(())
 }
@@ -384,7 +410,7 @@ fn child_at(v: &Obj, index: i32) -> AppResult<Option<Obj>> {
 }
 fn check_box(context: &Obj, label: &str) -> AppResult<Obj> {
     let b = jnew!("android/widget/CheckBox", "(Landroid/content/Context;)V", context)?;
-    ui::set_text(&b, label)?;
+    ui::set_text(&b, &ui::UiText::from(label))?;
     Ok(b)
 }
 fn set_checked(b: &Obj, checked: bool) -> AppResult<()> {
@@ -545,7 +571,7 @@ pub struct EditorUi {
 impl EditorUi {
     /// `EditorUi(MainActivity app)`: reads `showToolLabels` from preferences.
     pub fn new(app: &Arc<MainActivity>) -> AppResult<Arc<EditorUi>> {
-        let show = ui::pref_bool(&app.this, "showToolLabels", true)?;
+        let show = ui::pref_bool(&app.this, &ui::PrefKey::from("showToolLabels"), ui::PrefSwitch::from(true))?;
         Ok(Arc::new(EditorUi {
             app: Arc::downgrade(app),
             tools: Field::new(IndexMap::new()),
@@ -617,8 +643,8 @@ impl EditorUi {
     }
 
     /// `int dp(float value)`.
-    pub fn dp(&self, value: f32) -> AppResult<i32> {
-        Ok(crate::ui::dp(&self.context(), value)?)
+    fn dp(&self, value: f32) -> AppResult<i32> {
+        Ok(crate::ui::dp(&self.context(), crate::ui::Dp(value))?.0)
     }
     /// `View build()`: creates the editor tree and `app.canvas`.
     pub fn build(self: &Arc<Self>) -> AppResult<Obj> {
@@ -626,7 +652,7 @@ impl EditorUi {
         let ctx = self.context();
         let root = self.column()?;
         self.root.set(Some(root.clone()));
-        ui::set_background_color(&root, COLOR_WHITE)?;
+        ui::set_background_color(&root, notemaker_core::style::ArgbColor(COLOR_WHITE))?;
         let insets_listener = jx::callback(|_, args| {
             let view = &args[0];
             let insets = &args[1];
@@ -641,10 +667,10 @@ impl EditorUi {
 
         let header = self.row()?;
         linear_set_gravity(&header, GRAVITY_CENTER_VERTICAL)?;
-        ui::set_padding(&header, 0, 0, self.dp(8.0)?, 0)?;
+        ui::set_padding(&header, ui::PxInsets { left: 0, top: 0, right: self.dp(8.0)?, bottom: 0 })?;
         self.top_tool(&header, "document", "Notes", "Document actions")?;
         let heading = self.column()?;
-        ui::set_padding(&heading, self.dp(12.0)?, 0, self.dp(8.0)?, 0)?;
+        ui::set_padding(&heading, ui::PxInsets { left: self.dp(12.0)?, top: 0, right: self.dp(8.0)?, bottom: 0 })?;
         let title = self.text("", 18, INK, false)?;
         set_single_line(&title, true)?;
         set_ellipsize_end(&title)?;
@@ -653,7 +679,7 @@ impl EditorUi {
         self.subtitle.set(Some(subtitle.clone()));
         ui::add_view(&heading, &title)?;
         ui::add_view(&heading, &subtitle)?;
-        ui::add_view_params(&header, &heading, &ui::linear_params_weight(0, -2, 1.0)?)?;
+        ui::add_view_params(&header, &heading, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -2 }, ui::LayoutWeight(1.0))?)?;
         let connection = self.text("", 10, MUTED, false)?;
         set_single_line(&connection, true)?;
         set_ellipsize_end(&connection)?;
@@ -671,15 +697,15 @@ impl EditorUi {
         self.top_tool(&header, "pen", "Pen", "Pen tools")?;
         self.top_tool(&header, "eraser", "Erase", "Eraser tools")?;
         let top_rule = self.divider()?;
-        let rule_params = ui::linear_params(self.dp(1.0)?, self.dp(32.0)?)?;
-        ui::set_margins(&rule_params, self.dp(6.0)?, 0, self.dp(6.0)?, 0)?;
+        let rule_params = ui::linear_params(ui::LayoutSize { width: self.dp(1.0)?, height: self.dp(32.0)? })?;
+        ui::set_margins(&rule_params, ui::PxInsets { left: self.dp(6.0)?, top: 0, right: self.dp(6.0)?, bottom: 0 })?;
         ui::add_view_params(&header, &top_rule, &rule_params)?;
         let undo = self.icon(
             "undo",
             "Undo",
             self.act(|ui, app| {
                 ui.dismiss_popup()?;
-                app.history(false)
+                app.history(notemaker_core::store::HistoryDirection::Undo)
             }),
         )?;
         let redo = self.icon(
@@ -687,27 +713,27 @@ impl EditorUi {
             "Redo",
             self.act(|ui, app| {
                 ui.dismiss_popup()?;
-                app.history(true)
+                app.history(notemaker_core::store::HistoryDirection::Redo)
             }),
         )?;
         self.undo_button.set(Some(undo.clone()));
         self.redo_button.set(Some(redo.clone()));
-        ui::add_view_params(&header, &undo.view(), &ui::linear_params(self.dp(48.0)?, self.dp(56.0)?)?)?;
-        ui::add_view_params(&header, &redo.view(), &ui::linear_params(self.dp(48.0)?, self.dp(56.0)?)?)?;
-        ui::add_view_params(&root, &header, &ui::linear_params(-1, self.dp(72.0)?)?)?;
-        ui::add_view_params(&root, &self.divider()?, &ui::linear_params(-1, self.dp(1.0)?)?)?;
+        ui::add_view_params(&header, &undo.view(), &ui::linear_params(ui::LayoutSize { width: self.dp(48.0)?, height: self.dp(56.0)? })?)?;
+        ui::add_view_params(&header, &redo.view(), &ui::linear_params(ui::LayoutSize { width: self.dp(48.0)?, height: self.dp(56.0)? })?)?;
+        ui::add_view_params(&root, &header, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(72.0)? })?)?;
+        ui::add_view_params(&root, &self.divider()?, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(1.0)? })?)?;
 
         let body = self.row()?;
-        ui::add_view_params(&root, &body, &ui::linear_params_weight(-1, 0, 1.0)?)?;
+        ui::add_view_params(&root, &body, &ui::linear_params_weight(ui::LayoutSize { width: -1, height: 0 }, ui::LayoutWeight(1.0))?)?;
         let rail = self.column()?;
         linear_set_gravity(&rail, GRAVITY_CENTER_HORIZONTAL)?;
-        ui::set_padding(&rail, 0, self.dp(8.0)?, 0, self.dp(8.0)?)?;
-        ui::set_background_color(&rail, PAPER)?;
+        ui::set_padding(&rail, ui::PxInsets { left: 0, top: self.dp(8.0)?, right: 0, bottom: self.dp(8.0)? })?;
+        ui::set_background_color(&rail, notemaker_core::style::ArgbColor(PAPER))?;
         let rail_scroll = scroll_view(&ctx)?;
         set_fill_viewport(&rail_scroll, true)?;
         set_vertical_scroll_bar_enabled(&rail_scroll, false)?;
         ui::add_view(&rail_scroll, &rail)?;
-        ui::add_view_params(&body, &rail_scroll, &ui::linear_params(self.dp(56.0)?, -1)?)?;
+        ui::add_view_params(&body, &rail_scroll, &ui::linear_params(ui::LayoutSize { width: self.dp(56.0)?, height: -1 })?)?;
         self.tool(&rail, "template", "Template", "Page templates")?;
         self.tool(&rail, "layers", "Layers", "Layer actions")?;
         self.tool(&rail, "shapes", "Shapes", "Shape tools")?;
@@ -720,29 +746,29 @@ impl EditorUi {
         self.tool(&rail, "move", "Move", "Canvas navigation")?;
         self.rail_rule(&rail)?;
         self.tool(&rail, "page", "Pages", "Page actions")?;
-        ui::add_view_params(&rail, &ui::view(&ctx)?, &ui::linear_params_weight(1, 0, 1.0)?)?;
+        ui::add_view_params(&rail, &ui::view(&ctx)?, &ui::linear_params_weight(ui::LayoutSize { width: 1, height: 0 }, ui::LayoutWeight(1.0))?)?;
         self.tool(&rail, "agent", "Agent", "Open Agent")?;
         self.tool(&rail, "more", "More", "More tools")?;
-        ui::add_view_params(&body, &self.divider()?, &ui::linear_params(self.dp(1.0)?, -1)?)?;
+        ui::add_view_params(&body, &self.divider()?, &ui::linear_params(ui::LayoutSize { width: self.dp(1.0)?, height: -1 })?)?;
 
         let workspace = ui::frame_layout(&ctx)?;
         self.workspace.set(Some(workspace.clone()));
-        ui::add_view_params(&body, &workspace, &ui::linear_params_weight(0, -1, 1.0)?)?;
+        ui::add_view_params(&body, &workspace, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -1 }, ui::LayoutWeight(1.0))?)?;
         let canvas = CanvasView::new(&app, &ctx)?;
         app.canvas.set(Some(canvas.clone()));
         let canvas_view = canvas.view();
-        ui::set_content_description(&canvas_view, "Drawing canvas")?;
-        ui::add_view_params(&workspace, &canvas_view, &ui::frame_params(-1, -1)?)?;
+        ui::set_content_description(&canvas_view, &ui::UiText::from("Drawing canvas"))?;
+        ui::add_view_params(&workspace, &canvas_view, &ui::frame_params(ui::LayoutSize { width: -1, height: -1 })?)?;
         Ok(root)
     }
     /// `private void topTool(LinearLayout header, String kind, String label, String description)`.
-    pub fn top_tool(self: &Arc<Self>, header: &Obj, kind: &str, label: &str, description: &str) -> AppResult<()> {
+    fn top_tool(self: &Arc<Self>, header: &Obj, kind: &str, label: &str, description: &str) -> AppResult<()> {
         let (tool, view) = Tool::create(self, kind, label, description)?;
         tool.top.set(true);
         self.tools.with_mut(|t| t.insert(kind.to_string(), tool.clone()));
-        ui::add_view_params(header, &view, &ui::linear_params(self.dp(54.0)?, -1)?)?;
+        ui::add_view_params(header, &view, &ui::linear_params(ui::LayoutSize { width: self.dp(54.0)?, height: -1 })?)?;
         let w = Arc::downgrade(self);
-        let kind = kind.to_string();
+        let kind = ToolKind::from(kind);
         let anchor = tool.clone();
         on_click(&view, move |_| match w.upgrade() {
             Some(ui) => ui.open_tool(&kind, Some(&anchor.view())),
@@ -751,8 +777,8 @@ impl EditorUi {
     }
     /// `private void railRule(LinearLayout rail)`.
     pub fn rail_rule(&self, rail: &Obj) -> AppResult<()> {
-        let params = ui::linear_params(self.dp(24.0)?, self.dp(1.0)?)?;
-        ui::set_margins(&params, 0, self.dp(7.0)?, 0, self.dp(7.0)?)?;
+        let params = ui::linear_params(ui::LayoutSize { width: self.dp(24.0)?, height: self.dp(1.0)? })?;
+        ui::set_margins(&params, ui::PxInsets { left: 0, top: self.dp(7.0)?, right: 0, bottom: self.dp(7.0)? })?;
         ui::add_view_params(rail, &self.divider()?, &params)?;
         Ok(())
     }
@@ -767,41 +793,35 @@ impl EditorUi {
     /// `private View divider()`.
     pub fn divider(&self) -> AppResult<Obj> {
         let v = crate::ui::view(&self.context())?;
-        crate::ui::set_background_color(&v, LINE)?;
+        crate::ui::set_background_color(&v, notemaker_core::style::ArgbColor(LINE))?;
         Ok(v)
     }
-    /// `private void space(LinearLayout parent, int height)`.
-    pub fn space(&self, parent: &Obj, height: i32) -> AppResult<()> {
-        let v = crate::ui::view(&self.context())?;
-        let params = crate::ui::linear_params(1, self.dp(height as f32)?)?;
-        Ok(crate::ui::add_view_params(parent, &v, &params)?)
-    }
     /// `private TextView text(String value, int size, int color, boolean bold)`.
-    pub fn text(&self, value: &str, size: i32, color: i32, bold: bool) -> AppResult<Obj> {
-        Ok(crate::ui::text(&self.context(), value, size as f32, color, bold)?)
+    fn text(&self, value: &str, size: i32, color: i32, bold: bool) -> AppResult<Obj> {
+        Ok(crate::ui::text(&self.context(), &crate::ui::UiText::from(value), crate::ui::Sp(size as f32), notemaker_core::style::ArgbColor(color), if bold { crate::ui::TextWeight::Bold } else { crate::ui::TextWeight::Normal })?)
     }
     /// `private GradientDrawable surface(int fill, int border, int radius, int stroke)`.
-    pub fn surface(&self, fill: i32, border: i32, radius: i32, stroke: i32) -> AppResult<Obj> {
-        Ok(crate::ui::surface(&self.context(), fill, border, radius, stroke)?)
+    fn surface(&self, fill: i32, border: i32, radius: i32, stroke: i32) -> AppResult<Obj> {
+        Ok(crate::ui::surface(&self.context(), crate::ui::SurfaceStyle { fill: notemaker_core::style::ArgbColor(fill), border: notemaker_core::style::ArgbColor(border), radius: crate::ui::Dp(radius as f32), stroke: crate::ui::Dp(stroke as f32) })?)
     }
     /// `private TextView action(String label, Runnable callback)`.
-    pub fn action(self: &Arc<Self>, label: &str, callback: Action) -> AppResult<Obj> {
+    fn action(self: &Arc<Self>, label: &str, callback: Action) -> AppResult<Obj> {
         let button = self.text(label, 15, INK, false)?;
         text_set_gravity(&button, GRAVITY_CENTER_VERTICAL)?;
-        ui::set_padding(&button, self.dp(14.0)?, self.dp(12.0)?, self.dp(14.0)?, self.dp(12.0)?)?;
+        ui::set_padding(&button, ui::PxInsets { left: self.dp(14.0)?, top: self.dp(12.0)?, right: self.dp(14.0)?, bottom: self.dp(12.0)? })?;
         jcall!(button, "android/widget/TextView", "setMinHeight", "(I)V", self.dp(48.0)?)?;
-        ui::set_background_color(&button, PAPER)?;
-        ui::set_content_description(&button, label)?;
+        ui::set_background_color(&button, notemaker_core::style::ArgbColor(PAPER))?;
+        ui::set_content_description(&button, &ui::UiText::from(label))?;
         on_click(&button, move |_| callback())?;
         Ok(button)
     }
     /// `private void menuAction(LinearLayout parent, String label, boolean enabled, Runnable callback)`.
-    pub fn menu_action(self: &Arc<Self>, parent: &Obj, label: &str, enabled: bool, callback: Action) -> AppResult<()> {
-        ui::add_view_params(parent, &self.divider()?, &ui::linear_params(-1, self.dp(1.0)?)?)?;
+    fn menu_action(self: &Arc<Self>, parent: &Obj, label: &str, enabled: bool, callback: Action) -> AppResult<()> {
+        ui::add_view_params(parent, &self.divider()?, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(1.0)? })?)?;
         let button = self.row()?;
         linear_set_gravity(&button, GRAVITY_CENTER_VERTICAL)?;
         jcall!(button, "android/view/View", "setMinimumHeight", "(I)V", self.dp(52.0)?)?;
-        ui::set_content_description(&button, label)?;
+        ui::set_content_description(&button, &ui::UiText::from(label))?;
         set_enabled(&button, enabled)?;
         set_alpha(&button, if enabled { 1.0 } else { 0.4 })?;
         let icon_kind = self.action_icon(label);
@@ -812,10 +832,10 @@ impl EditorUi {
         ) {
             glyph.accent_color.set(self.app().color.get());
         }
-        ui::add_view_params(&button, &glyph_view, &ui::linear_params(self.dp(38.0)?, self.dp(38.0)?)?)?;
+        ui::add_view_params(&button, &glyph_view, &ui::linear_params(ui::LayoutSize { width: self.dp(38.0)?, height: self.dp(38.0)? })?)?;
         let name = self.text(label, 15, INK, false)?;
-        ui::set_padding(&name, self.dp(10.0)?, self.dp(12.0)?, self.dp(4.0)?, self.dp(12.0)?)?;
-        ui::add_view_params(&button, &name, &ui::linear_params_weight(0, -2, 1.0)?)?;
+        ui::set_padding(&name, ui::PxInsets { left: self.dp(10.0)?, top: self.dp(12.0)?, right: self.dp(4.0)?, bottom: self.dp(12.0)? })?;
+        ui::add_view_params(&button, &name, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -2 }, ui::LayoutWeight(1.0))?)?;
         let w = Arc::downgrade(self);
         on_click(&button, move |_| {
             if let Some(ui) = w.upgrade() {
@@ -823,21 +843,21 @@ impl EditorUi {
             }
             callback()
         })?;
-        ui::add_view_params(parent, &button, &ui::linear_params(-1, -2)?)?;
+        ui::add_view_params(parent, &button, &ui::linear_params(ui::LayoutSize { width: -1, height: -2 })?)?;
         Ok(())
     }
     /// `private String actionIcon(String label)`.
-    pub fn action_icon(&self, label: &str) -> String {
+    fn action_icon(&self, label: &str) -> String {
         action_icon_for(label).to_string()
     }
     /// `private void tool(LinearLayout rail, String icon, String label, String description)`.
-    pub fn tool(self: &Arc<Self>, rail: &Obj, icon: &str, label: &str, description: &str) -> AppResult<()> {
+    fn tool(self: &Arc<Self>, rail: &Obj, icon: &str, label: &str, description: &str) -> AppResult<()> {
         let (tool, view) = Tool::create(self, icon, label, description)?;
         self.tools.with_mut(|t| t.insert(icon.to_string(), tool.clone()));
-        let params = ui::linear_params(-1, self.dp(66.0)?)?;
+        let params = ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(66.0)? })?;
         ui::add_view_params(rail, &view, &params)?;
         let w = Arc::downgrade(self);
-        let kind = icon.to_string();
+        let kind = ToolKind::from(icon);
         let anchor = tool.clone();
         on_click(&view, move |_| match w.upgrade() {
             Some(ui) => ui.open_tool(&kind, Some(&anchor.view())),
@@ -845,9 +865,9 @@ impl EditorUi {
         })
     }
     /// `private void setText(TextView view, String value)`: only when changed.
-    pub fn set_text(&self, view: &Obj, value: &str) -> AppResult<()> {
-        if ui::text_of(view)? != value {
-            ui::set_text(view, value)?;
+    fn set_text(&self, view: &Obj, value: &str) -> AppResult<()> {
+        if String::from(ui::text_of(view)?) != value {
+            ui::set_text(view, &ui::UiText::from(value))?;
         }
         Ok(())
     }
@@ -890,7 +910,7 @@ impl EditorUi {
         self.set_text(&connection, status)?;
         let conflicts = app.conflicts.with(|c| c.len());
         if conflicts != 0 {
-            let current = ui::text_of(&connection)?;
+            let current = String::from(ui::text_of(&connection)?);
             self.set_text(&connection, &format!("{current}  ·  {conflicts} conflict(s)"))?;
         }
         let mode = if app.erase.get() {
@@ -917,7 +937,7 @@ impl EditorUi {
                 let current = jcall!(view, "android/view/View", "getContentDescription", "()Ljava/lang/CharSequence;")?.global();
                 let current = current.ok_or_else(npe)?;
                 if jx::to_string(current.as_obj()).as_deref() != Some(description.as_str()) {
-                    ui::set_content_description(&view, &description)?;
+                    ui::set_content_description(&view, &ui::UiText::from(&description))?;
                 }
             }
             if icon_changed {
@@ -962,7 +982,7 @@ impl EditorUi {
             self.rebuild_layers()?;
         }
         let revision = app.event_count.get().wrapping_add(app.pending_count.get());
-        let now = jx::uptime_millis();
+        let now = jx::uptime_millis().0;
         let drawing = app.canvas().points.with(|p| p.is_some());
         if revision != self.thumbnail_revision.get() && (!drawing || now - self.thumbnail_time.get() > 400) {
             self.thumbnail_revision.set(revision);
@@ -984,14 +1004,14 @@ impl EditorUi {
                 ui.new_layer()
             }),
         )?;
-        ui::add_view_params(&box_, &add, &ui::linear_params(-1, self.dp(52.0)?)?)?;
-        ui::add_view_params(&box_, &self.divider()?, &ui::linear_params(-1, self.dp(1.0)?)?)?;
+        ui::add_view_params(&box_, &add, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(52.0)? })?)?;
+        ui::add_view_params(&box_, &self.divider()?, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(1.0)? })?)?;
         let layer_list = self.column()?;
         self.layer_list.set(Some(layer_list.clone()));
         let scroll = scroll_view(&self.context())?;
         set_fill_viewport(&scroll, false)?;
         ui::add_view(&scroll, &layer_list)?;
-        ui::add_view_params(&box_, &scroll, &ui::linear_params(-1, self.dp(300.0)?)?)?;
+        ui::add_view_params(&box_, &scroll, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(300.0)? })?)?;
         self.rebuild_layers()?;
         Ok(box_)
     }
@@ -1016,9 +1036,9 @@ impl EditorUi {
             let visible = forced || !app.hidden.with(|h| h.contains(id));
             let card = self.row()?;
             linear_set_gravity(&card, GRAVITY_CENTER_VERTICAL)?;
-            ui::set_padding(&card, self.dp(8.0)?, self.dp(10.0)?, self.dp(8.0)?, self.dp(10.0)?)?;
+            ui::set_padding(&card, ui::PxInsets { left: self.dp(8.0)?, top: self.dp(10.0)?, right: self.dp(8.0)?, bottom: self.dp(10.0)? })?;
             set_background(&card, &self.surface(COLOR_WHITE, INK, 0, if selected { 2 } else { 0 })?)?;
-            ui::set_content_description(&card, &format!("Select layer {name}"))?;
+            ui::set_content_description(&card, &ui::UiText::from(&format!("Select layer {name}")))?;
             {
                 let w = Arc::downgrade(self);
                 let id = id.clone();
@@ -1026,7 +1046,7 @@ impl EditorUi {
                     if let Some(ui) = w.upgrade() {
                         let app = ui.app();
                         let _lock = app.lock.enter();
-                        app.select_layer(&id)?;
+                        app.select_layer(&notemaker_core::ids::LayerId::from(&id))?;
                     }
                     Ok(())
                 })?;
@@ -1073,12 +1093,12 @@ impl EditorUi {
                     Ok(())
                 }),
             )?;
-            ui::add_view_params(&card, &eye.view(), &ui::linear_params(self.dp(48.0)?, self.dp(60.0)?)?)?;
+            ui::add_view_params(&card, &eye.view(), &ui::linear_params(ui::LayoutSize { width: self.dp(48.0)?, height: self.dp(60.0)? })?)?;
             let (preview, preview_view) = LayerPreview::create(self, id, (count - index) as i32, visible)?;
             self.previews.with_mut(|p| p.push(preview));
-            ui::add_view_params(&card, &preview_view, &ui::linear_params(self.dp(48.0)?, self.dp(66.0)?)?)?;
+            ui::add_view_params(&card, &preview_view, &ui::linear_params(ui::LayoutSize { width: self.dp(48.0)?, height: self.dp(66.0)? })?)?;
             let details = self.column()?;
-            ui::set_padding(&details, self.dp(14.0)?, 0, self.dp(4.0)?, 0)?;
+            ui::set_padding(&details, ui::PxInsets { left: self.dp(14.0)?, top: 0, right: self.dp(4.0)?, bottom: 0 })?;
             let name_view = self.text(&name, 16, INK, selected)?;
             jcall!(name_view, "android/widget/TextView", "setMaxLines", "(I)V", 2)?;
             set_ellipsize_end(&name_view)?;
@@ -1095,14 +1115,14 @@ impl EditorUi {
                 MUTED,
                 false,
             )?;
-            ui::set_padding(&state, 0, self.dp(6.0)?, 0, 0)?;
+            ui::set_padding(&state, ui::PxInsets { left: 0, top: self.dp(6.0)?, right: 0, bottom: 0 })?;
             ui::add_view(&details, &state)?;
-            ui::add_view_params(&card, &details, &ui::linear_params_weight(0, -2, 1.0)?)?;
+            ui::add_view_params(&card, &details, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -2 }, ui::LayoutWeight(1.0))?)?;
             let more_id = id.clone();
             let more = self.icon("more", &format!("Options for layer {name}"), self.act(move |ui, _| ui.layer_options_at_layers_tool(&more_id)))?;
-            ui::add_view_params(&card, &more.view(), &ui::linear_params(self.dp(48.0)?, self.dp(60.0)?)?)?;
-            ui::add_view_params(&layer_list, &card, &ui::linear_params(-1, -2)?)?;
-            ui::add_view_params(&layer_list, &self.divider()?, &ui::linear_params(-1, self.dp(1.0)?)?)?;
+            ui::add_view_params(&card, &more.view(), &ui::linear_params(ui::LayoutSize { width: self.dp(48.0)?, height: self.dp(60.0)? })?)?;
+            ui::add_view_params(&layer_list, &card, &ui::linear_params(ui::LayoutSize { width: -1, height: -2 })?)?;
+            ui::add_view_params(&layer_list, &self.divider()?, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(1.0)? })?)?;
         }
         Ok(())
     }
@@ -1118,7 +1138,7 @@ impl EditorUi {
         set_single_line(&input, true)?;
         set_hint(&input, "Layer name")?;
         let box_ = self.column()?;
-        ui::set_padding(&box_, self.dp(24.0)?, self.dp(8.0)?, self.dp(24.0)?, self.dp(8.0)?)?;
+        ui::set_padding(&box_, ui::PxInsets { left: self.dp(24.0)?, top: self.dp(8.0)?, right: self.dp(24.0)?, bottom: self.dp(8.0)? })?;
         ui::add_view(&box_, &input)?;
         let b = builder(&ctx)?;
         builder_title(&b, "New layer")?;
@@ -1129,14 +1149,14 @@ impl EditorUi {
         let create = dialog_listener(move |_| {
             let Some(ui) = w.upgrade() else { return Ok(()) };
             let app = ui.app();
-            let mut name = jfmt::java_trim(&ui::text_of(&input.get())?).to_string();
+            let mut name = jfmt::java_trim(&String::from(ui::text_of(&input.get())?)).to_string();
             if name.is_empty() {
                 name = format!("Layer {}", app.layers.with(|l| l.len()) + 1);
             }
             let _lock = app.lock.enter();
             app.deselect()?;
             app.reset_drawing_gesture()?;
-            app.selected.set(MainActivity::id());
+            app.selected.set(String::from(MainActivity::id()));
             let selected = app.selected.get();
             app.enqueue(&MainActivity::obj(&[("kind", JV::from("layer")), ("layer", JV::from(selected)), ("name", JV::from(name)), ("force", JV::from(false))]))?;
             app.save();
@@ -1147,7 +1167,7 @@ impl EditorUi {
         builder_show(&b)
     }
     /// `private void layerOptions(String id, View anchor)`.
-    pub fn layer_options(self: &Arc<Self>, id: &str, anchor: &Obj) -> AppResult<()> {
+    fn layer_options(self: &Arc<Self>, id: &str, anchor: &Obj) -> AppResult<()> {
         let app = self.app();
         let Some(layer) = app.layers.with(|l| l.get(id).cloned()) else { return Ok(()) };
         let box_ = self.popup_body(&layer.opt_string("name"), Some("Layer actions"))?;
@@ -1177,11 +1197,11 @@ impl EditorUi {
             self.act(move |_, app| {
                 let _lock = app.lock.enter();
                 app.hidden.with_mut(|h| h.remove(&i));
-                app.select_layer(&i)
+                app.select_layer(&notemaker_core::ids::LayerId::from(&i))
             }),
         )?;
         let i = id.to_string();
-        self.menu_action(&box_, "Rename layer…", true, self.act(move |_, app| app.rename_layer(&i)))?;
+        self.menu_action(&box_, "Rename layer…", true, self.act(move |_, app| app.rename_layer(&notemaker_core::ids::LayerId::from(&i))))?;
         let i = id.to_string();
         self.menu_action(
             &box_,
@@ -1195,7 +1215,7 @@ impl EditorUi {
                 let weak = Arc::downgrade(app);
                 let id = i.clone();
                 let archive = dialog_listener(move |_| match weak.upgrade() {
-                    Some(app) => app.layer_command("hide", &id, None),
+                    Some(app) => app.layer_command(crate::main_activity::LayerCommand::Hide, &notemaker_core::ids::LayerId::from(&id)),
                     None => Ok(()),
                 });
                 builder_positive(&b, "Archive", &archive)?;
@@ -1203,7 +1223,7 @@ impl EditorUi {
             }),
         )?;
         let i = id.to_string();
-        self.menu_action(&box_, "Duplicate layer", true, self.act(move |_, app| app.layer_command("duplicate", &i, None)))?;
+        self.menu_action(&box_, "Duplicate layer", true, self.act(move |_, app| app.layer_command(crate::main_activity::LayerCommand::Duplicate, &notemaker_core::ids::LayerId::from(&i))))?;
         let order: Vec<String> = app.layers.with(|l| l.keys().cloned().collect());
         let position: i32 = order.iter().position(|k| k == id).map(|p| p as i32).unwrap_or(-1);
         // The list displays the highest order first.
@@ -1212,10 +1232,10 @@ impl EditorUi {
             &box_,
             "Move layer up",
             position >= 0 && ((position + 1) as usize) < order.len(),
-            self.act(move |_, app| app.layer_command("reorder", &i, Some(&(position + 1).to_string()))),
+            self.act(move |_, app| app.layer_command(crate::main_activity::LayerCommand::Reorder(notemaker_core::ids::LayerPosition(position + 1)), &notemaker_core::ids::LayerId::from(&i))),
         )?;
         let i = id.to_string();
-        self.menu_action(&box_, "Move layer down", position > 0, self.act(move |_, app| app.layer_command("reorder", &i, Some(&(position - 1).to_string()))))?;
+        self.menu_action(&box_, "Move layer down", position > 0, self.act(move |_, app| app.layer_command(crate::main_activity::LayerCommand::Reorder(notemaker_core::ids::LayerPosition(position - 1)), &notemaker_core::ids::LayerId::from(&i))))?;
         let i = id.to_string();
         let merge_order = order.clone();
         self.menu_action(&box_, "Merge into another layer…", order.len() > 1, self.act(move |ui, _| ui.choose_merge_target(&i, merge_order.clone())))?;
@@ -1223,7 +1243,7 @@ impl EditorUi {
         self.show_popup(&box_, anchor, anchor_tool, false)
     }
     /// `private void chooseMergeTarget(String source, ArrayList<String> ids)`.
-    pub fn choose_merge_target(self: &Arc<Self>, source: &str, ids: Vec<String>) -> AppResult<()> {
+    fn choose_merge_target(self: &Arc<Self>, source: &str, ids: Vec<String>) -> AppResult<()> {
         let app = self.app();
         let mut targets: Vec<String> = Vec::new();
         let mut labels: Vec<String> = Vec::new();
@@ -1242,7 +1262,7 @@ impl EditorUi {
         let listener = dialog_listener(move |index| match weak.upgrade() {
             Some(app) => {
                 let target = targets.get(index as usize).ok_or_else(|| AppError::java("java.lang.IndexOutOfBoundsException", format!("Index {index} out of bounds")))?;
-                app.layer_command("merge", &source, Some(target))
+                app.layer_command(crate::main_activity::LayerCommand::Merge(notemaker_core::ids::LayerId::from(target)), &notemaker_core::ids::LayerId::from(&source))
             }
             None => Ok(()),
         });
@@ -1251,24 +1271,25 @@ impl EditorUi {
         builder_show(&b)
     }
     /// `private LinearLayout popupBody(String heading, String description)`.
-    pub fn popup_body(self: &Arc<Self>, heading: &str, description: Option<&str>) -> AppResult<Obj> {
+    fn popup_body(self: &Arc<Self>, heading: &str, description: Option<&str>) -> AppResult<Obj> {
         let box_ = self.column()?;
-        ui::set_padding(&box_, self.dp(18.0)?, self.dp(16.0)?, self.dp(18.0)?, self.dp(12.0)?)?;
+        ui::set_padding(&box_, ui::PxInsets { left: self.dp(18.0)?, top: self.dp(16.0)?, right: self.dp(18.0)?, bottom: self.dp(12.0)? })?;
         set_tag_int(&box_, 320)?;
-        ui::set_background_color(&box_, COLOR_WHITE)?;
+        ui::set_background_color(&box_, notemaker_core::style::ArgbColor(COLOR_WHITE))?;
         let label = self.text(heading, 18, INK, false)?;
-        ui::set_padding(&label, 0, 0, 0, self.dp(12.0)?)?;
+        ui::set_padding(&label, ui::PxInsets { left: 0, top: 0, right: 0, bottom: self.dp(12.0)? })?;
         ui::add_view(&box_, &label)?;
         let description = description.ok_or_else(npe)?;
         if !description.is_empty() {
             let help = self.text(description, 12, MUTED, false)?;
-            ui::set_padding(&help, 0, self.dp(6.0)?, 0, self.dp(10.0)?)?;
+            ui::set_padding(&help, ui::PxInsets { left: 0, top: self.dp(6.0)?, right: 0, bottom: self.dp(10.0)? })?;
             ui::add_view(&box_, &help)?;
         }
         Ok(box_)
     }
     /// `void openTool(String kind, View anchor)`.
-    pub fn open_tool(self: &Arc<Self>, kind: &str, anchor: Option<&Obj>) -> AppResult<()> {
+    pub fn open_tool(self: &Arc<Self>, kind: &ToolKind, anchor: Option<&Obj>) -> AppResult<()> {
+        let kind: &str = kind;
         let app = self.app();
         if kind != "select" && (app.selecting.get() || app.selection_session.with(|s| s.is_some()) || !app.selected_entities.with(|s| s.is_empty())) {
             app.deselect()?;
@@ -1318,7 +1339,7 @@ impl EditorUi {
                     true,
                     self.act(|ui, _| {
                         let more = ui.tool_named("more").map(|t| t.view());
-                        ui.open_tool("history", more.as_ref())
+                        ui.open_tool(&ToolKind::from("history"), more.as_ref())
                     }),
                 )?;
                 self.menu_action(&box_, "Agent", true, self.act(|_, app| app.agent.get().ok_or_else(npe)?.show()))?;
@@ -1348,7 +1369,7 @@ impl EditorUi {
                 }
                 app.update()?;
                 let box_ = self.eraser_panel()?;
-                self.menu_action(&box_, "Undo last action", !app.undo.with(|u| u.is_empty()), self.act(|_, app| app.history(false)))?;
+                self.menu_action(&box_, "Undo last action", !app.undo.with(|u| u.is_empty()), self.act(|_, app| app.history(notemaker_core::store::HistoryDirection::Undo)))?;
                 self.menu_action(&box_, "Ready to erase", true, self.act(|_, _| Ok(())))?;
                 box_
             }
@@ -1421,7 +1442,7 @@ impl EditorUi {
                         let selected = model.objects.get(&object_id);
                         if let Some(selected) = selected {
                             if selected.get("shape").and_then(Value::as_str) == Some("text") {
-                                self.menu_action(&box_, "Edit selected text…", true, self.act(move |_, app| app.edit_object(&object_id)))?;
+                                self.menu_action(&box_, "Edit selected text…", true, self.act(move |_, app| app.edit_object(&notemaker_core::ids::EntityId::from(&object_id))))?;
                                 break;
                             }
                         }
@@ -1456,8 +1477,8 @@ impl EditorUi {
             "history" => {
                 let box_ = self.popup_body("History", Some("Your drawing and erasing actions"))?;
                 let history_ready = !app.object_history_pending();
-                self.menu_action(&box_, "Undo", history_ready && !app.undo.with(|u| u.is_empty()), self.act(|_, app| app.history(false)))?;
-                self.menu_action(&box_, "Redo", history_ready && !app.redo.with(|r| r.is_empty()), self.act(|_, app| app.history(true)))?;
+                self.menu_action(&box_, "Undo", history_ready && !app.undo.with(|u| u.is_empty()), self.act(|_, app| app.history(notemaker_core::store::HistoryDirection::Undo)))?;
+                self.menu_action(&box_, "Redo", history_ready && !app.redo.with(|r| r.is_empty()), self.act(|_, app| app.history(notemaker_core::store::HistoryDirection::Redo)))?;
                 box_
             }
             "page" => {
@@ -1501,7 +1522,7 @@ impl EditorUi {
         c.invalidate()
     }
     /// `private void changePage(int page)`.
-    pub fn change_page(self: &Arc<Self>, page: i32) -> AppResult<()> {
+    fn change_page(self: &Arc<Self>, page: i32) -> AppResult<()> {
         let app = self.app();
         app.deselect()?;
         let _lock = app.lock.enter();
@@ -1517,11 +1538,11 @@ impl EditorUi {
         let box_ = self.popup_body("Shapes", Some("Choose a shape, then drag on the canvas."))?;
         set_tag_int(&box_, 480)?;
         let (_, sample_view) = StrokeSample::create(self)?;
-        ui::add_view_params(&box_, &sample_view, &ui::linear_params(-1, self.dp(64.0)?)?)?;
+        ui::add_view_params(&box_, &sample_view, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(64.0)? })?)?;
         self.section(&box_, "Shapes")?;
         let grid = self.column()?;
         let excluded = ["circle", "rectangle", "rhombus", "arrowLine", "waveLine", "regularHexagon", "text", "svg", "image"];
-        let ids: Vec<&'static str> = shape_catalog::ids().iter().copied().filter(|id| !excluded.contains(id)).collect();
+        let ids: Vec<notemaker_core::ids::ShapeId> = shape_catalog::ids().filter(|id| !excluded.contains(&&**id)).collect();
         // Six columns on tablets, four on narrow displays, always at least 48dp targets.
         let resources = jcall!(ctx, "android/content/Context", "getResources", "()Landroid/content/res/Resources;")?.some();
         let configuration = jcall!(resources, "android/content/res/Resources", "getConfiguration", "()Landroid/content/res/Configuration;")?.some();
@@ -1530,7 +1551,7 @@ impl EditorUi {
         for (i, id) in ids.iter().enumerate() {
             if i % columns == 0 {
                 let r = self.row()?;
-                ui::add_view_params(&grid, &r, &ui::linear_params(-1, self.dp(58.0)?)?)?;
+                ui::add_view_params(&grid, &r, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(58.0)? })?)?;
                 row = Some(r);
             }
             let label = shape_catalog::name(id)?;
@@ -1543,15 +1564,15 @@ impl EditorUi {
                 self.act(move |ui, app| {
                     ui.dismiss_popup()?;
                     ui.selected_tool.set("shapes".into());
-                    app.set_drawing_tool(Some(&tool_shape))
+                    app.set_drawing_tool(Some(&notemaker_core::ids::ShapeId::from(&tool_shape)))
                 }),
                 false,
             )?;
-            ui::add_view_params(row.as_ref().ok_or_else(npe)?, &choice, &ui::linear_params_weight(0, -1, 1.0)?)?;
+            ui::add_view_params(row.as_ref().ok_or_else(npe)?, &choice, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -1 }, ui::LayoutWeight(1.0))?)?;
         }
         let last = row.ok_or_else(npe)?;
         while child_count(&last)? < columns as i32 {
-            ui::add_view_params(&last, &ui::view(&ctx)?, &ui::linear_params_weight(0, -1, 1.0)?)?;
+            ui::add_view_params(&last, &ui::view(&ctx)?, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -1 }, ui::LayoutWeight(1.0))?)?;
         }
         ui::add_view(&box_, &grid)?;
         self.section(&box_, "Colors")?;
@@ -1574,32 +1595,32 @@ impl EditorUi {
         Ok(box_)
     }
     /// `private void section(LinearLayout box, String title)`.
-    pub fn section(&self, box_: &Obj, title: &str) -> AppResult<()> {
-        let rule = ui::linear_params(-1, self.dp(1.0)?)?;
-        ui::set_margins(&rule, 0, self.dp(12.0)?, 0, self.dp(12.0)?)?;
+    fn section(&self, box_: &Obj, title: &str) -> AppResult<()> {
+        let rule = ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(1.0)? })?;
+        ui::set_margins(&rule, ui::PxInsets { left: 0, top: self.dp(12.0)?, right: 0, bottom: self.dp(12.0)? })?;
         ui::add_view_params(box_, &self.divider()?, &rule)?;
         let label = self.text(title, 15, INK, false)?;
-        ui::set_padding(&label, 0, 0, 0, self.dp(8.0)?)?;
+        ui::set_padding(&label, ui::PxInsets { left: 0, top: 0, right: 0, bottom: self.dp(8.0)? })?;
         ui::add_view(box_, &label)?;
         Ok(())
     }
     /// `private View choice(String kind, String description, BooleanSupplier selected, Runnable callback, boolean label)`.
-    pub fn choice(self: &Arc<Self>, kind: &str, description: &str, selected: BooleanSupplier, callback: Action, label: bool) -> AppResult<Obj> {
+    fn choice(self: &Arc<Self>, kind: &str, description: &str, selected: BooleanSupplier, callback: Action, label: bool) -> AppResult<Obj> {
         let (_, item) = ChoiceItem::create(self, selected)?;
         jcall!(item, "android/widget/LinearLayout", "setOrientation", "(I)V", LINEARLAYOUT_VERTICAL)?;
         linear_set_gravity(&item, GRAVITY_CENTER)?;
-        ui::set_padding(&item, self.dp(2.0)?, self.dp(4.0)?, self.dp(2.0)?, self.dp(12.0)?)?;
-        ui::set_content_description(&item, description)?;
+        ui::set_padding(&item, ui::PxInsets { left: self.dp(2.0)?, top: self.dp(4.0)?, right: self.dp(2.0)?, bottom: self.dp(12.0)? })?;
+        ui::set_content_description(&item, &ui::UiText::from(description))?;
         set_tooltip(&item, description)?;
         let (choice_icon, icon_view) = Icon::create(self, kind)?;
         choice_icon.accent_color.set(self.app().color.get());
-        ui::add_view_params(&item, &icon_view, &ui::linear_params(self.dp(40.0)?, self.dp(36.0)?)?)?;
+        ui::add_view_params(&item, &icon_view, &ui::linear_params(ui::LayoutSize { width: self.dp(40.0)?, height: self.dp(36.0)? })?)?;
         if label {
             let name = self.text(description, 11, INK, false)?;
             text_set_gravity(&name, GRAVITY_CENTER)?;
             set_single_line(&name, true)?;
             set_ellipsize_end(&name)?;
-            ui::add_view_params(&item, &name, &ui::linear_params(-1, -2)?)?;
+            ui::add_view_params(&item, &name, &ui::linear_params(ui::LayoutSize { width: -1, height: -2 })?)?;
         }
         on_click(&item, move |v| {
             callback()?;
@@ -1616,7 +1637,7 @@ impl EditorUi {
         Ok(item)
     }
     /// `private LinearLayout colorChoices(boolean shape)`.
-    pub fn color_choices(self: &Arc<Self>, shape: bool) -> AppResult<Obj> {
+    fn color_choices(self: &Arc<Self>, shape: bool) -> AppResult<Obj> {
         let grid = self.column()?;
         let colors: [i32; 10] = [
             COLOR_BLACK,
@@ -1636,12 +1657,12 @@ impl EditorUi {
         for i in 0..colors.len() {
             if i % 5 == 0 {
                 let r = self.row()?;
-                ui::add_view_params(&grid, &r, &ui::linear_params(-1, self.dp(48.0)?)?)?;
+                ui::add_view_params(&grid, &r, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(48.0)? })?)?;
                 row = Some(r);
             }
             let color = colors[i];
             let (_, swatch) = ColorSwatch::create(self, color)?;
-            ui::set_content_description(&swatch, &format!("{} ink", names[i]))?;
+            ui::set_content_description(&swatch, &ui::UiText::from(&format!("{} ink", names[i])))?;
             set_tooltip(&swatch, &format!("{} ink", names[i]))?;
             let w = Arc::downgrade(self);
             let grid_weak = grid_weak.clone();
@@ -1670,7 +1691,7 @@ impl EditorUi {
                 }
                 Ok(())
             })?;
-            ui::add_view_params(row.as_ref().ok_or_else(npe)?, &swatch, &ui::linear_params_weight(0, -1, 1.0)?)?;
+            ui::add_view_params(row.as_ref().ok_or_else(npe)?, &swatch, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: -1 }, ui::LayoutWeight(1.0))?)?;
         }
         Ok(grid)
     }
@@ -1682,7 +1703,7 @@ impl EditorUi {
         let value = self.text(&(app.width.get() as i32).to_string(), 15, INK, false)?;
         text_set_gravity(&value, GRAVITY_RIGHT)?;
         let width = seek_bar(&self.context())?;
-        ui::set_content_description(&width, "Pen width")?;
+        ui::set_content_description(&width, &ui::UiText::from("Pen width"))?;
         set_max(&width, 29)?;
         set_progress(&width, 0.max(app.width.get() as i32 - 1))?;
         set_progress_tint(&width, INK)?;
@@ -1694,19 +1715,19 @@ impl EditorUi {
             if user {
                 let Some(ui) = w.upgrade() else { return Ok(()) };
                 ui.app().width.set((v + 1) as f32);
-                ui::set_text(&value_weak.get(), &(v + 1).to_string())?;
+                ui::set_text(&value_weak.get(), &ui::UiText::from(&(v + 1).to_string()))?;
                 if let Some(sample) = ui.sample.get() {
                     ui::invalidate(&sample.view())?;
                 }
             }
             Ok(())
         })?;
-        ui::add_view_params(&row, &width, &ui::linear_params_weight(0, self.dp(48.0)?, 1.0)?)?;
-        ui::add_view_params(&row, &value, &ui::linear_params(self.dp(40.0)?, -2)?)?;
+        ui::add_view_params(&row, &width, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: self.dp(48.0)? }, ui::LayoutWeight(1.0))?)?;
+        ui::add_view_params(&row, &value, &ui::linear_params(ui::LayoutSize { width: self.dp(40.0)?, height: -2 })?)?;
         Ok(row)
     }
     /// `private String materialDescription()`.
-    pub fn material_description(&self) -> String {
+    fn material_description(&self) -> String {
         let app = self.app();
         format!("{} · {}%", material_range(&app.brush.get()), app.material.get())
     }
@@ -1718,7 +1739,7 @@ impl EditorUi {
         self.material_label.set(Some(label.clone()));
         ui::add_view(&group, &label)?;
         let seek = seek_bar(&self.context())?;
-        ui::set_content_description(&seek, "Brush material")?;
+        ui::set_content_description(&seek, &ui::UiText::from("Brush material"))?;
         set_max(&seek, 100)?;
         set_progress(&seek, app.material.get())?;
         set_progress_tint(&seek, INK)?;
@@ -1730,9 +1751,9 @@ impl EditorUi {
                 let Some(ui) = w.upgrade() else { return Ok(()) };
                 let app = ui.app();
                 app.material.set(value);
-                ui::set_text(&ui.material_label.get().ok_or_else(npe)?, &ui.material_description())?;
+                ui::set_text(&ui.material_label.get().ok_or_else(npe)?, &ui::UiText::from(&ui.material_description()))?;
                 let editor = ui::edit(&app.this)?;
-                ui::put_int(&editor, "penMaterial", value)?;
+                ui::put_int(&editor, &ui::PrefKey::from("penMaterial"), ui::PrefNumber(value))?;
                 ui::apply(&editor)?;
                 if let Some(sample) = ui.sample.get() {
                     ui::invalidate(&sample.view())?;
@@ -1740,7 +1761,7 @@ impl EditorUi {
             }
             Ok(())
         })?;
-        ui::add_view_params(&group, &seek, &ui::linear_params(-1, self.dp(42.0)?)?)?;
+        ui::add_view_params(&group, &seek, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(42.0)? })?)?;
         Ok(group)
     }
     /// `private LinearLayout penPanel()`.
@@ -1760,11 +1781,11 @@ impl EditorUi {
                 }),
                 true,
             )?;
-            ui::add_view_params(&brushes, &choice, &ui::linear_params_weight(0, self.dp(70.0)?, 1.0)?)?;
+            ui::add_view_params(&brushes, &choice, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: self.dp(70.0)? }, ui::LayoutWeight(1.0))?)?;
         }
         ui::add_view(&box_, &brushes)?;
         let (_, sample_view) = StrokeSample::create(self)?;
-        ui::add_view_params(&box_, &sample_view, &ui::linear_params(-1, self.dp(64.0)?)?)?;
+        ui::add_view_params(&box_, &sample_view, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(64.0)? })?)?;
         self.section(&box_, "Line width")?;
         ui::add_view(&box_, &self.width_control()?)?;
         let material_panel = self.material_control()?;
@@ -1787,7 +1808,7 @@ impl EditorUi {
             let (color, width) = (colors[i], widths[i]);
             self.menu_action(&box_, defaults[i], true, self.act(move |ui, _| ui.apply_pen_preset_values(color, width, "pen", 50)))?;
         }
-        let saved = ui::pref_string(&self.context(), "penPresets", Some(""))?.ok_or_else(npe)?;
+        let saved = ui::pref_string(&self.context(), &ui::PrefKey::from("penPresets"), Some(&ui::PrefText::from("")))?.map(String::from).ok_or_else(npe)?;
         if !saved.is_empty() {
             let presets = || -> AppResult<()> {
                 let list = JSONArray::parse(&saved)?;
@@ -1840,7 +1861,7 @@ impl EditorUi {
         ui::add_view(&box_, &labels)?;
         let w = Arc::downgrade(self);
         on_checked(&labels, move |checked| match w.upgrade() {
-            Some(ui) => ui.show_tool_labels(checked),
+            Some(ui) => ui.show_tool_labels(if checked { ToolLabels::Shown } else { ToolLabels::Hidden }),
             None => Ok(()),
         })?;
         self.menu_action(&box_, "Save current pen as preset…", true, self.act(|ui, _| ui.save_pen_preset()))?;
@@ -1855,14 +1876,14 @@ impl EditorUi {
         let host = app.host.get();
         let server = edit_text(&ctx)?;
         jcall!(server, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&server, &MainActivity::server_address_for_settings(Some(&host)))?;
+        ui::set_text(&server, &ui::UiText::from(&MainActivity::server_address_for_settings(Some(&host))))?;
         set_hint(&server, "192.168.50.180")?;
         set_input_type(&server, INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_VARIATION_URI)?;
         ui::add_view(&box_, &self.text("Notes server address", 12, INK, true)?)?;
         ui::add_view(&box_, &server)?;
         let server_port = edit_text(&ctx)?;
         jcall!(server_port, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&server_port, &MainActivity::server_port_for_settings(Some(&host)))?;
+        ui::set_text(&server_port, &ui::UiText::from(&MainActivity::server_port_for_settings(Some(&host))))?;
         set_hint(&server_port, "8765")?;
         set_input_type(&server_port, INPUTTYPE_TYPE_CLASS_NUMBER)?;
         ui::add_view(&box_, &self.text("Server port", 12, INK, true)?)?;
@@ -1873,18 +1894,18 @@ impl EditorUi {
             MUTED,
             false,
         )?;
-        ui::set_padding(&server_help, 0, self.dp(4.0)?, 0, self.dp(8.0)?)?;
+        ui::set_padding(&server_help, ui::PxInsets { left: 0, top: self.dp(4.0)?, right: 0, bottom: self.dp(8.0)? })?;
         ui::add_view(&box_, &server_help)?;
         let proxy = edit_text(&ctx)?;
         jcall!(proxy, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&proxy, &app.proxy_url.get())?;
+        ui::set_text(&proxy, &ui::UiText::from(&app.proxy_url.get()))?;
         set_hint(&proxy, "Optional editing proxy URL")?;
         set_input_type(&proxy, INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_VARIATION_URI)?;
         ui::add_view(&box_, &self.text("Editing proxy URL", 12, INK, true)?)?;
         ui::add_view(&box_, &proxy)?;
         let token = edit_text(&ctx)?;
         jcall!(token, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&token, &app.proxy_token.get())?;
+        ui::set_text(&token, &ui::UiText::from(&app.proxy_token.get()))?;
         set_hint(&token, "Proxy bearer token")?;
         set_input_type(&token, INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_VARIATION_PASSWORD)?;
         ui::add_view(&box_, &self.text("Editing proxy token", 12, INK, true)?)?;
@@ -1895,7 +1916,7 @@ impl EditorUi {
             MUTED,
             false,
         )?;
-        ui::set_padding(&proxy_help, 0, self.dp(4.0)?, 0, self.dp(8.0)?)?;
+        ui::set_padding(&proxy_help, ui::PxInsets { left: 0, top: self.dp(4.0)?, right: 0, bottom: self.dp(8.0)? })?;
         ui::add_view(&box_, &proxy_help)?;
         let fields = [WeakObj::new(&server), WeakObj::new(&server_port), WeakObj::new(&proxy), WeakObj::new(&token)];
         self.menu_action(
@@ -1903,10 +1924,10 @@ impl EditorUi {
             "Save network settings",
             true,
             self.act(move |_, app| {
-                let server = ui::text_of(&fields[0].get())?;
-                let port = ui::text_of(&fields[1].get())?;
-                let proxy = ui::text_of(&fields[2].get())?;
-                let token = ui::text_of(&fields[3].get())?;
+                let server = String::from(ui::text_of(&fields[0].get())?);
+                let port = String::from(ui::text_of(&fields[1].get())?);
+                let proxy = String::from(ui::text_of(&fields[2].get())?);
+                let token = String::from(ui::text_of(&fields[3].get())?);
                 app.save_network_settings(&server, &port, &proxy, &token)
             }),
         )?;
@@ -1933,7 +1954,7 @@ impl EditorUi {
                 app.object_fill_color.set(if fill == COLOR_TRANSPARENT { app.color.get() } else { fill });
                 ui.dismiss_popup()?;
                 app.update()?;
-                ui::toast(&app.this, "Tap inside a closed area", TOAST_LENGTH_SHORT)?;
+                ui::toast(&app.this, &ui::UiText::from("Tap inside a closed area"), TOAST_LENGTH_SHORT)?;
                 Ok(())
             }),
         )?;
@@ -1950,9 +1971,9 @@ impl EditorUi {
                     if model.object_active.get(id) == Some(&false) {
                         continue;
                     }
-                    let label = format!("{} · {}", shape_catalog::name(&json::java_string(object.get("shape")))?, short_id(id));
+                    let label = format!("{} · {}", shape_catalog::name(&notemaker_core::ids::ShapeId::from(json::java_string(object.get("shape"))))?, short_id(id));
                     let id = id.clone();
-                    ui.menu_action(&targets, &label, true, ui.act(move |_, app| app.fill_entity("object", &id, app.object_fill_color.get())))?;
+                    ui.menu_action(&targets, &label, true, ui.act(move |_, app| app.fill_entity(&notemaker_core::ids::EntityKind::object(), &notemaker_core::ids::EntityId::from(&id), notemaker_core::style::ArgbColor(app.object_fill_color.get()))))?;
                 }
                 ui.show_popup_at_tool(&targets, "fill")
             }),
@@ -1973,7 +1994,7 @@ impl EditorUi {
                     }
                     let label = format!("Ink path · {}", short_id(id));
                     let id = id.clone();
-                    ui.menu_action(&targets, &label, true, ui.act(move |_, app| app.fill_entity("stroke", &id, app.object_fill_color.get())))?;
+                    ui.menu_action(&targets, &label, true, ui.act(move |_, app| app.fill_entity(&notemaker_core::ids::EntityKind::stroke(), &notemaker_core::ids::EntityId::from(&id), notemaker_core::style::ArgbColor(app.object_fill_color.get()))))?;
                 }
                 ui.show_popup_at_tool(&targets, "fill")
             }),
@@ -1999,7 +2020,7 @@ impl EditorUi {
                 }),
                 true,
             )?;
-            ui::add_view_params(&modes, &choice, &ui::linear_params_weight(0, self.dp(72.0)?, 1.0)?)?;
+            ui::add_view_params(&modes, &choice, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: self.dp(72.0)? }, ui::LayoutWeight(1.0))?)?;
         }
         ui::add_view(&box_, &modes)?;
         self.section(&box_, "Options")?;
@@ -2013,14 +2034,14 @@ impl EditorUi {
                 let app = ui.app();
                 app.scribble_to_erase.set(checked);
                 let editor = ui::edit(&app.this)?;
-                ui::put_bool(&editor, "scribbleToErase", checked)?;
+                ui::put_bool(&editor, &ui::PrefKey::from("scribbleToErase"), ui::PrefSwitch::from(checked))?;
                 ui::apply(&editor)?;
             }
             Ok(())
         })?;
         ui::add_view(&box_, &scribble)?;
         let radius_label = self.text(&format!("Eraser size  {}", app.eraser_radius.get() as i32), 12, INK, true)?;
-        ui::set_padding(&radius_label, 0, self.dp(6.0)?, 0, 0)?;
+        ui::set_padding(&radius_label, ui::PxInsets { left: 0, top: self.dp(6.0)?, right: 0, bottom: 0 })?;
         ui::add_view(&box_, &radius_label)?;
         let radius = seek_bar(&ctx)?;
         set_max(&radius, 79)?;
@@ -2032,18 +2053,18 @@ impl EditorUi {
         on_progress(&radius, move |v, _| {
             if let Some(ui) = w.upgrade() {
                 ui.app().eraser_radius.set((v + 1) as f32);
-                ui::set_text(&label_weak.get(), &format!("Eraser size  {}", v + 1))?;
+                ui::set_text(&label_weak.get(), &ui::UiText::from(&format!("Eraser size  {}", v + 1)))?;
             }
             Ok(())
         })?;
-        ui::add_view_params(&box_, &radius, &ui::linear_params(-1, self.dp(42.0)?)?)?;
+        ui::add_view_params(&box_, &radius, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(42.0)? })?)?;
         self.menu_action(
             &box_,
             "Erase page",
             true,
             self.act(|_, app| {
                 let selected = app.selected.get();
-                app.apply_erase("page", &selected, app.page.get(), Some(&JSONArray::new()), app.eraser_radius.get())
+                app.apply_erase(&crate::main_activity::EraserMode::from("page"), &notemaker_core::ids::LayerId::from(&selected), notemaker_core::ids::PageNumber(app.page.get()), Some(&JSONArray::new()), notemaker_core::geometry::Radius(app.eraser_radius.get() as f64))
             }),
         )?;
         self.menu_action(&box_, "Erase objects…", !app.model().objects.is_empty(), self.act(|_, app| app.object_dialog()))?;
@@ -2059,7 +2080,7 @@ impl EditorUi {
             MUTED,
             false,
         )?;
-        ui::set_padding(&state, 0, self.dp(4.0)?, 0, self.dp(8.0)?)?;
+        ui::set_padding(&state, ui::PxInsets { left: 0, top: self.dp(4.0)?, right: 0, bottom: self.dp(8.0)? })?;
         ui::add_view(&box_, &state)?;
         let lasso = check_box(&self.context(), "Freeform lasso (off: rectangle)")?;
         set_text_color(&lasso, INK)?;
@@ -2072,7 +2093,7 @@ impl EditorUi {
                 let app = ui.app();
                 app.freeform_lasso.set(checked);
                 let editor = ui::edit(&app.this)?;
-                ui::put_bool(&editor, "freeformLasso", checked)?;
+                ui::put_bool(&editor, &ui::PrefKey::from("freeformLasso"), ui::PrefSwitch::from(checked))?;
                 ui::apply(&editor)?;
                 app.update()?;
             }
@@ -2083,8 +2104,8 @@ impl EditorUi {
         self.menu_action(&box_, "Choose objects and strokes…", true, self.act(|ui, _| ui.choose_entities()))?;
         self.menu_action(&box_, "Select all unlocked on this page", true, self.act(|_, app| app.select_all_visible()))?;
         self.menu_action(&box_, "Tap an item or draw a selection boundary", true, self.act(|_, _| Ok(())))?;
-        self.menu_action(&box_, "Preview scale up", any, self.act(|_, app| app.preview_selection(1.1, 0.0, 0.0)))?;
-        self.menu_action(&box_, "Preview scale down", any, self.act(|_, app| app.preview_selection(0.9, 0.0, 0.0)))?;
+        self.menu_action(&box_, "Preview scale up", any, self.act(|_, app| app.preview_selection(notemaker_core::collaboration::SelectionTransform { scale: 1.1, dx: 0.0, dy: 0.0 })))?;
+        self.menu_action(&box_, "Preview scale down", any, self.act(|_, app| app.preview_selection(notemaker_core::collaboration::SelectionTransform { scale: 0.9, dx: 0.0, dy: 0.0 })))?;
         self.menu_action(
             &box_,
             "Preview rotate clockwise",
@@ -2103,8 +2124,8 @@ impl EditorUi {
             any,
             self.act(|_, app| app.preview_transform(&notemaker_core::object! {"scale" => 1, "dx" => 0, "dy" => 0, "flipY" => true})),
         )?;
-        self.menu_action(&box_, "Preview move right", any, self.act(|_, app| app.preview_selection(1.0, 24.0, 0.0)))?;
-        self.menu_action(&box_, "Preview move down", any, self.act(|_, app| app.preview_selection(1.0, 0.0, 24.0)))?;
+        self.menu_action(&box_, "Preview move right", any, self.act(|_, app| app.preview_selection(notemaker_core::collaboration::SelectionTransform { scale: 1.0, dx: 24.0, dy: 0.0 })))?;
+        self.menu_action(&box_, "Preview move down", any, self.act(|_, app| app.preview_selection(notemaker_core::collaboration::SelectionTransform { scale: 1.0, dx: 0.0, dy: 24.0 })))?;
         self.menu_action(&box_, "Commit transform", pending, self.act(|_, app| app.commit_transform_preview()))?;
         self.menu_action(&box_, "Cancel preview", pending, self.act(|_, app| app.cancel_transform_preview()))?;
         self.menu_action(&box_, "Duplicate selection", any, self.act(|_, app| app.duplicate_selection()))?;
@@ -2139,7 +2160,7 @@ impl EditorUi {
         Ok(box_)
     }
     /// `private void showConflict(String id, Map<String,Object> conflict)`.
-    pub fn show_conflict(self: &Arc<Self>, id: &str, conflict: &Map) -> AppResult<()> {
+    fn show_conflict(self: &Arc<Self>, id: &str, conflict: &Map) -> AppResult<()> {
         self.dismiss_popup()?;
         let box_ = self.popup_body("Compare versions", Some("Choose either version or keep both. Actor details appear when recorded."))?;
         let columns = jnew!("android/widget/LinearLayout", "(Landroid/content/Context;)V", &self.context())?;
@@ -2151,8 +2172,8 @@ impl EditorUi {
         let (actor_a, actor_b) = (actor("localActor"), actor("remoteActor"));
         let local = conflict.get("local").cloned().unwrap_or(Value::Null);
         let remote = conflict.get("remote").cloned().unwrap_or(Value::Null);
-        ui::add_view_params(&columns, &self.conflict_version("Version A", &actor_a, &local)?, &ui::linear_params_weight(0, self.dp(190.0)?, 1.0)?)?;
-        ui::add_view_params(&columns, &self.conflict_version("Version B", &actor_b, &remote)?, &ui::linear_params_weight(0, self.dp(190.0)?, 1.0)?)?;
+        ui::add_view_params(&columns, &self.conflict_version("Version A", &actor_a, &local)?, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: self.dp(190.0)? }, ui::LayoutWeight(1.0))?)?;
+        ui::add_view_params(&columns, &self.conflict_version("Version B", &actor_b, &remote)?, &ui::linear_params_weight(ui::LayoutSize { width: 0, height: self.dp(190.0)? }, ui::LayoutWeight(1.0))?)?;
         ui::add_view(&box_, &columns)?;
         let details = self.text(
             &format!("Version A details\n{}\nVersion B details\n{}", self.version_summary(&local), self.version_summary(&remote)),
@@ -2162,22 +2183,22 @@ impl EditorUi {
         )?;
         jcall!(details, "android/widget/TextView", "setTextIsSelectable", "(Z)V", true)?;
         ui::add_view(&box_, &details)?;
-        for (label, choice) in [("Use Version A", "local"), ("Use Version B", "remote"), ("Keep both versions", "both")] {
-            let id = id.to_string();
+        for (label, choice) in [("Use Version A", notemaker_core::ids::ConflictChoice::Local), ("Use Version B", notemaker_core::ids::ConflictChoice::Remote), ("Keep both versions", notemaker_core::ids::ConflictChoice::Both)] {
+            let id = notemaker_core::ids::ConflictId::from(id);
             self.menu_action(&box_, label, true, self.act(move |_, app| app.resolve_conflict(&id, choice)))?;
         }
         let connection = self.connection.get().ok_or_else(npe)?;
         self.show_popup(&box_, &connection, None, false)
     }
     /// `private LinearLayout conflictVersion(String title, String actor, Object raw)`.
-    pub fn conflict_version(self: &Arc<Self>, title: &str, actor: &str, raw: &Value) -> AppResult<Obj> {
+    fn conflict_version(self: &Arc<Self>, title: &str, actor: &str, raw: &Value) -> AppResult<Obj> {
         let column = jnew!("android/widget/LinearLayout", "(Landroid/content/Context;)V", &self.context())?;
         jcall!(column, "android/widget/LinearLayout", "setOrientation", "(I)V", LINEARLAYOUT_VERTICAL)?;
-        ui::set_padding(&column, self.dp(4.0)?, self.dp(4.0)?, self.dp(4.0)?, self.dp(4.0)?)?;
+        ui::set_padding(&column, ui::PxInsets { left: self.dp(4.0)?, top: self.dp(4.0)?, right: self.dp(4.0)?, bottom: self.dp(4.0)? })?;
         let heading = self.text(&format!("{title} · {actor}"), 12, INK, true)?;
         ui::add_view(&column, &heading)?;
         let (_, preview) = ConflictPreview::create(self, raw.clone())?;
-        ui::add_view_params(&column, &preview, &ui::linear_params(-1, self.dp(120.0)?)?)?;
+        ui::add_view_params(&column, &preview, &ui::linear_params(ui::LayoutSize { width: -1, height: self.dp(120.0)? })?)?;
         if let Value::Object(value) = raw {
             let shape = match value.get("shape") {
                 Some(v) => json::java_string(Some(v)),
@@ -2191,7 +2212,7 @@ impl EditorUi {
         Ok(column)
     }
     /// `private String pretty(Object value)`.
-    pub fn pretty(&self, value: &Value) -> String {
+    fn pretty(&self, value: &Value) -> String {
         if value.is_null() {
             return "(empty)".into();
         }
@@ -2201,7 +2222,7 @@ impl EditorUi {
         }
     }
     /// `private String versionSummary(Object raw)`.
-    pub fn version_summary(&self, raw: &Value) -> String {
+    fn version_summary(&self, raw: &Value) -> String {
         let Value::Object(version) = raw else { return self.pretty(raw) };
         let mut out = String::new();
         for key in [
@@ -2228,11 +2249,11 @@ impl EditorUi {
         {
             let _lock = app.lock.enter();
             let selected = app.selected.get();
-            if app.canvas.get().is_some_and(|c| c.visible(&selected)) {
+            if app.canvas.get().is_some_and(|c| c.visible(&notemaker_core::ids::LayerId::from(&selected))) {
                 let editor = app.layer_editor()?;
                 for item in editor.items() {
                     let owner = self.lease_actor(&item.kind, &item.id);
-                    let label = if item.kind == "stroke" { "Ink stroke" } else { shape_catalog::name(&json::java_string(item.content.get("shape")))? };
+                    let label = if item.kind == "stroke" { "Ink stroke" } else { &*shape_catalog::name(&notemaker_core::ids::ShapeId::from(json::java_string(item.content.get("shape"))))? };
                     entities.push(item.ref_());
                     labels.push(format!(
                         "{} · {}{}",
@@ -2247,7 +2268,7 @@ impl EditorUi {
             }
         }
         if labels.is_empty() {
-            ui::toast(&app.this, "There are no items on this layer and page", TOAST_LENGTH_SHORT)?;
+            ui::toast(&app.this, &ui::UiText::from("There are no items on this layer and page"), TOAST_LENGTH_SHORT)?;
             return Ok(());
         }
         let selected_entities = app.selected_entities.get();
@@ -2303,7 +2324,7 @@ impl EditorUi {
         builder_show(&b)
     }
     /// `private String leaseActor(String kind, String id)` (`null` → `None`).
-    pub fn lease_actor(&self, kind: &str, id: &str) -> Option<String> {
+    fn lease_actor(&self, kind: &str, id: &str) -> Option<String> {
         let app = self.app();
         let key = format!("{}:{}:{}", app.page.get(), kind, id);
         app.leases.with(|leases| match leases.get(&key) {
@@ -2318,12 +2339,12 @@ impl EditorUi {
     pub fn template_panel(self: &Arc<Self>) -> AppResult<Obj> {
         let box_ = self.popup_body("Page templates", Some("Adds a page-sized background guide behind your ink."))?;
         for (label, template) in [("Ruled", "ruled"), ("Graph", "grid"), ("Dot grid", "dots"), ("Planner · checklist", "planner")] {
-            self.menu_action(&box_, label, true, self.act(move |_, app| app.insert_template(template)))?;
+            self.menu_action(&box_, label, true, self.act(move |_, app| app.insert_template(&crate::main_activity::TemplateKind::from(template))))?;
         }
         Ok(box_)
     }
     /// `private void applyPenPreset(int color, int width, String brush, int material)`.
-    pub fn apply_pen_preset_values(self: &Arc<Self>, color: i32, width: i32, brush: &str, material: i32) -> AppResult<()> {
+    fn apply_pen_preset_values(self: &Arc<Self>, color: i32, width: i32, brush: &str, material: i32) -> AppResult<()> {
         let app = self.app();
         if app.selecting.get() || app.selection_session.with(|s| s.is_some()) || !app.selected_entities.with(|s| s.is_empty()) {
             app.deselect()?;
@@ -2338,19 +2359,20 @@ impl EditorUi {
         app.brush.set(brush.to_string());
         app.material.set(0.max(100.min(material)));
         let editor = ui::edit(&app.this)?;
-        ui::put_int(&editor, "penMaterial", app.material.get())?;
+        ui::put_int(&editor, &ui::PrefKey::from("penMaterial"), ui::PrefNumber(app.material.get()))?;
         ui::apply(&editor)?;
         app.update()?;
         self.dismiss_popup()
     }
     /// `void savePenPreset(String label)`.
-    pub fn save_pen_preset_named(self: &Arc<Self>, label: &str) -> AppResult<()> {
+    pub fn save_pen_preset_named(self: &Arc<Self>, label: &PenPresetName) -> AppResult<()> {
+        let label: &str = label;
         let label = jfmt::java_trim(label);
         if label.is_empty() {
             return Err(AppError::illegal_argument("Preset name is required"));
         }
         let app = self.app();
-        let saved = ui::pref_string(&app.this, "penPresets", Some(""))?;
+        let saved = ui::pref_string(&app.this, &ui::PrefKey::from("penPresets"), Some(&ui::PrefText::from("")))?.map(String::from);
         let list = saved.as_deref().ok_or(()).and_then(|s| JSONArray::parse(s).map_err(|_| ())).unwrap_or_else(|_| JSONArray::new());
         list.put(MainActivity::obj(&[
             ("name", JV::from(label)),
@@ -2360,12 +2382,13 @@ impl EditorUi {
             ("material", JV::from(app.material.get())),
         ]))?;
         let editor = ui::edit(&app.this)?;
-        ui::put_string(&editor, "penPresets", &list.to_string())?;
+        ui::put_string(&editor, &ui::PrefKey::from("penPresets"), &ui::PrefText::from(&list.to_string()))?;
         ui::apply(&editor)?;
         Ok(())
     }
     /// `void applyPenPreset(String label)`.
-    pub fn apply_pen_preset(self: &Arc<Self>, label: &str) -> AppResult<()> {
+    pub fn apply_pen_preset(self: &Arc<Self>, label: &PenPresetName) -> AppResult<()> {
+        let label: &str = label;
         let defaults = ["Black · 2", "Black · 5", "Black · 9", "Red · 5", "Blue · 5"];
         let colors = [COLOR_BLACK, COLOR_BLACK, COLOR_BLACK, 0xffbd2424u32 as i32, 0xff245dbdu32 as i32];
         let widths = [2, 5, 9, 5, 5];
@@ -2375,7 +2398,7 @@ impl EditorUi {
             }
         }
         let saved = || -> AppResult<bool> {
-            let stored = ui::pref_string(&self.context(), "penPresets", Some(""))?.ok_or_else(npe)?;
+            let stored = ui::pref_string(&self.context(), &ui::PrefKey::from("penPresets"), Some(&ui::PrefText::from("")))?.map(String::from).ok_or_else(npe)?;
             let list = JSONArray::parse(&stored)?;
             for i in 0..list.length() {
                 if let Some(preset) = list.opt_json_object(i) {
@@ -2405,7 +2428,7 @@ impl EditorUi {
         set_single_line(&name, true)?;
         set_hint(&name, "Preset name")?;
         let form = self.column()?;
-        ui::set_padding(&form, self.dp(24.0)?, self.dp(8.0)?, self.dp(24.0)?, self.dp(8.0)?)?;
+        ui::set_padding(&form, ui::PxInsets { left: self.dp(24.0)?, top: self.dp(8.0)?, right: self.dp(24.0)?, bottom: self.dp(8.0)? })?;
         ui::add_view(&form, &name)?;
         let b = builder(&ctx)?;
         builder_title(&b, "Save pen preset")?;
@@ -2415,12 +2438,12 @@ impl EditorUi {
         let name = WeakObj::new(&name);
         let save = dialog_listener(move |_| {
             let Some(ui) = w.upgrade() else { return Ok(()) };
-            let mut label = jfmt::java_trim(&ui::text_of(&name.get())?).to_string();
+            let mut label = jfmt::java_trim(&String::from(ui::text_of(&name.get())?)).to_string();
             if label.is_empty() {
-                let stored = ui::pref_string(&ui.context(), "penPresets", Some(""))?.ok_or_else(npe)?;
+                let stored = ui::pref_string(&ui.context(), &ui::PrefKey::from("penPresets"), Some(&ui::PrefText::from("")))?.map(String::from).ok_or_else(npe)?;
                 label = format!("Preset {}", json::jlen(&stored) + 1);
             }
-            ui.save_pen_preset_named(&label)?;
+            ui.save_pen_preset_named(&PenPresetName::from(label))?;
             ui.dismiss_popup()
         });
         builder_positive(&b, "Save", &save)?;
@@ -2435,11 +2458,12 @@ impl EditorUi {
         Ok(())
     }
     /// `void openPanel(String kind)`.
-    pub fn open_panel(self: &Arc<Self>, kind: &str) -> AppResult<()> {
+    pub fn open_panel(self: &Arc<Self>, kind: &PanelName) -> AppResult<()> {
+        let kind: &str = kind;
         match kind {
             "history" => {
                 let more = self.tool_named("more").map(|t| t.view());
-                self.open_tool("history", more.as_ref())
+                self.open_tool(&ToolKind::from("history"), more.as_ref())
             }
             "conflicts" => self.show_conflict_panel(),
             "network" => self.show_popup_at_tool(&self.network_settings_panel()?, "more"),
@@ -2448,13 +2472,13 @@ impl EditorUi {
             "brushes" => self.show_popup_at_tool(&self.brush_panel()?, "pen"),
             _ => {
                 let anchor = self.tool_named(kind).ok_or_else(|| AppError::illegal_argument(format!("Unknown tool or panel: {kind}")))?;
-                self.open_tool(kind, Some(&anchor.view()))
+                self.open_tool(&ToolKind::from(kind), Some(&anchor.view()))
             }
         }
     }
     /// `String selectedTool()`.
-    pub fn selected_tool(&self) -> String {
-        self.selected_tool.get()
+    pub fn selected_tool(&self) -> ToolKind {
+        ToolKind::from(self.selected_tool.get())
     }
     /// `boolean panelShowing()`.
     pub fn panel_showing(&self) -> AppResult<bool> {
@@ -2469,10 +2493,11 @@ impl EditorUi {
         DocumentBrowser::new(&self.app())?.show()
     }
     /// `void showToolLabels(boolean show)`.
-    pub fn show_tool_labels(self: &Arc<Self>, show: bool) -> AppResult<()> {
+    pub fn show_tool_labels(self: &Arc<Self>, labels: ToolLabels) -> AppResult<()> {
+        let show = labels == ToolLabels::Shown;
         self.show_tool_labels.set(show);
         let editor = ui::edit(&self.context())?;
-        ui::put_bool(&editor, "showToolLabels", show)?;
+        ui::put_bool(&editor, &ui::PrefKey::from("showToolLabels"), ui::PrefSwitch::from(show))?;
         ui::apply(&editor)?;
         for item in self.tools.get().values() {
             ui::set_visibility(&item.label.get(), if show { VIEW_VISIBLE } else { VIEW_GONE })?;
@@ -2503,10 +2528,10 @@ impl EditorUi {
     /// `anchor_tool` is the anchor's Rust `Tool` when the Java anchor was a `Tool`.
     /// `fromRight` was unused in Java too.
     #[allow(clippy::only_used_in_recursion)]
-    pub fn show_popup(self: &Arc<Self>, body: &Obj, anchor: &Obj, anchor_tool: Option<Arc<Tool>>, from_right: bool) -> AppResult<()> {
+    fn show_popup(self: &Arc<Self>, body: &Obj, anchor: &Obj, anchor_tool: Option<Arc<Tool>>, from_right: bool) -> AppResult<()> {
         let anchor_tool = anchor_tool.or_else(|| self.tool_for(anchor));
         let root = self.root_obj()?;
-        if ui::width(&root)? <= 0 || !jcall!(root, "android/view/View", "isAttachedToWindow", "()Z")?.bool() {
+        if ui::width(&root)?.0 <= 0 || !jcall!(root, "android/view/View", "isAttachedToWindow", "()Z")?.bool() {
             let ui = self.clone();
             let (body, anchor) = (body.clone(), anchor.clone());
             let retry = jx::try_once_runnable(move || ui.show_popup(&body, &anchor, anchor_tool, from_right).map_err(JavaError::from));
@@ -2532,10 +2557,10 @@ impl EditorUi {
                 _ => jcall!(root, "android/view/View", "getPaddingBottom", "()I")?.int(),
             })
         };
-        let root_width = ui::width(&root)?;
-        let root_height = ui::height(&root)?;
-        let anchor_width = ui::width(anchor)?;
-        let anchor_height = ui::height(anchor)?;
+        let root_width = ui::width(&root)?.0;
+        let root_height = ui::height(&root)?.0;
+        let anchor_width = ui::width(anchor)?.0;
+        let anchor_height = ui::height(anchor)?.0;
         let left = root_position[0] + padding("left")? + self.dp(8.0)?;
         let right = root_position[0] + root_width - padding("right")? - self.dp(8.0)?;
         let mut top_limit = root_position[1] + padding("top")? + self.dp(8.0)?;
@@ -2565,14 +2590,14 @@ impl EditorUi {
             let scroll = scroll_view(&ctx)?;
             set_fill_viewport(&scroll, false)?;
             set_vertical_scroll_bar_enabled(&scroll, true)?;
-            ui::add_view_params(&scroll, body, &ui::frame_params(-1, -2)?)?;
+            ui::add_view_params(&scroll, body, &ui::frame_params(ui::LayoutSize { width: -1, height: -2 })?)?;
             content = scroll;
         }
         let (_, shell) = PopupShell::create(self)?;
-        ui::set_padding(&shell, self.dp(1.0)?, self.dp(1.0)?, self.dp(1.0)?, self.dp(1.0)?)?;
+        ui::set_padding(&shell, ui::PxInsets { left: self.dp(1.0)?, top: self.dp(1.0)?, right: self.dp(1.0)?, bottom: self.dp(1.0)? })?;
         set_background(&shell, &self.surface(COLOR_WHITE, INK, 8, 0)?)?;
         jcall!(shell, "android/view/View", "setClipToOutline", "(Z)V", true)?;
-        ui::add_view_params(&shell, &content, &ui::frame_params(-1, -1)?)?;
+        ui::add_view_params(&shell, &content, &ui::frame_params(ui::LayoutSize { width: -1, height: -1 })?)?;
         let popup = jnew!("android/widget/PopupWindow", "(Landroid/view/View;IIZ)V", &shell, popup_width, popup_height, true)?;
         self.popup.set(Some(popup.clone()));
         let transparent = jnew!("android/graphics/drawable/ColorDrawable", "(I)V", COLOR_TRANSPARENT)?;
@@ -2624,9 +2649,9 @@ impl EditorUi {
         Ok(())
     }
     /// `private Icon icon(String kind, String description, Runnable callback)`.
-    pub fn icon(self: &Arc<Self>, kind: &str, description: &str, callback: Action) -> AppResult<Arc<Icon>> {
+    fn icon(self: &Arc<Self>, kind: &str, description: &str, callback: Action) -> AppResult<Arc<Icon>> {
         let (icon, view) = Icon::create(self, kind)?;
-        ui::set_content_description(&view, description)?;
+        ui::set_content_description(&view, &ui::UiText::from(description))?;
         on_click(&view, move |_| callback())?;
         pin_local(&view);
         Ok(icon)
@@ -2656,12 +2681,6 @@ pub struct Tool {
     pub marker: Obj,
 }
 impl Tool {
-    /// `Tool(String kind, String name, String description)`.
-    pub fn new(owner: &Arc<EditorUi>, kind: &str, name: &str, description: &str) -> AppResult<Arc<Tool>> {
-        let (tool, view) = Tool::create(owner, kind, name, description)?;
-        pin_local(&view);
-        Ok(tool)
-    }
     /// The constructor, also returning a strong reference to the new view.
     fn create(owner: &Arc<EditorUi>, kind: &str, name: &str, description: &str) -> AppResult<(Arc<Tool>, Obj)> {
         let marker = new_paint()?;
@@ -2682,22 +2701,22 @@ impl Tool {
         let _ = tool.view.set(WeakObj::new(&view));
         jcall!(view, "android/widget/LinearLayout", "setOrientation", "(I)V", LINEARLAYOUT_VERTICAL)?;
         linear_set_gravity(&view, GRAVITY_CENTER)?;
-        ui::set_content_description(&view, description)?;
+        ui::set_content_description(&view, &ui::UiText::from(description))?;
         text_set_gravity(&label, GRAVITY_CENTER)?;
         set_single_line(&label, true)?;
         set_ellipsize_end(&label)?;
         ui::set_visibility(&label, if owner.show_tool_labels.get() { VIEW_VISIBLE } else { VIEW_GONE })?;
-        ui::add_view_params(&view, &icon_view, &ui::linear_params(owner.dp(40.0)?, owner.dp(40.0)?)?)?;
-        ui::add_view_params(&view, &label, &ui::linear_params(-1, -2)?)?;
-        ui::set_padding(&view, owner.dp(2.0)?, 0, owner.dp(2.0)?, owner.dp(6.0)?)?;
-        ui::set_background_color(&view, PAPER)?;
+        ui::add_view_params(&view, &icon_view, &ui::linear_params(ui::LayoutSize { width: owner.dp(40.0)?, height: owner.dp(40.0)? })?)?;
+        ui::add_view_params(&view, &label, &ui::linear_params(ui::LayoutSize { width: -1, height: -2 })?)?;
+        ui::set_padding(&view, ui::PxInsets { left: owner.dp(2.0)?, top: 0, right: owner.dp(2.0)?, bottom: owner.dp(6.0)? })?;
+        ui::set_background_color(&view, notemaker_core::style::ArgbColor(PAPER))?;
         Ok((tool, view))
     }
     pub fn view(&self) -> Obj {
         self.view.get().expect("Tool not constructed").get()
     }
     /// Native dispatch: `dispatchDraw(Canvas)`.
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "dispatchDraw(Canvas)", |c| self.dispatch_draw(c))
     }
     /// `protected void dispatchDraw(Canvas canvas)` (after `super.dispatchDraw`).
@@ -2706,7 +2725,7 @@ impl Tool {
         super_dispatch_draw_linear(&view, canvas)?;
         let Some(owner) = self.owner.upgrade() else { return Ok(()) };
         set_color(&self.marker, INK)?;
-        let (w, h) = (ui::width(&view)?, ui::height(&view)?);
+        let (w, h) = (ui::width(&view)?.0, ui::height(&view)?.0);
         if self.selected.get() {
             draw_circle(canvas, w as f32 / 2.0, (h - owner.dp(4.0)?) as f32, owner.dp(2.5)? as f32, &self.marker)?;
         }
@@ -2728,7 +2747,7 @@ impl Tool {
         Ok(())
     }
     /// `void active(boolean value)`.
-    pub fn active(&self, value: bool) -> AppResult<()> {
+    fn active(&self, value: bool) -> AppResult<()> {
         if self.selected.get() == value {
             return Ok(());
         }
@@ -2752,12 +2771,6 @@ pub struct LayerPreview {
     pub raster_key: Field<String>,
 }
 impl LayerPreview {
-    /// `LayerPreview(String layer, int number, boolean visible)`.
-    pub fn new(owner: &Arc<EditorUi>, layer: &str, number: i32, visible: bool) -> AppResult<Arc<LayerPreview>> {
-        let (preview, view) = LayerPreview::create(owner, layer, number, visible)?;
-        pin_local(&view);
-        Ok(preview)
-    }
     fn create(owner: &Arc<EditorUi>, layer: &str, number: i32, visible: bool) -> AppResult<(Arc<LayerPreview>, Obj)> {
         let preview = Arc::new(LayerPreview {
             owner: Arc::downgrade(owner),
@@ -2778,7 +2791,7 @@ impl LayerPreview {
         self.view.get().expect("LayerPreview not constructed").get()
     }
     /// Native dispatch: `onDraw(Canvas)`.
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "onDraw(Canvas)", |c| self.on_draw(c))
     }
     /// `protected void onDraw(Canvas c)`.
@@ -2786,7 +2799,7 @@ impl LayerPreview {
         let Some(owner) = self.owner.upgrade() else { return Ok(()) };
         let app = owner.app();
         let view = self.view();
-        let (wi, hi) = (ui::width(&view)?, ui::height(&view)?);
+        let (wi, hi) = (ui::width(&view)?.0, ui::height(&view)?.0);
         let (w, h) = (wi as f32, hi as f32);
         let paint = &self.paint;
         set_style(paint, Style::Fill)?;
@@ -2798,7 +2811,7 @@ impl LayerPreview {
             if let Some(old) = self.raster.take() {
                 jcall!(old.bitmap, "android/graphics/Bitmap", "recycle", "()V")?;
             }
-            self.raster.set(Some(InkCache::new(wi, hi)?));
+            self.raster.set(Some(InkCache::new(crate::ink_cache::BitmapSize { width: wi, height: hi })?));
             self.raster_key.set(key);
         }
         let canvas = app.canvas();
@@ -2823,7 +2836,7 @@ impl LayerPreview {
         let mut raster = self.raster.take().ok_or_else(npe)?;
         let drawn = raster.draw(
             c,
-            settled,
+            crate::ink_cache::VisibleInk(settled),
             &mut |image: &Obj| {
                 clip_rect(image, 1.0, dp16, w - 1.0, h - 1.0)?;
                 translate(image, (w - 1000.0 * scale_factor) / 2.0, dp16)?;
@@ -2894,14 +2907,14 @@ impl StrokeSample {
         let view = jx::native_view(&owner.context(), jx::mask::DRAW, move |m, a| handle.dispatch(m, a))?;
         let _ = sample.view.set(WeakObj::new(&view));
         owner.sample.set(Some(sample.clone()));
-        ui::set_content_description(&view, "Stroke preview")?;
+        ui::set_content_description(&view, &ui::UiText::from("Stroke preview"))?;
         Ok((sample, view))
     }
     pub fn view(&self) -> Obj {
         self.view.get().expect("StrokeSample not constructed").get()
     }
     /// Native dispatch: `onDraw(Canvas)`.
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "onDraw(Canvas)", |c| self.on_draw(c))
     }
     /// `protected void onDraw(Canvas c)`.
@@ -2910,8 +2923,8 @@ impl StrokeSample {
         let Some(owner) = self.owner.upgrade() else { return Ok(()) };
         let app = owner.app();
         let view = self.view();
-        let w = ui::width(&view)? as f32;
-        let h = ui::height(&view)? as f32;
+        let w = ui::width(&view)?.0 as f32;
+        let h = ui::height(&view)?.0 as f32;
         let left = owner.dp(14.0)? as f32;
         let right = w - owner.dp(14.0)? as f32;
         let mid = h * 0.52f32;
@@ -2948,26 +2961,20 @@ pub struct ConflictPreview {
     pub paint: Obj,
 }
 impl ConflictPreview {
-    /// `ConflictPreview(Object raw)`.
-    pub fn new(owner: &Arc<EditorUi>, raw: Value) -> AppResult<Arc<ConflictPreview>> {
-        let (preview, view) = ConflictPreview::create(owner, raw)?;
-        pin_local(&view);
-        Ok(preview)
-    }
     fn create(owner: &Arc<EditorUi>, raw: Value) -> AppResult<(Arc<ConflictPreview>, Obj)> {
         let preview = Arc::new(ConflictPreview { owner: Arc::downgrade(owner), view: OnceLock::new(), raw, paint: new_paint()? });
         let handle = preview.clone();
         let view = jx::native_view(&owner.context(), jx::mask::DRAW, move |m, a| handle.dispatch(m, a))?;
         let _ = preview.view.set(WeakObj::new(&view));
-        ui::set_background_color(&view, 0xffffffffu32 as i32)?;
-        ui::set_content_description(&view, "Conflict version preview")?;
+        ui::set_background_color(&view, notemaker_core::style::ArgbColor(0xffffffffu32 as i32))?;
+        ui::set_content_description(&view, &ui::UiText::from("Conflict version preview"))?;
         Ok((preview, view))
     }
     pub fn view(&self) -> Obj {
         self.view.get().expect("ConflictPreview not constructed").get()
     }
     /// Native dispatch: `onDraw(Canvas)`.
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "onDraw(Canvas)", |c| self.on_draw(c))
     }
     /// `protected void onDraw(Canvas canvas)`.
@@ -3004,8 +3011,8 @@ impl ConflictPreview {
                 right = left + json::as_double(value.get("w"))?;
                 bottom = top + json::as_double(value.get("h"))?;
             }
-            let gw = ui::width(&view)?;
-            let gh = ui::height(&view)?;
+            let gw = ui::width(&view)?.0;
+            let gh = ui::height(&view)?.0;
             let dp16 = owner.dp(16.0)?;
             let width = jmath::max(24.0, right - left);
             let height = jmath::max(24.0, bottom - top);
@@ -3058,12 +3065,6 @@ pub struct Icon {
     pub paint: Obj,
 }
 impl Icon {
-    /// `Icon(String kind)`.
-    pub fn new(owner: &Arc<EditorUi>, kind: &str) -> AppResult<Arc<Icon>> {
-        let (icon, view) = Icon::create(owner, kind)?;
-        pin_local(&view);
-        Ok(icon)
-    }
     fn create(owner: &Arc<EditorUi>, kind: &str) -> AppResult<(Arc<Icon>, Obj)> {
         let icon = Arc::new(Icon {
             owner: Arc::downgrade(owner),
@@ -3082,7 +3083,7 @@ impl Icon {
         self.view.get().expect("Icon not constructed").get()
     }
     /// Native dispatch: `onDraw(Canvas)`.
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "onDraw(Canvas)", |c| self.on_draw(c))
     }
     /// `protected void onDraw(Canvas canvas)`.
@@ -3090,7 +3091,7 @@ impl Icon {
         let c = canvas;
         let p = &self.paint;
         let view = self.view();
-        let (gw, gh) = (ui::width(&view)?, ui::height(&view)?);
+        let (gw, gh) = (ui::width(&view)?.0, ui::height(&view)?.0);
         canvas_save(c)?;
         let size = gw.min(gh) as f32 * 0.62f32;
         translate(c, (gw as f32 - size) / 2.0, (gh as f32 - size) / 2.0)?;
@@ -3357,7 +3358,7 @@ impl Icon {
         canvas_restore(c)
     }
     /// `void path(Canvas canvas, float... coordinates)`.
-    pub fn path(&self, canvas: &Obj, coordinates: &[f32]) -> AppResult<()> {
+    fn path(&self, canvas: &Obj, coordinates: &[f32]) -> AppResult<()> {
         let path = new_path()?;
         move_to(&path, coordinates[0], coordinates[1])?;
         let mut i = 2;
@@ -3368,7 +3369,7 @@ impl Icon {
         draw_path(canvas, &path, &self.paint)
     }
     /// `void poly(Canvas canvas, int count, float radius)`.
-    pub fn poly(&self, canvas: &Obj, count: i32, radius: f32) -> AppResult<()> {
+    fn poly(&self, canvas: &Obj, count: i32, radius: f32) -> AppResult<()> {
         use std::f64::consts::PI;
         let star = self.kind.with(|k| k == "star");
         let path = new_path()?;
@@ -3414,7 +3415,7 @@ impl ChoiceItem {
     pub fn view(&self) -> Obj {
         self.view.get().expect("ChoiceItem not constructed").get()
     }
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "dispatchDraw(Canvas)", |c| self.dispatch_draw(c))
     }
     /// `protected void dispatchDraw(Canvas canvas)`.
@@ -3424,7 +3425,7 @@ impl ChoiceItem {
         if (self.selected)() {
             let Some(owner) = self.owner.upgrade() else { return Ok(()) };
             set_color(&self.marker, INK)?;
-            draw_circle(canvas, ui::width(&view)? as f32 / 2.0, (ui::height(&view)? - owner.dp(5.0)?) as f32, owner.dp(3.0)? as f32, &self.marker)?;
+            draw_circle(canvas, ui::width(&view)?.0 as f32 / 2.0, (ui::height(&view)?.0 - owner.dp(5.0)?) as f32, owner.dp(3.0)? as f32, &self.marker)?;
         }
         Ok(())
     }
@@ -3440,11 +3441,6 @@ pub struct ColorSwatch {
     pub p: Obj,
 }
 impl ColorSwatch {
-    pub fn new(owner: &Arc<EditorUi>, color: i32) -> AppResult<Arc<ColorSwatch>> {
-        let (swatch, view) = ColorSwatch::create(owner, color)?;
-        pin_local(&view);
-        Ok(swatch)
-    }
     fn create(owner: &Arc<EditorUi>, color: i32) -> AppResult<(Arc<ColorSwatch>, Obj)> {
         let swatch = Arc::new(ColorSwatch { owner: Arc::downgrade(owner), view: OnceLock::new(), color, p: new_paint()? });
         let handle = swatch.clone();
@@ -3455,14 +3451,14 @@ impl ColorSwatch {
     pub fn view(&self) -> Obj {
         self.view.get().expect("ColorSwatch not constructed").get()
     }
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "onDraw(Canvas)", |c| self.on_draw(c))
     }
     /// `protected void onDraw(Canvas c)`.
     pub fn on_draw(&self, c: &Obj) -> AppResult<()> {
         let Some(owner) = self.owner.upgrade() else { return Ok(()) };
         let p = &self.p;
-        let x = ui::width(&self.view())? as f32 / 2.0;
+        let x = ui::width(&self.view())?.0 as f32 / 2.0;
         let y = owner.dp(19.0)? as f32;
         set_style(p, Style::Fill)?;
         set_color(p, self.color)?;
@@ -3503,7 +3499,7 @@ impl PopupShell {
     pub fn view(&self) -> Obj {
         self.view.get().expect("PopupShell not constructed").get()
     }
-    pub fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
+    fn dispatch(self: &Arc<Self>, method: &str, args: &[Local]) -> JResult<Reply> {
         draw_dispatch(method, args, "dispatchDraw(Canvas)", |c| self.dispatch_draw(c))
     }
     /// `protected void dispatchDraw(Canvas canvas)`.
@@ -3516,7 +3512,7 @@ impl PopupShell {
         set_style(border, Style::Stroke)?;
         set_stroke_width(border, owner.dp(1.0)? as f32)?;
         let inset = owner.dp(1.0)? as f32 / 2.0;
-        let (w, h) = (ui::width(&view)? as f32, ui::height(&view)? as f32);
+        let (w, h) = (ui::width(&view)?.0 as f32, ui::height(&view)?.0 as f32);
         let radius = owner.dp(8.0)? as f32;
         draw_round_rect(canvas, inset, inset, w - inset, h - inset, radius, radius, border)
     }

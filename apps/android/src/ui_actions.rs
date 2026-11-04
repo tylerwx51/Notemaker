@@ -7,14 +7,19 @@
 //! on the main looper).
 
 use crate::android_consts::COLOR_TRANSPARENT;
+use crate::animation_player::{ClipFrame, FrameStep, Playback};
+use crate::document_browser::BrowserMode;
+use crate::editor_ui::{PanelName, PenPresetName, ToolLabels};
 use crate::error::{require, AppError, AppResult};
 use crate::jx::{self, Obj};
-use crate::main_activity::MainActivity;
+use crate::main_activity::{DocumentType, MainActivity, TemplateKind};
 use crate::ui;
 use indexmap::IndexMap;
-use notemaker_cli::local_proxy::{UiError, UiSession};
+use notemaker_cli::local_proxy::{UiActionName, UiError, UiSession, UiVerb};
 use notemaker_core::json::{self, Map, Value};
+use notemaker_core::ids::{EntityId, LayerId};
 use notemaker_core::object;
+use notemaker_core::store::HistoryDirection;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Weak};
 use std::time::Duration;
@@ -72,7 +77,7 @@ impl UiActions {
         let mut actions: IndexMap<String, Action> = IndexMap::new();
         let mut descriptions: IndexMap<String, String> = IndexMap::new();
         let (ac, de) = (&mut actions, &mut descriptions);
-        UiActions::add(ac, de, "panel.open", "{name: document|pen|eraser|template|layers|shapes|fill|select|text|insert|move|page|agent|more|history|conflicts|network|preferences|presets|brushes}", Box::new(|app, a| app.editor().open_panel(&string(a, "name")?)));
+        UiActions::add(ac, de, "panel.open", "{name: document|pen|eraser|template|layers|shapes|fill|select|text|insert|move|page|agent|more|history|conflicts|network|preferences|presets|brushes}", Box::new(|app, a| app.editor().open_panel(&PanelName::from(string(a, "name")?))));
         UiActions::add(ac, de, "panel.close", "{}", Box::new(|app, _| app.editor().dismiss_popup()));
         UiActions::add(ac, de, "files.open", "{}", Box::new(|app, _| app.editor().show_files()));
         UiActions::add(ac, de, "files.close", "{}", Box::new(|app, _| {
@@ -83,11 +88,11 @@ impl UiActions {
         }));
         UiActions::add(ac, de, "files.search", "{query: string}", Box::new(|app, a| {
             let b = require_browser(app)?;
-            b.search(&string(a, "query")?)
+            b.search(&ui::UiText::from(string(a, "query")?))
         }));
         UiActions::add(ac, de, "files.mode", "{mode: grid|list}", Box::new(|app, a| {
             let b = require_browser(app)?;
-            b.mode(&string(a, "mode")?)
+            b.mode(&BrowserMode::from(string(a, "mode")?))
         }));
         UiActions::add(ac, de, "files.refresh", "{}", Box::new(|app, _| {
             let b = require_browser(app)?;
@@ -101,7 +106,7 @@ impl UiActions {
                 b.dismiss()?;
             }
             app.editor().dismiss_popup()?;
-            app.open_document(name, "fixed")
+            app.open_document(&notemaker_core::ids::DocumentName::from(name), &DocumentType::from("fixed"))
         }));
         UiActions::add(ac, de, "page.open", "{page: integer, zero based}", Box::new(|app, a| {
             require(app.type_.get() == "pages", "Document has no pages")?;
@@ -132,7 +137,7 @@ impl UiActions {
             let id = string(a, "id")?;
             let known = app.layers.with(|l| l.contains_key(&id));
             require(known && app.model().layer_active.get(&id) != Some(&false), "Layer is unavailable")?;
-            app.select_layer(&id)
+            app.select_layer(&LayerId::from(id))
         }));
         UiActions::add(ac, de, "layer.visibility", "{id: layer ID, visible: boolean} — device view only", Box::new(|app, a| {
             let id = string(a, "id")?;
@@ -149,13 +154,13 @@ impl UiActions {
         UiActions::add(ac, de, "tool.select", "{name: pen|eraser|move|shapes|text|fill|select|interact}", Box::new(|app, a| {
             let name = string(a, "name")?;
             require(["pen", "eraser", "move", "shapes", "text", "fill", "select", "interact"].contains(&name.as_str()), "Unknown drawing tool")?;
-            app.editor().open_panel(&name)
+            app.editor().open_panel(&PanelName::from(name))
         }));
         UiActions::add(ac, de, "shape.select", "{id: shape ID}", Box::new(|app, a| {
             let id = string(a, "id")?;
-            require(notemaker_core::shape_catalog::ids().contains(&id.as_str()), "Unknown shape")?;
+            require(notemaker_core::shape_catalog::ids().any(|known| *known == *id), "Unknown shape")?;
             app.editor().dismiss_popup()?;
-            app.set_drawing_tool(Some(&id))
+            app.set_drawing_tool(Some(&notemaker_core::ids::ShapeId::from(id)))
         }));
         UiActions::add(ac, de, "pen.configure", "{brush?, color?, width?, material?}", Box::new(|app, a| {
             if a.contains_key("brush") {
@@ -172,12 +177,12 @@ impl UiActions {
             if a.contains_key("material") {
                 app.material.set(UiActions::integer(a, "material", 0, 100)?);
                 let material = app.material.get();
-                put_pref(app, |e| ui::put_int(e, "penMaterial", material))?;
+                put_pref(app, |e| ui::put_int(e, &ui::PrefKey::from("penMaterial"), ui::PrefNumber(material)))?;
             }
             app.update()
         }));
-        UiActions::add(ac, de, "pen.preset.save", "{name: string}", Box::new(|app, a| app.editor().save_pen_preset_named(&string(a, "name")?)));
-        UiActions::add(ac, de, "pen.preset.apply", "{name: string}", Box::new(|app, a| app.editor().apply_pen_preset(&string(a, "name")?)));
+        UiActions::add(ac, de, "pen.preset.save", "{name: string}", Box::new(|app, a| app.editor().save_pen_preset_named(&PenPresetName::from(string(a, "name")?))));
+        UiActions::add(ac, de, "pen.preset.apply", "{name: string}", Box::new(|app, a| app.editor().apply_pen_preset(&PenPresetName::from(string(a, "name")?))));
         UiActions::add(ac, de, "shape.fill", "{enabled: boolean}", Box::new(|app, a| {
             let fill = if UiActions::bool_(a, "enabled")? { app.color.get() } else { COLOR_TRANSPARENT };
             app.object_fill_color.set(fill);
@@ -206,14 +211,14 @@ impl UiActions {
             if a.contains_key("scribble") {
                 app.scribble_to_erase.set(UiActions::bool_(a, "scribble")?);
                 let value = app.scribble_to_erase.get();
-                put_pref(app, |e| ui::put_bool(e, "scribbleToErase", value))?;
+                put_pref(app, |e| ui::put_bool(e, &ui::PrefKey::from("scribbleToErase"), ui::PrefSwitch::from(value)))?;
             }
             app.update()
         }));
         UiActions::add(ac, de, "selection.lasso", "{enabled: boolean}", Box::new(|app, a| {
             app.freeform_lasso.set(UiActions::bool_(a, "enabled")?);
             let value = app.freeform_lasso.get();
-            put_pref(app, |e| ui::put_bool(e, "freeformLasso", value))?;
+            put_pref(app, |e| ui::put_bool(e, &ui::PrefKey::from("freeformLasso"), ui::PrefSwitch::from(value)))?;
             app.update()
         }));
         UiActions::add(ac, de, "selection.all", "{}", Box::new(|app, _| app.select_all_visible()));
@@ -255,7 +260,7 @@ impl UiActions {
             canvas.offset_y.set(0.0);
             canvas.invalidate()
         }));
-        UiActions::add(ac, de, "toolbar.labels", "{visible: boolean}", Box::new(|app, a| app.editor().show_tool_labels(UiActions::bool_(a, "visible")?)));
+        UiActions::add(ac, de, "toolbar.labels", "{visible: boolean}", Box::new(|app, a| app.editor().show_tool_labels(if UiActions::bool_(a, "visible")? { ToolLabels::Shown } else { ToolLabels::Hidden })));
         UiActions::add(ac, de, "network.configure", "{server: string, port: string, proxy: string, token: string}", Box::new(|app, a| {
             let server = string(a, "server")?;
             let port = string(a, "port")?;
@@ -266,35 +271,35 @@ impl UiActions {
             require(proxy.is_empty() || (proxy.starts_with("http://") || proxy.starts_with("https://")) && !token.is_empty(), "Proxy URL requires an HTTP(S) URL and token")?;
             app.save_network_settings(&server, &port, &proxy, &token)
         }));
-        UiActions::add(ac, de, "history.undo", "{}", Box::new(|app, _| app.history(false)));
-        UiActions::add(ac, de, "history.redo", "{}", Box::new(|app, _| app.history(true)));
+        UiActions::add(ac, de, "history.undo", "{}", Box::new(|app, _| app.history(HistoryDirection::Undo)));
+        UiActions::add(ac, de, "history.redo", "{}", Box::new(|app, _| app.history(HistoryDirection::Redo)));
         UiActions::add(ac, de, "template.insert", "{name: ruled|grid|dots|planner|blank}", Box::new(|app, a| {
             let name = string(a, "name")?;
             require(["ruled", "grid", "dots", "planner", "blank"].contains(&name.as_str()), "Unknown template")?;
-            app.insert_template(&name)
+            app.insert_template(&TemplateKind::from(name))
         }));
         UiActions::add(ac, de, "agent.open", "{}", Box::new(|app, _| agent(app).show()));
         UiActions::add(ac, de, "agent.close", "{}", Box::new(|app, _| agent(app).dismiss()));
         UiActions::add(ac, de, "gif.player.open", "{}", Box::new(|app, _| app.animation_player().show()));
         UiActions::add(ac, de, "gif.import.open", "{}", Box::new(|app, _| app.choose_gif()));
-        UiActions::add(ac, de, "gif.select", "{id: GIF object ID}", Box::new(|app, a| app.animation_player().select(&string(a, "id")?)));
-        UiActions::add(ac, de, "gif.play", "{}", Box::new(|app, _| app.animation_player().play(true)));
-        UiActions::add(ac, de, "gif.pause", "{}", Box::new(|app, _| app.animation_player().play(false)));
-        UiActions::add(ac, de, "gif.next", "{}", Box::new(|app, _| app.animation_player().step(1)));
-        UiActions::add(ac, de, "gif.previous", "{}", Box::new(|app, _| app.animation_player().step(-1)));
-        UiActions::add(ac, de, "gif.seek", "{frame: zero-based integer}", Box::new(|app, a| app.animation_player().seek(UiActions::integer(a, "frame", 0, 499)?)));
+        UiActions::add(ac, de, "gif.select", "{id: GIF object ID}", Box::new(|app, a| app.animation_player().select(&EntityId::from(string(a, "id")?))));
+        UiActions::add(ac, de, "gif.play", "{}", Box::new(|app, _| app.animation_player().play(Playback::Playing)));
+        UiActions::add(ac, de, "gif.pause", "{}", Box::new(|app, _| app.animation_player().play(Playback::Paused)));
+        UiActions::add(ac, de, "gif.next", "{}", Box::new(|app, _| app.animation_player().step(FrameStep(1))));
+        UiActions::add(ac, de, "gif.previous", "{}", Box::new(|app, _| app.animation_player().step(FrameStep(-1))));
+        UiActions::add(ac, de, "gif.seek", "{frame: zero-based integer}", Box::new(|app, a| app.animation_player().seek(ClipFrame(UiActions::integer(a, "frame", 0, 499)?))));
         Ok(Arc::new_cyclic(|this| UiActions { app: Arc::downgrade(app), main, actions, descriptions, this: this.clone() }))
     }
     pub fn app(&self) -> Arc<MainActivity> {
         self.app.upgrade().expect("MainActivity dropped")
     }
     /// `private void add(String name, String schema, Action action)` (constructor only).
-    pub fn add(actions: &mut IndexMap<String, Action>, descriptions: &mut IndexMap<String, String>, name: &str, schema: &str, action: Action) {
+    fn add(actions: &mut IndexMap<String, Action>, descriptions: &mut IndexMap<String, String>, name: &str, schema: &str, action: Action) {
         actions.insert(name.to_string(), action);
         descriptions.insert(name.to_string(), schema.to_string());
     }
     /// `private static int integer(Map a, String key, int min, int max)`.
-    pub fn integer(a: &Map, key: &str, min: i32, max: i32) -> AppResult<i32> {
+    fn integer(a: &Map, key: &str, min: i32, max: i32) -> AppResult<i32> {
         let value = a.get(key);
         let integral = match value {
             Some(Value::Number(n)) => json::number_double(n) == json::number_int(n) as f64,
@@ -306,18 +311,18 @@ impl UiActions {
         Ok(n)
     }
     /// `private static double number(Map a, String key)`.
-    pub fn number(a: &Map, key: &str) -> AppResult<f64> {
+    fn number(a: &Map, key: &str) -> AppResult<f64> {
         let value = a.get(key);
         require(json::is_number(value), &format!("{key} must be a number"))?;
         Ok(json::as_double(value)?)
     }
     /// `private static boolean bool(Map a, String key)`.
-    pub fn bool_(a: &Map, key: &str) -> AppResult<bool> {
+    fn bool_(a: &Map, key: &str) -> AppResult<bool> {
         require(matches!(a.get(key), Some(Value::Bool(_))), &format!("{key} must be boolean"))?;
         Ok(json::as_bool(a.get(key))?)
     }
     /// `private Map<String,Object> state()`.
-    pub fn state(&self) -> AppResult<Map> {
+    fn state(&self) -> AppResult<Map> {
         let app = self.app();
         let manufacturer = jsget!("android/os/Build", "MANUFACTURER", "Ljava/lang/String;")?.string().unwrap_or_else(|| "null".into());
         let model = jsget!("android/os/Build", "MODEL", "Ljava/lang/String;")?.string().unwrap_or_else(|| "null".into());
@@ -373,7 +378,8 @@ impl UiActions {
         Ok(Value::Object(object! { "action" => action, "state" => self.state()? }))
     }
     /// `public Object request(String verb, String action, Map input) throws Exception`.
-    pub fn request_impl(&self, verb: &str, action: &str, input: Map) -> AppResult<Value> {
+    pub fn request_impl(&self, verb: &UiVerb, action: &UiActionName, input: Map) -> AppResult<Value> {
+        let (verb, action): (&str, &str) = (verb, action);
         if ui::on_main_thread()? {
             return self.task(verb, action, &input);
         }
@@ -407,7 +413,7 @@ impl UiActions {
 }
 
 impl UiSession for UiActions {
-    fn request(&self, verb: &str, action: &str, input: Map) -> Result<Value, UiError> {
+    fn request(&self, verb: &UiVerb, action: &UiActionName, input: Map) -> Result<Value, UiError> {
         self.request_impl(verb, action, input).map_err(|e| Box::new(e) as UiError)
     }
 }

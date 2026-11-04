@@ -3,11 +3,15 @@
 
 use crate::draw_item::DrawItem;
 use crate::error::{Error, Result};
-use crate::geometry::{self, Polygon};
+use crate::geometry::{Bounds, Degrees, DocPoint, DocRect, InkPasses, Polygon, Segment};
+use crate::geometry::Erasures;
+use crate::ids::{LayerId, PageNumber};
+use crate::style::{ArgbColor, FontFamily, FontSize, Flip, PathEnd, RectShape, ShapePaint, StrokeWidth, TextAlignment, TextContent, TextStyle};
 use crate::jfmt;
 use crate::jmath;
 use crate::json::{self, Map, Value};
 use crate::model::{Entity, Model};
+use crate::ids::ShapeId;
 use crate::shape_catalog;
 use crate::svg_asset;
 use std::collections::HashSet;
@@ -18,8 +22,8 @@ use std::fmt::Write as _;
 /// Methods return `Result` because Java implementations may throw
 /// (unchecked) exceptions, e.g. an invalid SVG in [`Svg::svg`].
 pub trait Surface {
-    fn begin_erase(&mut self, polygons: &[Polygon]) -> Result<()> {
-        if !polygons.is_empty() {
+    fn begin_erase(&mut self, erasures: &Erasures) -> Result<()> {
+        if !erasures.is_empty() {
             return Err(Error::unsupported("Erasure masks unsupported"));
         }
         Ok(())
@@ -27,50 +31,55 @@ pub trait Surface {
     fn end_erase(&mut self) -> Result<()> {
         Ok(())
     }
-    fn polygon(&mut self, _points: &[[f64; 2]], _color: i32, _width: f64, _fill: Option<i32>, _closed: bool) -> Result<()> {
+    fn polygon(&mut self, _points: &Polygon, _paint: ShapePaint, _end: PathEnd) -> Result<()> {
         Err(Error::unsupported("Polygon paint unsupported"))
     }
     /// Continuous ribbon passes. Raster surfaces merge shared edges before compositing ink.
-    fn ink(&mut self, passes: &[Polygon], color: i32) -> Result<()> {
+    fn ink(&mut self, passes: &InkPasses, color: ArgbColor) -> Result<()> {
         for p in passes {
-            self.polygon(p, color, 0.0, Some(color), true)?;
+            self.polygon(p, ShapePaint { color, width: StrokeWidth(0.0), fill: Some(color) }, PathEnd::Closed)?;
         }
         Ok(())
     }
-    fn line(&mut self, x: f64, y: f64, x2: f64, y2: f64, color: i32, width: f64) -> Result<()>;
-    #[allow(clippy::too_many_arguments)]
-    fn rect(&mut self, x: f64, y: f64, w: f64, h: f64, color: i32, width: f64, fill: Option<i32>, ellipse: bool) -> Result<()>;
-    fn text(&mut self, x: f64, baseline: f64, text: &str, color: i32, size: f64) -> Result<()>;
+    fn line(&mut self, segment: Segment, color: ArgbColor, width: StrokeWidth) -> Result<()>;
+    fn rect(&mut self, rect: DocRect, paint: ShapePaint, shape: RectShape) -> Result<()>;
+    /// Text with its baseline starting at `origin`.
+    fn text(&mut self, origin: DocPoint, text: &TextContent, color: ArgbColor, size: FontSize) -> Result<()>;
     #[allow(clippy::too_many_arguments)]
     fn styled_text(
         &mut self,
-        x: f64,
-        baseline: f64,
-        text: &str,
-        color: i32,
-        size: f64,
-        _family: &str,
-        _bold: bool,
-        _italic: bool,
-        _underline: bool,
-        _alignment: &str,
+        origin: DocPoint,
+        text: &TextContent,
+        color: ArgbColor,
+        size: FontSize,
+        _family: &FontFamily,
+        _style: TextStyle,
+        _alignment: &TextAlignment,
     ) -> Result<()> {
-        self.text(x, baseline, text, color, size)
+        self.text(origin, text, color, size)
     }
-    fn svg(&mut self, x: f64, y: f64, w: f64, h: f64, source: &str) -> Result<()>;
-    fn save_transform(&mut self, _cx: f64, _cy: f64, _rotation: f64, _flip_x: bool, _flip_y: bool) -> Result<()> {
+    fn svg(&mut self, rect: DocRect, source: &str) -> Result<()>;
+    fn save_transform(&mut self, _center: DocPoint, _rotation: Degrees, _flip: Flip) -> Result<()> {
         Ok(())
     }
     fn restore_transform(&mut self) -> Result<()> {
         Ok(())
     }
-    fn image(&mut self, x: f64, y: f64, w: f64, h: f64, data: &str) -> Result<()> {
+    fn image(&mut self, rect: DocRect, data: &str) -> Result<()> {
         let source = format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\" viewBox=\"0 0 100 100\"><image width=\"100\" height=\"100\" preserveAspectRatio=\"none\" href=\"{}\"/></svg>",
             data
         );
-        self.svg(x, y, w, h, &source)
+        self.svg(rect, &source)
     }
+}
+
+/// Layers the user has hidden; forced layers are drawn anyway.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HiddenLayers(pub HashSet<String>);
+
+fn shape_paint(color: i32, width: f64, fill: Option<i32>) -> ShapePaint {
+    ShapePaint { color: ArgbColor(color), width: StrokeWidth(width), fill: fill.map(ArgbColor) }
 }
 
 /// Java `try { body } finally { cleanup }` with `Result`s: the body's error wins.
@@ -82,7 +91,7 @@ fn finally<T>(body: Result<T>, cleanup: Result<()>) -> Result<T> {
 }
 
 /// `Render.draw(m, page, hidden, c)`.
-pub fn draw(m: &Model, page: i32, hidden: &HashSet<String>, c: &mut dyn Surface) -> Result<()> {
+pub fn draw(m: &Model, page: PageNumber, hidden: &HiddenLayers, c: &mut dyn Surface) -> Result<()> {
     let mut ordered: Vec<(&String, &Entity)> = m.layers.iter().collect();
     let order = |e: &Entity| -> f64 {
         match e.get("order") {
@@ -92,10 +101,10 @@ pub fn draw(m: &Model, page: i32, hidden: &HashSet<String>, c: &mut dyn Surface)
     };
     ordered.sort_by(|a, b| order(a.1).total_cmp(&order(b.1)));
     for (id, layer) in ordered {
-        if m.layer_active.get(id) == Some(&false) || (hidden.contains(id) && !json::is_true(layer.get("force"))) {
+        if m.layer_active.get(id) == Some(&false) || (hidden.0.contains(id) && !json::is_true(layer.get("force"))) {
             continue;
         }
-        for content in m.layer_items(id, page).iter() {
+        for content in m.layer_items(&LayerId::from(id), page).iter() {
             let item = DrawItem::new(m, content.clone())?;
             if item.active() {
                 draw_item(m, content, c)?;
@@ -257,18 +266,19 @@ fn fill_ribbon(c: &mut dyn Surface, path: &[StrokePoint], base_widths: &[f64], s
     if path.len() == 1 {
         let p = path[0];
         let n = 24;
-        let mut circle = vec![[0.0f64; 2]; n];
+        let mut circle = Polygon::from(vec![DocPoint::default(); n]);
         for (i, v) in circle.iter_mut().enumerate() {
             let a = 2.0 * PI * i as f64 / n as f64;
             let r = base_widths[0] * width_scale;
-            v[0] = p.x + r * jmath::cos(a);
-            v[1] = p.y + r * jmath::sin(a);
+            v.x = p.x + r * jmath::cos(a);
+            v.y = p.y + r * jmath::sin(a);
         }
-        return c.polygon(&circle, color, 0.0, Some(color), true);
+        let color = ArgbColor(color);
+        return c.polygon(&circle, ShapePaint { color, width: StrokeWidth(0.0), fill: Some(color) }, PathEnd::Closed);
     }
     // Partition the centerline into direction cones so crossings belong to
     // separate passes and receive a second ink deposit.
-    let mut passes: Vec<Polygon> = Vec::new();
+    let mut passes = InkPasses::default();
     let mut start = 0usize;
     let mut turn = 0.0f64;
     for i in 1..path.len() {
@@ -282,25 +292,25 @@ fn fill_ribbon(c: &mut dyn Surface, path: &[StrokePoint], base_widths: &[f64], s
         }
     }
     passes.push(ribbon(path, base_widths, shift, width_scale, start, path.len() - 1, start == 0 && round_caps, round_caps, !round_caps));
-    c.ink(&passes, color)
+    c.ink(&passes, ArgbColor(color))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn ribbon(path: &[StrokePoint], widths: &[f64], shift: f64, scale: f64, start: usize, end: usize, start_cap: bool, end_cap: bool, square_ends: bool) -> Polygon {
-    let mut outline: Polygon = Vec::with_capacity((end - start + 1) * 2 + 20);
+    let mut outline = Polygon::from(Vec::with_capacity((end - start + 1) * 2 + 20));
     for i in start..=end {
         let p = path[i];
         let r = jmath::max(0.25, widths[i] * scale);
         let offset = widths[i] * shift + r;
-        outline.push([p.x - p.ty * offset, p.y + p.tx * offset]);
+        outline.push(DocPoint { x: p.x - p.ty * offset, y: p.y + p.tx * offset });
     }
     let last = path[end];
     let first = path[start];
     if square_ends && end == path.len() - 1 {
         let radius = jmath::max(0.25, widths[end] * scale);
         let edge = outline.last_mut().unwrap();
-        edge[0] += last.tx * radius;
-        edge[1] += last.ty * radius;
+        edge.x += last.tx * radius;
+        edge.y += last.ty * radius;
     }
     if end_cap {
         add_cap(&mut outline, last.x - last.ty * widths[end] * shift, last.y + last.tx * widths[end] * shift, &last, jmath::max(0.25, widths[end] * scale), false);
@@ -309,13 +319,13 @@ fn ribbon(path: &[StrokePoint], widths: &[f64], shift: f64, scale: f64, start: u
         let p = path[i];
         let r = jmath::max(0.25, widths[i] * scale);
         let offset = widths[i] * shift - r;
-        outline.push([p.x - p.ty * offset, p.y + p.tx * offset]);
+        outline.push(DocPoint { x: p.x - p.ty * offset, y: p.y + p.tx * offset });
     }
     if square_ends && start == 0 {
         let radius = jmath::max(0.25, widths[start] * scale);
         let edge = outline.last_mut().unwrap();
-        edge[0] -= first.tx * radius;
-        edge[1] -= first.ty * radius;
+        edge.x -= first.tx * radius;
+        edge.y -= first.ty * radius;
     }
     if start_cap {
         add_cap(&mut outline, first.x - first.ty * widths[start] * shift, first.y + first.tx * widths[start] * shift, &first, jmath::max(0.25, widths[start] * scale), true);
@@ -329,7 +339,7 @@ fn add_cap(out: &mut Polygon, cx: f64, cy: f64, p: &StrokePoint, radius: f64, st
     let steps = 10;
     for i in 1..=steps {
         let a = angle - PI * i as f64 / steps as f64;
-        out.push([cx + radius * jmath::cos(a), cy + radius * jmath::sin(a)]);
+        out.push(DocPoint { x: cx + radius * jmath::cos(a), y: cy + radius * jmath::sin(a) });
     }
 }
 
@@ -389,7 +399,11 @@ fn draw_grain(c: &mut dyn Surface, path: &[StrokePoint], widths: &[f64], color: 
         let cy = p.y + p.tx * side * typical * 0.25 + p.ty * along;
         let len = typical * (0.2 + 0.25 * jmath::sin(phase).abs());
         let ink = material_color(color, brush, material, opacity);
-        c.line(cx - p.tx * len / 2.0, cy - p.ty * len / 2.0, cx + p.tx * len / 2.0, cy + p.ty * len / 2.0, ink, jmath::max(0.25, typical * 0.045))?;
+        c.line(
+            Segment { start: DocPoint { x: cx - p.tx * len / 2.0, y: cy - p.ty * len / 2.0 }, end: DocPoint { x: cx + p.tx * len / 2.0, y: cy + p.ty * len / 2.0 } },
+            ArgbColor(ink),
+            StrokeWidth(jmath::max(0.25, typical * 0.045)),
+        )?;
         index += 1;
         d += spacing;
     }
@@ -447,11 +461,9 @@ pub fn draw_object(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
     let flip_y = json::is_true(o.get("flipY"));
     if rotation != 0.0 || flip_x || flip_y {
         c.save_transform(
-            json::number(o, "x")? + json::number(o, "w")? / 2.0,
-            json::number(o, "y")? + json::number(o, "h")? / 2.0,
-            rotation,
-            flip_x,
-            flip_y,
+            DocPoint { x: json::number(o, "x")? + json::number(o, "w")? / 2.0, y: json::number(o, "y")? + json::number(o, "h")? / 2.0 },
+            Degrees(rotation),
+            Flip { horizontal: flip_x, vertical: flip_y },
         )?;
         let body = draw_object_masked(m, o, c);
         let cleanup = c.restore_transform();
@@ -484,40 +496,44 @@ fn draw_object_raw(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
         return Ok(()); // Infinite guides are generated against the live viewport by the tablet renderer.
     }
     if shape == "svg" {
-        return c.svg(x, y, w, h, json::string(o, "svg")?);
+        return c.svg(DocRect { x, y, width: w, height: h }, json::string(o, "svg")?);
     }
     if shape == "image" {
-        return c.image(x, y, w, h, json::string(o, "image")?);
+        return c.image(DocRect { x, y, width: w, height: h }, json::string(o, "image")?);
     }
     if shape == "gif" {
-        return c.image(x, y, w, h, json::string(o, "gif")?);
+        return c.image(DocRect { x, y, width: w, height: h }, json::string(o, "gif")?);
     }
     if shape == "arrow" || shape == "arrowLine" {
         let ends = endpoints(m, o)?;
-        x = ends[0];
-        y = ends[1];
-        let ex = ends[2];
-        let ey = ends[3];
-        c.line(x, y, ex, ey, color, width)?;
+        x = ends.start.x;
+        y = ends.start.y;
+        let ex = ends.end.x;
+        let ey = ends.end.y;
+        let (ink, line_width) = (ArgbColor(color), StrokeWidth(width));
+        c.line(ends, ink, line_width)?;
         let angle = jmath::atan2(ey - y, ex - x);
         let length = jmath::max(12.0, width * 4.0);
-        c.line(ex, ey, ex - length * jmath::cos(angle - 0.45), ey - length * jmath::sin(angle - 0.45), color, width)?;
-        c.line(ex, ey, ex - length * jmath::cos(angle + 0.45), ey - length * jmath::sin(angle + 0.45), color, width)?;
+        let tip = DocPoint { x: ex, y: ey };
+        c.line(Segment { start: tip, end: DocPoint { x: ex - length * jmath::cos(angle - 0.45), y: ey - length * jmath::sin(angle - 0.45) } }, ink, line_width)?;
+        c.line(Segment { start: tip, end: DocPoint { x: ex - length * jmath::cos(angle + 0.45), y: ey - length * jmath::sin(angle + 0.45) } }, ink, line_width)?;
         x = (x + ex) / 2.0;
         y = (y + ey) / 2.0;
     } else if shape == "line" {
-        c.line(x, y, x + w, y + h, color, width)?;
+        c.line(Segment { start: DocPoint { x, y }, end: DocPoint { x: x + w, y: y + h } }, ArgbColor(color), StrokeWidth(width))?;
         x += w / 2.0;
         y += h / 2.0;
-    } else if shape_catalog::polygon(shape) {
-        let vertices = shape_catalog::vertices(shape)?;
-        let points: Polygon = vertices.iter().map(|v| [x + v[0] * w, y + v[1] * h]).collect();
-        c.polygon(&points, color, width, fill_of(o)?, shape != "polyline")?;
+    } else if shape_catalog::polygon(&ShapeId::from(shape)) {
+        let vertices = shape_catalog::vertices(&ShapeId::from(shape))?;
+        let points: Polygon = vertices.iter().map(|v| DocPoint { x: x + v.x * w, y: y + v.y * h }).collect();
+        let end = if shape != "polyline" { PathEnd::Closed } else { PathEnd::Open };
+        c.polygon(&points, shape_paint(color, width, fill_of(o)?), end)?;
     } else if matches!(shape, "cube" | "cylinder" | "cone" | "sphere" | "pyramid" | "wave" | "waveLine" | "curve") {
         let pad = width / 2.0 + 1.0;
-        c.svg(x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad, &detail_svg(shape, color, width, fill_of(o)?)?)?;
+        c.svg(DocRect { x: x - pad, y: y - pad, width: w + 2.0 * pad, height: h + 2.0 * pad }, &detail_svg(shape, color, width, fill_of(o)?)?)?;
     } else if shape != "text" {
-        c.rect(x, y, w, h, color, width, fill_of(o)?, shape == "ellipse" || shape == "circle")?;
+        let outline = if shape == "ellipse" || shape == "circle" { RectShape::Ellipse } else { RectShape::Rectangle };
+        c.rect(DocRect { x, y, width: w, height: h }, shape_paint(color, width, fill_of(o)?), outline)?;
     }
     let text = match o.get("text") {
         None => "",
@@ -548,18 +564,29 @@ fn draw_object_raw(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
         _ => 0.0,
     };
     let text_x = x + align_offset + if shape == "text" { 0.0 } else { 10.0 };
+    let family = FontFamily::from(family);
+    let style = TextStyle { bold, italic, underline };
+    let alignment = TextAlignment::from(alignment.unwrap_or("null"));
     for (i, line) in text.split('\n').enumerate() {
-        c.styled_text(text_x, y + size + i as f64 * size * 1.2, line, color, size, family, bold, italic, underline, alignment.unwrap_or("null"))?;
+        c.styled_text(
+            DocPoint { x: text_x, y: y + size + i as f64 * size * 1.2 },
+            &TextContent::from(line),
+            ArgbColor(color),
+            FontSize(size),
+            &family,
+            style,
+            &alignment,
+        )?;
     }
     Ok(())
 }
 
 fn detail_svg(shape: &str, stroke: i32, width: f64, fill: Option<i32>) -> Result<String> {
-    let raw = shape_catalog::drawing_svg(shape)?;
-    let color = jfmt::hex_color(stroke);
+    let raw = shape_catalog::drawing_svg(&ShapeId::from(shape))?;
+    let color = ArgbColor(stroke).to_hex();
     let f = match fill {
         None => "none".to_string(),
-        Some(v) => jfmt::hex_color(v),
+        Some(v) => String::from(ArgbColor(v).to_hex()),
     };
     let fill_opacity = match fill {
         None => 1.0,
@@ -577,7 +604,7 @@ fn detail_svg(shape: &str, stroke: i32, width: f64, fill: Option<i32>) -> Result
 }
 
 /// `Render.endpoints(m, o)`: connector attachments follow node geometry.
-pub fn endpoints(m: &Model, o: &Map) -> Result<[f64; 4]> {
+pub fn endpoints(m: &Model, o: &Map) -> Result<Segment> {
     let mut x = json::number(o, "x")?;
     let mut y = json::number(o, "y")?;
     let mut ex = x + json::number(o, "w")?;
@@ -594,7 +621,7 @@ pub fn endpoints(m: &Model, o: &Map) -> Result<[f64; 4]> {
     }
     let start = boundary(a.map(|e| &**e), x, y, ex, ey)?;
     let end = boundary(b.map(|e| &**e), ex, ey, x, y)?;
-    Ok([start[0], start[1], end[0], end[1]])
+    Ok(Segment { start: DocPoint { x: start[0], y: start[1] }, end: DocPoint { x: end[0], y: end[1] } })
 }
 
 fn boundary(node: Option<&Map>, x: f64, y: f64, tx: f64, ty: f64) -> Result<[f64; 2]> {
@@ -635,20 +662,20 @@ fn d(out: &mut String, v: f64) {
 }
 
 fn svg_color(c: i32) -> String {
-    jfmt::hex_color(c)
+    String::from(ArgbColor(c).to_hex())
 }
 
 fn svg_alpha(c: i32) -> f64 {
     ((c as u32) >> 24) as f64 / 255.0
 }
 
-fn svg_path(p: &[[f64; 2]], closed: bool) -> String {
+fn svg_path(p: &[DocPoint], closed: bool) -> String {
     let mut out = String::with_capacity(p.len() * 24);
     for (i, v) in p.iter().enumerate() {
         out.push(if i == 0 { 'M' } else { 'L' });
-        d(&mut out, v[0]);
+        d(&mut out, v.x);
         out.push(' ');
-        d(&mut out, v[1]);
+        d(&mut out, v.y);
     }
     if closed {
         out.push('Z');
@@ -656,22 +683,22 @@ fn svg_path(p: &[[f64; 2]], closed: bool) -> String {
     out
 }
 
-fn side(a: [f64; 2], b: [f64; 2], p: [f64; 2]) -> f64 {
-    (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+fn side(a: DocPoint, b: DocPoint, p: DocPoint) -> f64 {
+    (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
 }
 
-fn strictly_inside(polygon: &[[f64; 2]], point: [f64; 2]) -> bool {
-    if !geometry::contains(polygon, point[0], point[1]) {
+fn strictly_inside(polygon: &Polygon, point: DocPoint) -> bool {
+    if !polygon.contains(point) {
         return false;
     }
     for i in 0..polygon.len() {
         let a = polygon[i];
         let b = polygon[(i + 1) % polygon.len()];
         if side(a, b, point).abs() < 1e-7
-            && point[0] >= jmath::min(a[0], b[0]) - 1e-8
-            && point[0] <= jmath::max(a[0], b[0]) + 1e-8
-            && point[1] >= jmath::min(a[1], b[1]) - 1e-8
-            && point[1] <= jmath::max(a[1], b[1]) + 1e-8
+            && point.x >= jmath::min(a.x, b.x) - 1e-8
+            && point.x <= jmath::max(a.x, b.x) + 1e-8
+            && point.y >= jmath::min(a.y, b.y) - 1e-8
+            && point.y <= jmath::max(a.y, b.y) + 1e-8
         {
             return false;
         }
@@ -679,10 +706,10 @@ fn strictly_inside(polygon: &[[f64; 2]], point: [f64; 2]) -> bool {
     true
 }
 
-fn interior_overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
-    let x = geometry::bounds(a);
-    let y = geometry::bounds(b);
-    if x[2] <= y[0] || y[2] <= x[0] || x[3] <= y[1] || y[3] <= x[1] {
+fn interior_overlap(a: &Polygon, b: &Polygon) -> bool {
+    let x: Bounds = a.bounds();
+    let y: Bounds = b.bounds();
+    if x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top {
         return false;
     }
     for p in a {
@@ -701,10 +728,10 @@ fn interior_overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
             let q = a[(i + 1) % a.len()];
             let r = b[j];
             let t = b[(j + 1) % b.len()];
-            if jmath::max(p[0], q[0]) < jmath::min(r[0], t[0])
-                || jmath::max(r[0], t[0]) < jmath::min(p[0], q[0])
-                || jmath::max(p[1], q[1]) < jmath::min(r[1], t[1])
-                || jmath::max(r[1], t[1]) < jmath::min(p[1], q[1])
+            if jmath::max(p.x, q.x) < jmath::min(r.x, t.x)
+                || jmath::max(r.x, t.x) < jmath::min(p.x, q.x)
+                || jmath::max(p.y, q.y) < jmath::min(r.y, t.y)
+                || jmath::max(r.y, t.y) < jmath::min(p.y, q.y)
             {
                 continue;
             }
@@ -722,17 +749,17 @@ fn interior_overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
     for i in 0..a.len() {
         let p = a[i];
         let q = a[(i + 1) % a.len()];
-        let dx = q[0] - p[0];
-        let dy = q[1] - p[1];
+        let dx = q.x - p.x;
+        let dy = q.y - p.y;
         let length = jmath::hypot(dx, dy);
         if length < 1e-8 {
             continue;
         }
         let epsilon = jmath::min(length * 0.001, 1e-4);
-        let cx = (p[0] + q[0]) / 2.0;
-        let cy = (p[1] + q[1]) / 2.0;
+        let cx = (p.x + q.x) / 2.0;
+        let cy = (p.y + q.y) / 2.0;
         for sign in [-1.0f64, 1.0] {
-            let witness = [cx - sign * dy / length * epsilon, cy + sign * dx / length * epsilon];
+            let witness = DocPoint { x: cx - sign * dy / length * epsilon, y: cy + sign * dx / length * epsilon };
             if strictly_inside(a, witness) && strictly_inside(b, witness) {
                 return true;
             }
@@ -743,7 +770,8 @@ fn interior_overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
 
 impl Svg {
     /// `new Render.Svg(x, y, w, h)`: white background over the viewBox.
-    pub fn new(x: f64, y: f64, w: f64, h: f64) -> Svg {
+    pub fn new(view_box: DocRect) -> Svg {
+        let DocRect { x, y, width: w, height: h } = view_box;
         let mut s = String::new();
         s.push_str("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"");
         d(&mut s, w);
@@ -779,7 +807,7 @@ impl std::fmt::Display for Svg {
 }
 
 impl Surface for Svg {
-    fn begin_erase(&mut self, polygons: &[Polygon]) -> Result<()> {
+    fn begin_erase(&mut self, polygons: &Erasures) -> Result<()> {
         self.clip_counts.push(polygons.len());
         for p in polygons {
             let id = format!("erase-{}", self.clip_id);
@@ -801,7 +829,9 @@ impl Surface for Svg {
         }
         Ok(())
     }
-    fn polygon(&mut self, points: &[[f64; 2]], color: i32, width: f64, fill: Option<i32>, closed: bool) -> Result<()> {
+    fn polygon(&mut self, points: &Polygon, paint: ShapePaint, end: PathEnd) -> Result<()> {
+        let (color, width, fill) = (paint.color.0, paint.width.0, paint.fill.map(|f| f.0));
+        let closed = end == PathEnd::Closed;
         let s = &mut self.s;
         s.push_str("<path d=\"");
         s.push_str(&svg_path(points, closed));
@@ -824,10 +854,11 @@ impl Surface for Svg {
         s.push_str("\"/>");
         Ok(())
     }
-    fn ink(&mut self, passes: &[Polygon], color: i32) -> Result<()> {
+    fn ink(&mut self, passes: &InkPasses, ink: ArgbColor) -> Result<()> {
         if passes.len() == 1 {
-            return self.polygon(&passes[0], color, 0.0, Some(color), true);
+            return self.polygon(&passes[0], ShapePaint { color: ink, width: StrokeWidth(0.0), fill: Some(ink) }, PathEnd::Closed);
         }
+        let color = ink.0;
         // All passes have the same winding: paint their union once, then each
         // later pass clipped to prior coverage adds one ink deposit.
         let paths: Vec<String> = passes.iter().map(|p| svg_path(p, true)).collect();
@@ -873,7 +904,8 @@ impl Surface for Svg {
         }
         Ok(())
     }
-    fn svg(&mut self, x: f64, y: f64, w: f64, h: f64, source: &str) -> Result<()> {
+    fn svg(&mut self, rect: DocRect, source: &str) -> Result<()> {
+        let DocRect { x, y, width: w, height: h } = rect;
         let data = jfmt::base64_encode(svg_asset::viewport(source)?.as_bytes());
         let s = &mut self.s;
         s.push_str("<image x=\"");
@@ -889,7 +921,9 @@ impl Surface for Svg {
         s.push_str("\"/>");
         Ok(())
     }
-    fn save_transform(&mut self, cx: f64, cy: f64, rotation: f64, flip_x: bool, flip_y: bool) -> Result<()> {
+    fn save_transform(&mut self, center: DocPoint, rotation: Degrees, flip: Flip) -> Result<()> {
+        let DocPoint { x: cx, y: cy } = center;
+        let (rotation, flip_x, flip_y) = (rotation.0, flip.horizontal, flip.vertical);
         let s = &mut self.s;
         s.push_str("<g transform=\"translate(");
         d(s, cx);
@@ -912,7 +946,8 @@ impl Surface for Svg {
         self.s.push_str("</g>");
         Ok(())
     }
-    fn image(&mut self, x: f64, y: f64, w: f64, h: f64, data: &str) -> Result<()> {
+    fn image(&mut self, rect: DocRect, data: &str) -> Result<()> {
+        let DocRect { x, y, width: w, height: h } = rect;
         let s = &mut self.s;
         s.push_str("<image x=\"");
         d(s, x);
@@ -927,7 +962,9 @@ impl Surface for Svg {
         s.push_str("\"/>");
         Ok(())
     }
-    fn line(&mut self, x: f64, y: f64, ex: f64, ey: f64, color: i32, width: f64) -> Result<()> {
+    fn line(&mut self, segment: Segment, color: ArgbColor, width: StrokeWidth) -> Result<()> {
+        let (DocPoint { x, y }, DocPoint { x: ex, y: ey }) = (segment.start, segment.end);
+        let (color, width) = (color.0, width.0);
         let s = &mut self.s;
         s.push_str("<line x1=\"");
         d(s, x);
@@ -946,7 +983,10 @@ impl Surface for Svg {
         s.push_str("\" stroke-linecap=\"round\"/>");
         Ok(())
     }
-    fn rect(&mut self, x: f64, y: f64, w: f64, h: f64, color: i32, width: f64, fill: Option<i32>, ellipse: bool) -> Result<()> {
+    fn rect(&mut self, rect: DocRect, paint: ShapePaint, shape: RectShape) -> Result<()> {
+        let DocRect { x, y, width: w, height: h } = rect;
+        let (color, width, fill) = (paint.color.0, paint.width.0, paint.fill.map(|f| f.0));
+        let ellipse = shape == RectShape::Ellipse;
         let s = &mut self.s;
         s.push_str(if ellipse { "<ellipse cx=\"" } else { "<rect x=\"" });
         d(s, if ellipse { x + w / 2.0 } else { x });
@@ -975,22 +1015,22 @@ impl Surface for Svg {
         s.push_str("\"/>");
         Ok(())
     }
-    fn text(&mut self, x: f64, y: f64, text: &str, color: i32, size: f64) -> Result<()> {
-        self.styled_text(x, y, text, color, size, "sans-serif", false, false, false, "left")
+    fn text(&mut self, origin: DocPoint, text: &TextContent, color: ArgbColor, size: FontSize) -> Result<()> {
+        self.styled_text(origin, text, color, size, &FontFamily::from("sans-serif"), TextStyle::default(), &TextAlignment::from("left"))
     }
     fn styled_text(
         &mut self,
-        x: f64,
-        y: f64,
-        text: &str,
-        color: i32,
-        size: f64,
-        family: &str,
-        bold: bool,
-        italic: bool,
-        underline: bool,
-        alignment: &str,
+        origin: DocPoint,
+        text: &TextContent,
+        color: ArgbColor,
+        size: FontSize,
+        family: &FontFamily,
+        style: TextStyle,
+        alignment: &TextAlignment,
     ) -> Result<()> {
+        let DocPoint { x, y } = origin;
+        let (text, color, size, family, alignment) = (text.as_ref(), color.0, size.0, family.as_ref(), alignment.as_ref());
+        let TextStyle { bold, italic, underline } = style;
         let s = &mut self.s;
         s.push_str("<text x=\"");
         d(s, x);

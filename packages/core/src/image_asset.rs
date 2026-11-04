@@ -1,6 +1,7 @@
 //! Port of `ImageAsset.java`: portable PNG/JPEG header validation.
 
 use crate::error::{require, Error, Result};
+use crate::geometry::Size;
 use crate::jfmt;
 
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -32,7 +33,7 @@ fn u32be(b: &[u8], p: usize) -> Result<i64> {
 }
 
 /// `ImageAsset.validate(uri)`: `{w, h}`. `None` mirrors a Java null.
-pub fn validate(uri: Option<&str>) -> Result<[f64; 2]> {
+pub fn validate(uri: Option<&str>) -> Result<Size> {
     require(matches!(uri, Some(u) if crate::json::jlen(u) as i64 <= MAX_BYTES as i64 * 4 / 3 + 100), "Image exceeds 2 MiB")?;
     let uri = uri.unwrap();
     let is_png = uri.starts_with("data:image/png;base64,");
@@ -100,5 +101,5 @@ pub fn validate(uri: Option<&str>) -> Result<[f64; 2]> {
     }
     require(w > 0 && h > 0 && w <= MAX_DIMENSION && h <= MAX_DIMENSION, "Invalid image dimensions (maximum 8192)")?;
     require(w * h <= 32 * 1024 * 1024, "Image exceeds 32 megapixels")?;
-    Ok([w as f64, h as f64])
+    Ok(Size { width: w as f64, height: h as f64 })
 }

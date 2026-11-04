@@ -2,7 +2,7 @@
 
 use crate::coverage::{Coverage, CoverageFactory};
 use crate::error::Result;
-use crate::geometry::{self, Polygon};
+use crate::geometry::{Bounds, DocPoint, DocRect, Erasures, Polygon};
 use crate::jmath;
 use crate::json::{self, Map, Value};
 use crate::model::{Entity, Model};
@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// the same (identical) geometry map, like Java's identity-keyed cache.
 #[derive(Default)]
 struct Prepared {
-    bounds: Mutex<Option<[f64; 4]>>,
+    bounds: Mutex<Option<Bounds>>,
     local: Mutex<Option<Arc<Map>>>,
 }
 
@@ -106,10 +106,10 @@ impl DrawItem {
         if kind == "object" && (content.contains_key("from") || content.contains_key("to")) {
             let mut o: Map = (**content).clone();
             let e = render::endpoints(model, content)?;
-            o.insert("x".into(), json::double(e[0]));
-            o.insert("y".into(), json::double(e[1]));
-            o.insert("w".into(), json::double(e[2] - e[0]));
-            o.insert("h".into(), json::double(e[3] - e[1]));
+            o.insert("x".into(), json::double(e.start.x));
+            o.insert("y".into(), json::double(e.start.y));
+            o.insert("w".into(), json::double(e.end.x - e.start.x));
+            o.insert("h".into(), json::double(e.end.y - e.start.y));
             o.shift_remove("from");
             o.shift_remove("to");
             o.insert("rotation".into(), Value::from(0));
@@ -121,12 +121,13 @@ impl DrawItem {
     }
 
     /// `local(x, y)`: document point in item-local paint coordinates.
-    pub fn local(&self, x: f64, y: f64) -> Result<[f64; 2]> {
+    pub fn local(&self, point: DocPoint) -> Result<DocPoint> {
+        let DocPoint { x, y } = point;
         let o = &self.geometry;
         if self.kind == "stroke" {
             let points = json::list_at(o, "points")?;
             let p = json::list(points.first().ok_or_else(|| index_error(0, 0))?)?;
-            return Ok([x - json::as_double(p.first())?, y - json::as_double(p.get(1))?]);
+            return Ok(DocPoint { x: x - json::as_double(p.first())?, y: y - json::as_double(p.get(1))? });
         }
         let w = json::number(o, "w")?;
         let h = json::number(o, "h")?;
@@ -135,10 +136,7 @@ impl DrawItem {
         let dy = y - json::number(o, "y")? - h / 2.0;
         let fx = if json::is_true(o.get("flipX")) { -1.0 } else { 1.0 };
         let fy = if json::is_true(o.get("flipY")) { -1.0 } else { 1.0 };
-        Ok([
-            (dx * jmath::cos(a) + dy * jmath::sin(a)) * fx + w / 2.0,
-            (-dx * jmath::sin(a) + dy * jmath::cos(a)) * fy + h / 2.0,
-        ])
+        Ok(DocPoint { x: (dx * jmath::cos(a) + dy * jmath::sin(a)) * fx + w / 2.0, y: (-dx * jmath::sin(a) + dy * jmath::cos(a)) * fy + h / 2.0 })
     }
 
     /// `localContent()`: geometry translated to item-local coordinates (cached).
@@ -158,8 +156,8 @@ impl DrawItem {
             let mut points = Vec::new();
             for v in json::list_at(&self.content, "points")? {
                 let p = json::list(v)?;
-                let q = self.local(json::as_double(p.first())?, json::as_double(p.get(1))?)?;
-                points.push(Value::Array(vec![json::double(q[0]), json::double(q[1]), p.get(2).cloned().unwrap_or(Value::Null)]));
+                let q = self.local(DocPoint { x: json::as_double(p.first())?, y: json::as_double(p.get(1))? })?;
+                points.push(Value::Array(vec![json::double(q.x), json::double(q.y), p.get(2).cloned().unwrap_or(Value::Null)]));
             }
             o.insert("points".into(), Value::Array(points));
         }
@@ -182,7 +180,7 @@ impl DrawItem {
     }
 
     /// Conservative unmasked local bounds; `None` for text (glyph overhangs need native coverage).
-    fn coarse_bounds(&self) -> Result<Option<[f64; 4]>> {
+    fn coarse_bounds(&self) -> Result<Option<Bounds>> {
         let prepared = self.prepared();
         if let Some(b) = *prepared.bounds.lock().unwrap_or_else(|e| e.into_inner()) {
             return Ok(Some(b));
@@ -200,9 +198,9 @@ impl DrawItem {
                 r = jmath::max(r, x);
                 b = jmath::max(b, y);
             }
-            let first = self.local(l, t)?;
-            let last = self.local(r, b)?;
-            let bounds = [first[0] - pad, first[1] - pad, last[0] + pad, last[1] + pad];
+            let first = self.local(DocPoint { x: l, y: t })?;
+            let last = self.local(DocPoint { x: r, y: b })?;
+            let bounds = Bounds { left: first.x - pad, top: first.y - pad, right: last.x + pad, bottom: last.y + pad };
             *prepared.bounds.lock().unwrap_or_else(|e| e.into_inner()) = Some(bounds);
             return Ok(Some(bounds));
         }
@@ -219,30 +217,30 @@ impl DrawItem {
         pad += 1.0;
         let w = json::number(o, "w")?;
         let h = json::number(o, "h")?;
-        let bounds = [jmath::min(0.0, w) - pad, jmath::min(0.0, h) - pad, jmath::max(0.0, w) + pad, jmath::max(0.0, h) + pad];
+        let bounds = Bounds { left: jmath::min(0.0, w) - pad, top: jmath::min(0.0, h) - pad, right: jmath::max(0.0, w) + pad, bottom: jmath::max(0.0, h) + pad };
         *prepared.bounds.lock().unwrap_or_else(|e| e.into_inner()) = Some(bounds);
         Ok(Some(bounds))
     }
 
-    fn overlaps(b: &[f64; 4], q: &[f64; 4]) -> bool {
-        b[2] >= q[0] && q[2] >= b[0] && b[3] >= q[1] && q[3] >= b[1]
+    fn overlaps(b: &Bounds, q: &Bounds) -> bool {
+        b.right >= q.left && q.right >= b.left && b.bottom >= q.top && q.bottom >= b.top
     }
 
     /// `intersects(region, factory)`: painted area hit test in document coordinates.
-    pub fn intersects(&self, region: &[[f64; 2]], factory: &dyn CoverageFactory) -> Result<bool> {
+    pub fn intersects(&self, region: &Polygon, factory: &dyn CoverageFactory) -> Result<bool> {
         let coarse = self.coarse_bounds()?;
         if self.kind == "stroke" {
-            let mut q = geometry::bounds(region);
-            let origin = self.local(0.0, 0.0)?;
-            q[0] += origin[0];
-            q[2] += origin[0];
-            q[1] += origin[1];
-            q[3] += origin[1];
+            let mut q = region.bounds();
+            let origin = self.local(DocPoint { x: 0.0, y: 0.0 })?;
+            q.left += origin.x;
+            q.right += origin.x;
+            q.top += origin.y;
+            q.bottom += origin.y;
             if !DrawItem::overlaps(coarse.as_ref().unwrap(), &q) {
                 return Ok(false);
             }
         }
-        let mut p: Polygon = Vec::with_capacity(region.len());
+        let mut p = Polygon::from(Vec::with_capacity(region.len()));
         if self.kind == "object" {
             let o = &self.geometry;
             let w = json::number(o, "w")?;
@@ -255,16 +253,16 @@ impl DrawItem {
             let flip_x = if json::is_true(o.get("flipX")) { -1.0 } else { 1.0 };
             let flip_y = if json::is_true(o.get("flipY")) { -1.0 } else { 1.0 };
             for v in region {
-                let dx = v[0] - cx;
-                let dy = v[1] - cy;
-                p.push([(dx * cos + dy * sin) * flip_x + w / 2.0, (-dx * sin + dy * cos) * flip_y + h / 2.0]);
+                let dx = v.x - cx;
+                let dy = v.y - cy;
+                p.push(DocPoint { x: (dx * cos + dy * sin) * flip_x + w / 2.0, y: (-dx * sin + dy * cos) * flip_y + h / 2.0 });
             }
         } else {
             for v in region {
-                p.push(self.local(v[0], v[1])?);
+                p.push(self.local(*v)?);
             }
         }
-        let q = geometry::bounds(&p);
+        let q = p.bounds();
         if let Some(c) = coarse {
             if !DrawItem::overlaps(&c, &q) {
                 return Ok(false);
@@ -278,38 +276,35 @@ impl DrawItem {
     pub fn has_coverage(&self, factory: &dyn CoverageFactory) -> Result<bool> {
         let coverage = self.coverage(factory)?;
         let b = coverage.bounds();
-        Ok(b[2] > b[0] && b[3] > b[1] && coverage.intersects(&geometry::rect(b[0], b[1], b[2] - b[0], b[3] - b[1]))?)
+        Ok(b.right > b.left && b.bottom > b.top && coverage.intersects(&DocRect { x: b.left, y: b.top, width: b.right - b.left, height: b.bottom - b.top }.polygon())?)
     }
 
     /// `paintBounds(factory)`: conservative document-space paint bounds.
-    pub fn paint_bounds(&self, factory: &dyn CoverageFactory) -> Result<[f64; 4]> {
+    pub fn paint_bounds(&self, factory: &dyn CoverageFactory) -> Result<Bounds> {
         let b = self.coverage(factory)?.bounds();
-        let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        let mut out = Bounds::EMPTY;
         if self.kind == "stroke" {
-            let origin = self.local(0.0, 0.0)?;
-            return Ok([b[0] - origin[0], b[1] - origin[1], b[2] - origin[0], b[3] - origin[1]]);
+            let origin = self.local(DocPoint { x: 0.0, y: 0.0 })?;
+            return Ok(Bounds { left: b.left - origin.x, top: b.top - origin.y, right: b.right - origin.x, bottom: b.bottom - origin.y });
         }
         let o = &self.geometry;
         let w = json::number(o, "w")?;
         let h = json::number(o, "h")?;
         let angle = jmath::to_radians(rotation(o)?);
-        for x in [b[0], b[2]] {
-            for y in [b[1], b[3]] {
+        for x in [b.left, b.right] {
+            for y in [b.top, b.bottom] {
                 let dx = (x - w / 2.0) * if json::is_true(o.get("flipX")) { -1.0 } else { 1.0 };
                 let dy = (y - h / 2.0) * if json::is_true(o.get("flipY")) { -1.0 } else { 1.0 };
                 let px = json::number(o, "x")? + w / 2.0 + dx * jmath::cos(angle) - dy * jmath::sin(angle);
                 let py = json::number(o, "y")? + h / 2.0 + dx * jmath::sin(angle) + dy * jmath::cos(angle);
-                out[0] = jmath::min(out[0], px);
-                out[1] = jmath::min(out[1], py);
-                out[2] = jmath::max(out[2], px);
-                out[3] = jmath::max(out[3], py);
+                out.include(DocPoint { x: px, y: py });
             }
         }
         Ok(out)
     }
 
     /// `erase(regions)`: replacement operation with added local erasure masks.
-    pub fn erase(&self, regions: &[Polygon]) -> Result<Map> {
+    pub fn erase(&self, regions: &Erasures) -> Result<Map> {
         let mut next: Map = (*self.content).clone();
         for key in STRIPPED {
             next.shift_remove(key);
@@ -320,16 +315,16 @@ impl DrawItem {
         };
         let o = &self.geometry;
         for region in regions {
-            let mut p: Polygon = Vec::with_capacity(region.len());
+            let mut p = Polygon::from(Vec::with_capacity(region.len()));
             for v in region {
-                let mut q = self.local(v[0], v[1])?;
+                let mut q = self.local(*v)?;
                 if self.kind == "object" {
-                    q[0] /= unit(json::number(o, "w")?);
-                    q[1] /= unit(json::number(o, "h")?);
+                    q.x /= unit(json::number(o, "w")?);
+                    q.y /= unit(json::number(o, "h")?);
                 }
                 p.push(q);
             }
-            masks.push(geometry::json(&p));
+            masks.push(p.to_json());
         }
         next.insert("erasures".into(), Value::Array(masks));
         Model::validate(&next)?;
@@ -337,13 +332,13 @@ impl DrawItem {
     }
 
     /// `DrawItem.erasures(o)`: persistent local masks in unrotated paint coordinates.
-    pub fn erasures(o: &Map) -> Result<Vec<Polygon>> {
+    pub fn erasures(o: &Map) -> Result<Erasures> {
         let raw_masks = match o.get("erasures") {
-            None => return Ok(Vec::new()),
+            None => return Ok(Erasures::default()),
             Some(v) => json::list(v)?,
         };
         if raw_masks.is_empty() {
-            return Ok(Vec::new());
+            return Ok(Erasures::default());
         }
         let stroke = o.get("kind").and_then(Value::as_str) == Some("stroke") || (!o.contains_key("kind") && o.contains_key("points"));
         let (x, y, w, h);
@@ -360,12 +355,12 @@ impl DrawItem {
             w = unit(json::number(o, "w")?);
             h = unit(json::number(o, "h")?);
         }
-        let mut out = Vec::with_capacity(raw_masks.len());
+        let mut out = Erasures::from(Vec::with_capacity(raw_masks.len()));
         for raw in raw_masks {
-            let mut p = geometry::polygon(raw)?;
+            let mut p = Polygon::from_json(raw)?;
             for v in p.iter_mut() {
-                v[0] = x + v[0] * w;
-                v[1] = y + v[1] * h;
+                v.x = x + v.x * w;
+                v.y = y + v.y * h;
             }
             out.push(p);
         }

@@ -6,7 +6,7 @@ use resvg::{tiny_skia, usvg};
 fn run(args: &[String]) -> Result<(), String> {
     let source = std::fs::read_to_string(&args[0]).map_err(|e| format!("{}: {}", args[0], e))?;
     let options = usvg::Options {
-        fontdb: notemaker_cli::typeface::svg_fontdb(),
+        fontdb: notemaker_cli::typeface::svg_fontdb().0,
         ..usvg::Options::default()
     };
     let tree = usvg::Tree::from_str(&source, &options)

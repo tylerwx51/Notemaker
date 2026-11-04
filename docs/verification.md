@@ -48,6 +48,24 @@ from the relaunch fix above.
   first bounds they saw. Both now turn animations off and tap only after a
   control has the same bounds in two consecutive UI dumps.
 
+## Newtype pass for ADR 0030 — 2026-11-03
+
+- Lint revision (transparent std wrappers, `bool` returns, `notemaker_cli`
+  allowed, `java_port` modules): `cargo test` in `tools/lints/notemaker_lints`
+  passes with the updated UI test.
+- `cargo dylint --all -- --workspace`: 249 warnings (was 2,004), all in the
+  groups still under discussion (network/endpoint values, untyped JSON,
+  bytes/data URIs/SVG source/paths, std value types).
+- `cargo check --workspace --all-targets` and `cargo test --workspace`: clean
+  and passing.
+- `packages/core/tests/parity.sh`: PARITY OK (0 unexpected differences).
+- `tests/run.py` local tier: all suites OK.
+- Emulator tier: `integration`, `viewport_android`, `cli_android`,
+  `drawing_android`, `files_android`, `performance` and `chat_ui` pass.
+  (`chat_ui` failed once when scheduled alongside `performance`, which uses
+  the same reserved emulator; run alone it passes.)
+- Not verified: BOOX hardware (E Ink refresh, stylus).
+
 ## Newtype signature lint (ADR 0030) — 2026-11-03
 
 - `cargo-dylint` and `dylint-link` 6.3.2 build from `tools/nix/dylint.nix`.

@@ -6,17 +6,18 @@
 //! lists clips in `java.util.HashMap` iteration order.
 
 use crate::android_canvas::{rect_to_java, RectFExt};
-use crate::android_consts::{BASE64_DEFAULT, COLOR_BLACK, COLOR_WHITE, MOTIONEVENT_ACTION_CANCEL, MOTIONEVENT_ACTION_DOWN, MOTIONEVENT_ACTION_MOVE, MOTIONEVENT_ACTION_UP, PAINT_ANTI_ALIAS_FLAG, TOAST_LENGTH_SHORT};
+use crate::android_consts::{MotionAction, BASE64_DEFAULT, COLOR_BLACK, COLOR_WHITE, MOTIONEVENT_ACTION_CANCEL, MOTIONEVENT_ACTION_DOWN, MOTIONEVENT_ACTION_MOVE, MOTIONEVENT_ACTION_UP, PAINT_ANTI_ALIAS_FLAG, TOAST_LENGTH_SHORT};
 use crate::error::{AppError, AppResult};
 use crate::field::Field;
-use crate::ink_cache::{fmax, fmin};
+use crate::java_port::math::{fmax, fmin};
 use crate::jx::{self, Obj, Reply};
-use crate::main_activity::MainActivity;
+use crate::main_activity::{DocPointF, MainActivity};
 use crate::ui;
 use indexmap::IndexMap;
 use notemaker_cli::canvas::{Style, RectF};
 use notemaker_core::draw_item::DrawItem;
 use notemaker_core::gif_asset::{self, Info};
+use notemaker_core::ids::{EntityId, LayerId};
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::{jmath, object};
 use std::sync::{Arc, Weak};
@@ -28,7 +29,7 @@ pub const ROW_HEIGHT: f32 = 39.0;
 
 /// `((Number) o.get(key)).floatValue()` for object geometry.
 fn fv(o: &Map, key: &str) -> AppResult<f32> {
-    crate::ink_cache::float_value(o.get(key))
+    crate::java_port::math::float_value(o.get(key))
 }
 /// `((Number) o.getOrDefault("rotation", 0))`.
 fn rotation(o: &Map) -> AppResult<f64> {
@@ -37,6 +38,22 @@ fn rotation(o: &Map) -> AppResult<f64> {
         v => Ok(json::as_double(v)?),
     }
 }
+
+/// Whether a GIF clip plays or holds its current frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Playback {
+    Playing,
+    Paused,
+}
+
+/// A number of frames to step a clip by (negative steps backwards; wraps).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameStep(pub i32);
+
+/// A requested zero-based clip frame (`seek`), checked against the clip's
+/// frame count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClipFrame(pub i32);
 
 /// `private static final class Clip`.
 pub struct Clip {
@@ -51,7 +68,7 @@ pub struct Clip {
 impl Clip {
     /// `Clip(String data)`: decodes the data URI; Java threw
     /// `IllegalArgumentException` for undecodable GIFs.
-    pub fn new(data: &str) -> AppResult<Clip> {
+    fn new(data: &str) -> AppResult<Clip> {
         let units: Vec<u16> = data.encode_utf16().collect();
         if units.len() < 22 {
             return Err(AppError::java("java.lang.StringIndexOutOfBoundsException", format!("begin 22, end {}, length {}", units.len(), units.len())));
@@ -78,7 +95,7 @@ pub struct Hit {
     pub bar: RectF,
 }
 impl Hit {
-    pub fn new(id: String, control: String, bar: RectF) -> Hit {
+    fn new(id: String, control: String, bar: RectF) -> Hit {
         Hit { id, control, bar }
     }
 }
@@ -142,7 +159,7 @@ impl AnimationPlayer {
     }
     /// Body of `AnimationPlayer$1.run()`.
     pub fn tick(self: &Arc<Self>) -> AppResult<()> {
-        let now = jx::uptime_millis();
+        let now = jx::uptime_millis().0;
         let mut more = false;
         for (id, clip) in self.clip_list() {
             if !clip.playing.get() {
@@ -163,12 +180,12 @@ impl AnimationPlayer {
         }
         self.refresh()?;
         if more {
-            ui::post_delayed(&self.handler, &self.tick, 50)?;
+            ui::post_delayed(&self.handler, &self.tick, crate::jx::DelayMillis(50))?;
         }
         Ok(())
     }
     /// `private boolean available(Map<String,Object> object)`.
-    pub fn available(&self, object: Option<&Map>) -> bool {
+    fn available(&self, object: Option<&Map>) -> bool {
         let Some(o) = object else { return false };
         if o.get("shape").and_then(Value::as_str) != Some("gif") {
             return false;
@@ -183,7 +200,7 @@ impl AnimationPlayer {
         object_active != Some(false) && layer_active != Some(false)
     }
     /// `private Clip clip(String id)`.
-    pub fn clip(&self, id: &str) -> AppResult<Arc<Clip>> {
+    fn clip(&self, id: &str) -> AppResult<Arc<Clip>> {
         let o = self.object(Some(id));
         if !self.available(o.as_deref()) {
             return Err(AppError::illegal_argument("GIF is unavailable on this page"));
@@ -208,14 +225,14 @@ impl AnimationPlayer {
         }
     }
     /// `private void invalidate(Map<String,Object> o)`.
-    pub fn invalidate(&self, o: Option<&Map>) -> AppResult<()> {
+    fn invalidate(&self, o: Option<&Map>) -> AppResult<()> {
         let app = self.app();
         let (Some(canvas), Some(o)) = (app.canvas.get(), o) else { return Ok(()) };
         let x = fv(o, "x")?;
         let y = fv(o, "y")?;
         let w = fv(o, "w")?;
         let h = fv(o, "h")?;
-        let scale = canvas.scale() * canvas.zoom.get();
+        let scale = canvas.scale().0 * canvas.zoom.get();
         if scale <= 0.0 {
             return canvas.invalidate();
         }
@@ -229,15 +246,16 @@ impl AnimationPlayer {
         let bottom = fmax(cy + radius, bar.bottom) + 4.0;
         let ox = canvas.offset_x.get();
         let oy = canvas.offset_y.get();
-        canvas.invalidate_rect(
-            (ox + left * scale) as i32,
-            (oy + top * scale) as i32,
-            ((ox + right * scale) as f64).ceil() as i32,
-            ((oy + bottom * scale) as f64).ceil() as i32,
-        )
+        canvas.invalidate_rect(crate::main_activity::ScreenRect {
+            left: (ox + left * scale) as i32,
+            top: (oy + top * scale) as i32,
+            right: ((ox + right * scale) as f64).ceil() as i32,
+            bottom: ((oy + bottom * scale) as f64).ceil() as i32,
+        })
     }
     /// `boolean loaded(String id)`.
-    pub fn loaded(&self, id: &str) -> bool {
+    pub fn loaded(&self, id: &EntityId) -> bool {
+        let id: &str = id;
         let clip = self.clips.with(|c| c.get(id).cloned());
         let object = self.object(Some(id));
         match (clip, object) {
@@ -251,14 +269,17 @@ impl AnimationPlayer {
         let canvas = app.canvas();
         let objects: Vec<Arc<Map>> = app.model().objects.values().cloned().collect();
         for o in objects {
-            if self.available(Some(&o)) && canvas.visible(&json::java_string(o.get("layer"))) {
+            if self.available(Some(&o)) && canvas.visible(&notemaker_core::ids::LayerId::from(json::java_string(o.get("layer")))) {
                 self.clip(&json::java_string(o.get("object")))?;
             }
         }
         Ok(())
     }
     /// `void select(String id)`.
-    pub fn select(self: &Arc<Self>, id: &str) -> AppResult<()> {
+    pub fn select(self: &Arc<Self>, id: &EntityId) -> AppResult<()> {
+        self.select_clip(id)
+    }
+    fn select_clip(self: &Arc<Self>, id: &str) -> AppResult<()> {
         self.clip(id)?;
         if self.selected.get().as_deref() != Some(id) {
             self.selected.set(Some(id.to_string()));
@@ -271,20 +292,22 @@ impl AnimationPlayer {
         ui::remove_callbacks(&self.handler, &self.tick)?;
         let playing = self.clips.with(|c| c.values().any(|c| c.playing.get()));
         if playing {
-            ui::post_delayed(&self.handler, &self.tick, 50)?;
+            ui::post_delayed(&self.handler, &self.tick, crate::jx::DelayMillis(50))?;
         }
         Ok(())
     }
     /// `void play(boolean value)`.
-    pub fn play(self: &Arc<Self>, value: bool) -> AppResult<()> {
+    pub fn play(self: &Arc<Self>, playback: Playback) -> AppResult<()> {
+        let value = playback == Playback::Playing;
         let c = self.clip(&self.require_selected()?)?;
         c.playing.set(value);
-        c.next_at.set(jx::uptime_millis() + c.info.delays[c.frame.get() as usize] as i64);
+        c.next_at.set(jx::uptime_millis().0 + c.info.delays[c.frame.get() as usize] as i64);
         self.schedule()?;
         self.refresh()
     }
     /// `void step(int delta)`.
-    pub fn step(self: &Arc<Self>, delta: i32) -> AppResult<()> {
+    pub fn step(self: &Arc<Self>, delta: FrameStep) -> AppResult<()> {
+        let FrameStep(delta) = delta;
         let c = self.clip(&self.require_selected()?)?;
         c.playing.set(false);
         c.frame.set((c.frame.get() + delta).rem_euclid(c.frames()));
@@ -293,21 +316,22 @@ impl AnimationPlayer {
         self.refresh()
     }
     /// `void seek(int frame)`.
-    pub fn seek(self: &Arc<Self>, frame: i32) -> AppResult<()> {
+    pub fn seek(self: &Arc<Self>, frame: ClipFrame) -> AppResult<()> {
+        let ClipFrame(frame) = frame;
         let c = self.clip(&self.require_selected()?)?;
         if frame < 0 || frame >= c.frames() {
             return Err(AppError::illegal_argument("Frame is out of range"));
         }
         let changed = c.frame.get() != frame;
         c.frame.set(frame);
-        c.next_at.set(jx::uptime_millis() + c.info.delays[frame as usize] as i64);
+        c.next_at.set(jx::uptime_millis().0 + c.info.delays[frame as usize] as i64);
         if changed {
             self.invalidate(self.object(self.selected.get().as_deref()).as_deref())?;
         }
         self.refresh()
     }
     /// `private String requireSelected()`.
-    pub fn require_selected(&self) -> AppResult<String> {
+    fn require_selected(&self) -> AppResult<String> {
         self.selected.get().ok_or_else(|| AppError::illegal_argument("Select a GIF first"))
     }
     /// `Map<String,Object> state()`.
@@ -331,7 +355,8 @@ impl AnimationPlayer {
         Ok(object! { "selected" => selected, "clips" => entries })
     }
     /// `void draw(Canvas canvas, String layer)`.
-    pub fn draw(&self, canvas: &Obj, layer: &str) -> AppResult<()> {
+    pub fn draw(&self, canvas: &Obj, layer: &LayerId) -> AppResult<()> {
+        let layer: &str = layer;
         for (id, c) in self.clip_list() {
             let o = self.object(Some(&id));
             if !self.available(o.as_deref()) {
@@ -349,18 +374,18 @@ impl AnimationPlayer {
             let cx = x + w / 2.0;
             let cy = y + h / 2.0;
             jcall!(canvas, "android/graphics/Canvas", "translate", "(FF)V", cx, cy)?;
-            jcall!(canvas, "android/graphics/Canvas", "rotate", "(F)V", match o.get("rotation") { None => 0.0, v => crate::ink_cache::float_value(v)? })?;
+            jcall!(canvas, "android/graphics/Canvas", "rotate", "(F)V", match o.get("rotation") { None => 0.0, v => crate::java_port::math::float_value(v)? })?;
             let sx = if json::is_true(o.get("flipX")) { -1.0f32 } else { 1.0 };
             let sy = if json::is_true(o.get("flipY")) { -1.0f32 } else { 1.0 };
             jcall!(canvas, "android/graphics/Canvas", "scale", "(FF)V", sx, sy)?;
             jcall!(canvas, "android/graphics/Canvas", "translate", "(FF)V", -cx, -cy)?;
-            for polygon in DrawItem::erasures(&o)? {
+            for polygon in DrawItem::erasures(&o)?.iter() {
                 let path = jnew!("android/graphics/Path", "()V")?;
                 for (i, p) in polygon.iter().enumerate() {
                     if i == 0 {
-                        jcall!(path, "android/graphics/Path", "moveTo", "(FF)V", p[0] as f32, p[1] as f32)?;
+                        jcall!(path, "android/graphics/Path", "moveTo", "(FF)V", p.x as f32, p.y as f32)?;
                     } else {
-                        jcall!(path, "android/graphics/Path", "lineTo", "(FF)V", p[0] as f32, p[1] as f32)?;
+                        jcall!(path, "android/graphics/Path", "lineTo", "(FF)V", p.x as f32, p.y as f32)?;
                     }
                 }
                 jcall!(path, "android/graphics/Path", "close", "()V")?;
@@ -369,14 +394,14 @@ impl AnimationPlayer {
             jcall!(canvas, "android/graphics/Canvas", "clipRect", "(FFFF)Z", x, y, x + w, y + h)?;
             jcall!(canvas, "android/graphics/Canvas", "translate", "(FF)V", x, y)?;
             jcall!(canvas, "android/graphics/Canvas", "scale", "(FF)V", w / c.info.width as f32, h / c.info.height as f32)?;
-            jcall!(c.movie, "android/graphics/Movie", "setTime", "(I)Z", c.info.time_for_frame(c.frame.get() as usize))?;
+            jcall!(c.movie, "android/graphics/Movie", "setTime", "(I)Z", c.info.time_for_frame(notemaker_core::gif_asset::FrameIndex(c.frame.get() as usize)).0)?;
             jcall!(c.movie, "android/graphics/Movie", "draw", "(Landroid/graphics/Canvas;FF)V", canvas, 0.0f32, 0.0f32)?;
             jcall!(canvas, "android/graphics/Canvas", "restore", "()V")?;
         }
         Ok(())
     }
     /// `private RectF controls(Map<String,Object> o)`.
-    pub fn controls(&self, o: &Map) -> RectF {
+    fn controls(&self, o: &Map) -> RectF {
         let x = fv(o, "x").unwrap_or(0.0);
         let y = fv(o, "y").unwrap_or(0.0);
         let w = fv(o, "w").unwrap_or(0.0);
@@ -393,10 +418,10 @@ impl AnimationPlayer {
                 top = fmax(0.0, y + h / 2.0 - visual_h / 2.0 - BAR_HEIGHT - 8.0);
             }
         }
-        RectF::new(left, top, left + width, top + BAR_HEIGHT)
+        RectF { left, top, right: left + width, bottom: top + BAR_HEIGHT }
     }
     /// `private static String controlAt(RectF bar, float x, float y)` (`null` → `None`).
-    pub fn control_at(bar: &RectF, x: f32, y: f32) -> Option<String> {
+    fn control_at(bar: &RectF, x: f32, y: f32) -> Option<String> {
         if x < bar.left || x > bar.right || y < bar.top || y > bar.bottom {
             return None;
         }
@@ -415,12 +440,12 @@ impl AnimationPlayer {
         }
     }
     /// `private Hit hit(float x, float y)` (`null` → `None`).
-    pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
+    fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let app = self.app();
         let canvas = app.canvas();
         let objects: Vec<Arc<Map>> = app.model().objects.values().cloned().collect();
         for o in objects.iter().rev() {
-            if !self.available(Some(o)) || !canvas.visible(&json::java_string(o.get("layer"))) {
+            if !self.available(Some(o)) || !canvas.visible(&notemaker_core::ids::LayerId::from(json::java_string(o.get("layer")))) {
                 continue;
             }
             let bar = self.controls(o);
@@ -431,14 +456,16 @@ impl AnimationPlayer {
         None
     }
     /// `private void seekAt(String id, RectF bar, float x)`.
-    pub fn seek_at(self: &Arc<Self>, id: &str, bar: &RectF, x: f32) -> AppResult<()> {
-        self.select(id)?;
+    fn seek_at(self: &Arc<Self>, id: &str, bar: &RectF, x: f32) -> AppResult<()> {
+        self.select_clip(id)?;
         let c = self.clip(id)?;
         let fraction = fmax(0.0, fmin(1.0, (x - bar.left - 12.0) / (bar.width() - 24.0)));
-        self.seek(ui::round_f32(fraction * (c.frames() - 1) as f32))
+        self.seek(ClipFrame(ui::round_f32(fraction * (c.frames() - 1) as f32)))
     }
     /// `boolean touch(int action, float x, float y)`.
-    pub fn touch(self: &Arc<Self>, action: i32, x: f32, y: f32) -> AppResult<bool> {
+    pub fn touch(self: &Arc<Self>, action: MotionAction, point: DocPointF) -> AppResult<bool> {
+        let MotionAction(action) = action;
+        let DocPointF { x, y } = point;
         if action == MOTIONEVENT_ACTION_DOWN {
             let hit = self.hit(x, y);
             self.pressed_id.set(hit.as_ref().map(|h| h.id.clone()));
@@ -483,14 +510,14 @@ impl AnimationPlayer {
                 Some(hit) if hit.id == id && hit.control == control => {}
                 _ => return Ok(true),
             }
-            self.select(&id)?;
+            self.select_clip(&id)?;
             if control == "previous" {
-                self.step(-1)?;
+                self.step(FrameStep(-1))?;
             } else if control == "next" {
-                self.step(1)?;
+                self.step(FrameStep(1))?;
             } else {
                 let playing = self.clip(&id)?.playing.get();
-                self.play(!playing)?;
+                self.play(if playing { Playback::Paused } else { Playback::Playing })?;
             }
             return Ok(true);
         }
@@ -506,7 +533,7 @@ impl AnimationPlayer {
         Ok(())
     }
     /// `private void centered(Canvas canvas, String value, float left, float right, float baseline)`.
-    pub fn centered(&self, canvas: &Obj, value: &str, left: f32, right: f32, baseline: f32) -> AppResult<()> {
+    fn centered(&self, canvas: &Obj, value: &str, left: f32, right: f32, baseline: f32) -> AppResult<()> {
         self.paint_style(Style::Fill)?;
         jcall!(self.control_paint, "android/graphics/Paint", "setColor", "(I)V", COLOR_BLACK)?;
         jcall!(self.control_paint, "android/graphics/Paint", "setTextSize", "(F)V", 17.0f32)?;
@@ -521,7 +548,7 @@ impl AnimationPlayer {
         let objects: Vec<Arc<Map>> = app.model().objects.values().cloned().collect();
         let paint = &self.control_paint;
         for o in objects {
-            if !self.available(Some(&o)) || !view.visible(&json::java_string(o.get("layer"))) {
+            if !self.available(Some(&o)) || !view.visible(&notemaker_core::ids::LayerId::from(json::java_string(o.get("layer")))) {
                 continue;
             }
             let id = json::java_string(o.get("object"));
@@ -580,7 +607,7 @@ impl AnimationPlayer {
             }
         }
         if ids.is_empty() {
-            ui::toast(&app.this, "No GIF animations on this page", TOAST_LENGTH_SHORT)?;
+            ui::toast(&app.this, &ui::UiText::from("No GIF animations on this page"), TOAST_LENGTH_SHORT)?;
             return Ok(());
         }
         let selected = self.selected.get();
@@ -607,11 +634,11 @@ impl AnimationPlayer {
         Ok(())
     }
     /// `private void showControls(String id)`.
-    pub fn show_controls(self: &Arc<Self>, id: &str) -> AppResult<()> {
-        self.select(id)?;
+    fn show_controls(self: &Arc<Self>, id: &str) -> AppResult<()> {
+        self.select_clip(id)?;
         let context = self.app().this.clone();
         let boxv = ui::column(&context)?;
-        ui::set_padding(&boxv, 24, 12, 24, 12)?;
+        ui::set_padding(&boxv, ui::PxInsets { left: 24, top: 12, right: 24, bottom: 12 })?;
         let label = ui::text_view(&context)?;
         self.label.set(Some(label.clone()));
         ui::add_view(&boxv, &label)?;
@@ -622,7 +649,7 @@ impl AnimationPlayer {
         let seek_listener = jx::callback(move |method, args| {
             if method == "onProgressChanged(SeekBar,int,boolean)" && jx::unbox_bool(&args[2]) {
                 if let Some(player) = weak.upgrade() {
-                    player.seek(jx::unbox_int(&args[1])).map_err(jx::JavaError::from)?;
+                    player.seek(ClipFrame(jx::unbox_int(&args[1]))).map_err(jx::JavaError::from)?;
                 }
             }
             Ok(Reply::Void)
@@ -631,10 +658,10 @@ impl AnimationPlayer {
         ui::add_view(&boxv, &timeline)?;
         let row = jnew!("android/widget/LinearLayout", "(Landroid/content/Context;)V", &context)?;
         let previous = jnew!("android/widget/Button", "(Landroid/content/Context;)V", &context)?;
-        ui::set_text(&previous, "◀ Frame")?;
+        ui::set_text(&previous, &ui::UiText::from("◀ Frame"))?;
         let weak = Arc::downgrade(self);
         ui::on_click(&previous, move |_| match weak.upgrade() {
-            Some(p) => p.step(-1).map_err(Into::into),
+            Some(p) => p.step(FrameStep(-1)).map_err(Into::into),
             None => Ok(()),
         })?;
         ui::add_view(&row, &previous)?;
@@ -644,17 +671,17 @@ impl AnimationPlayer {
         ui::on_click(&toggle, move |_| match weak.upgrade() {
             Some(p) => (|| -> AppResult<()> {
                 let playing = p.clip(&p.require_selected()?)?.playing.get();
-                p.play(!playing)
+                p.play(if playing { Playback::Paused } else { Playback::Playing })
             })()
             .map_err(Into::into),
             None => Ok(()),
         })?;
         ui::add_view(&row, &toggle)?;
         let next = jnew!("android/widget/Button", "(Landroid/content/Context;)V", &context)?;
-        ui::set_text(&next, "Frame ▶")?;
+        ui::set_text(&next, &ui::UiText::from("Frame ▶"))?;
         let weak = Arc::downgrade(self);
         ui::on_click(&next, move |_| match weak.upgrade() {
-            Some(p) => p.step(1).map_err(Into::into),
+            Some(p) => p.step(FrameStep(1)).map_err(Into::into),
             None => Ok(()),
         })?;
         ui::add_view(&row, &next)?;
@@ -687,12 +714,12 @@ impl AnimationPlayer {
         let (Some(label), Some(selected)) = (self.label.get(), self.selected.get()) else { return Ok(()) };
         let Some(c) = self.clips.with(|c| c.get(&selected).cloned()) else { return Ok(()) };
         let playing = c.playing.get();
-        ui::set_text(&label, &format!("Frame {} / {} · {}", c.frame.get() + 1, c.frames(), if playing { "Playing" } else { "Paused" }))?;
+        ui::set_text(&label, &ui::UiText::from(&format!("Frame {} / {} · {}", c.frame.get() + 1, c.frames(), if playing { "Playing" } else { "Paused" })))?;
         if let Some(timeline) = self.timeline.get() {
             jcall!(timeline, "android/widget/ProgressBar", "setProgress", "(I)V", c.frame.get())?;
         }
         if let Some(toggle) = self.toggle.get() {
-            ui::set_text(&toggle, if playing { "Pause" } else { "Play" })?;
+            ui::set_text(&toggle, &ui::UiText::from(if playing { "Pause" } else { "Play" }))?;
         }
         Ok(())
     }
@@ -727,7 +754,7 @@ mod tests {
 
     #[test]
     fn controls_hit_zones() {
-        let bar = RectF::new(0.0, 0.0, 100.0, BAR_HEIGHT);
+        let bar = RectF { left: 0.0, top: 0.0, right: 100.0, bottom: BAR_HEIGHT };
         assert_eq!(AnimationPlayer::control_at(&bar, 10.0, 10.0).as_deref(), Some("previous"));
         assert_eq!(AnimationPlayer::control_at(&bar, 40.0, 10.0).as_deref(), Some("toggle"));
         assert_eq!(AnimationPlayer::control_at(&bar, 70.0, 10.0).as_deref(), Some("next"));

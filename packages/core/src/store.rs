@@ -5,12 +5,15 @@ use crate::actions::{self, Build};
 use crate::collaboration;
 use crate::endpoint::Endpoint;
 use crate::error::{require, require_with, Error, Result};
-use crate::ids;
-use crate::journal::{self, canonical_path, Edit, EditScope};
+use crate::clock::EpochMillis;
+use crate::ids::{self, ActorId, ConflictChoice, ConflictId, DocumentName, SessionId};
+use crate::java_port::file::canonical_path;
+pub use crate::java_port::url::url_encode;
+use crate::journal::{self, Edit, EditScope};
 use crate::json::{self, jlen, Map, Value};
 use crate::model::Model;
 use crate::object;
-use crate::timing::mark;
+use crate::timing::{mark, TimingPhase};
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -76,6 +79,24 @@ impl DerefMut for State {
         Arc::make_mut(&mut self.map)
     }
 }
+
+/// Which history stack [`Store::history`] takes the last action from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryDirection {
+    Undo,
+    Redo,
+}
+
+/// Whether [`Store::sync`] may upload pending operations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncMode {
+    Upload,
+    DownloadOnly,
+}
+
+/// A position in a replica's committed or provisional operation list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReplicaCursor(pub i32);
 
 /// `Store.model(state)`.
 pub fn model(state: &State) -> Result<Model> {
@@ -174,7 +195,7 @@ pub type UploadGate<'a> = dyn FnMut() -> Result<()> + 'a;
 /// `Store`.
 pub struct Store {
     pub file: PathBuf,
-    pub document: String,
+    pub document: DocumentName,
     writable: bool,
     coordination: Arc<Coordination>,
 }
@@ -185,13 +206,13 @@ fn bytes_len(value: &Value) -> usize {
 
 impl Store {
     /// `new Store(directory, document)`: read-only access.
-    pub fn new(directory: &Path, document: &str) -> Result<Store> {
-        Store::open(directory, document, false)
+    pub fn new(directory: &Path, document: &DocumentName) -> Result<Store> {
+        Store::open(directory, document.as_ref(), false)
     }
 
     /// `Store.writer(directory, document)`: the selected proxy's writable store.
-    pub fn writer(directory: &Path, document: &str) -> Result<Store> {
-        Store::open(directory, document, true)
+    pub fn writer(directory: &Path, document: &DocumentName) -> Result<Store> {
+        Store::open(directory, document.as_ref(), true)
     }
 
     fn open(directory: &Path, document: &str, writable: bool) -> Result<Store> {
@@ -199,15 +220,19 @@ impl Store {
         if writable {
             std::fs::create_dir_all(directory).map_err(|e| Error::io(format!("{} ({})", directory.display(), crate::error::io_message(&e))))?;
         }
-        let file = directory.join(format!("document-{}.json", ids::name_uuid_from_bytes(document.as_bytes())));
+        let file = directory.join(format!("document-{}.json", String::from(ids::Uuid::from_name(document))));
         let key = canonical_path(&file);
         let coordination = coordinations().lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_default().clone();
-        Ok(Store { file, document: document.to_string(), writable, coordination })
+        Ok(Store { file, document: DocumentName::from(document), writable, coordination })
+    }
+
+    fn journal_mode(&self) -> journal::JournalMode {
+        if self.writable { journal::JournalMode::Writable } else { journal::JournalMode::ReadOnly }
     }
 
     fn locked(&self, edit: Option<&mut Edit<'_>>) -> Result<State> {
         require(edit.is_none() || self.writable, "Writes require the selected proxy")?;
-        journal::access(&self.file, &self.document, edit, EditScope::Full, self.writable, None)
+        journal::access(&self.file, &self.document, edit, EditScope::Full, self.journal_mode(), None)
     }
 
     /// `model()`: the effective model of the current state.
@@ -228,7 +253,7 @@ impl Store {
     /// state in place (see `journal::access`), so this shares that map.
     fn locked_overlaid(&self, edit: Option<&mut Edit<'_>>, scope: EditScope, values: &journal::Overlay<'_>) -> Result<State> {
         require(edit.is_none() || self.writable, "Writes require the selected proxy")?;
-        journal::access(&self.file, &self.document, edit, scope, self.writable, Some(values))
+        journal::access(&self.file, &self.document, edit, scope, self.journal_mode(), Some(values))
     }
 
     /// `read()`.
@@ -298,7 +323,7 @@ impl Store {
     }
 
     /// `append(operation, actor)`.
-    pub fn append(&self, operation: &Map, actor: &str) -> Result<State> {
+    pub fn append(&self, operation: &Map, actor: &ActorId) -> Result<State> {
         self.append_with_settings(operation, actor, None)
     }
 
@@ -331,7 +356,8 @@ impl Store {
     }
 
     /// `appendWithSettings(operation, actor, preferences)`.
-    pub fn append_with_settings(&self, operation: &Map, actor: &str, preferences: Option<&Map>) -> Result<State> {
+    pub fn append_with_settings(&self, operation: &Map, actor: &ActorId, preferences: Option<&Map>) -> Result<State> {
+        let actor: &str = actor;
         require(!actor.is_empty() && jlen(actor) <= 200, "Invalid actor")?;
         Model::validate(operation)?;
         if let Some(p) = preferences {
@@ -342,9 +368,9 @@ impl Store {
             // Lease checks leave the document model unchanged; reuse this snapshot for version bases.
             let current = model(state)?;
             require(!current.deleted, "Document is deleted")?;
-            collaboration::require_unlocked(state, actor, &[Value::Object(operation.clone())], collaboration::now_millis())?;
+            collaboration::require_unlocked(state, &ActorId::from(actor), &[Value::Object(operation.clone())], EpochMillis::now())?;
             let mut op = operation.clone();
-            op.insert("id".into(), Value::String(ids::random_uuid()));
+            op.insert("id".into(), Value::String(String::from(ids::Uuid::random())));
             op.insert("actor".into(), Value::String(actor.to_string()));
             Model::with_bases(&mut op, &current)?;
             let session = active_session(state, actor)?;
@@ -362,14 +388,15 @@ impl Store {
     }
 
     /// `deleteDocument(actor)`: permanent, idempotent lifecycle action.
-    pub fn delete_document(&self, actor: &str) -> Result<Map> {
+    pub fn delete_document(&self, actor: &ActorId) -> Result<Map> {
+        let actor: &str = actor;
         require(!actor.is_empty() && jlen(actor) <= 200, "Invalid actor")?;
         let mut result = object! {"document" => self.document.clone(), "deleted" => true};
         self.edit_appending(&mut |state: &mut State| {
             if model(state)?.deleted {
                 return Ok(());
             }
-            let id = actions::id();
+            let id = String::from(ids::Uuid::random());
             json::list_at_mut(state, "pending")?.push(Value::Object(object! {"kind" => "document-delete", "id" => id.clone(), "actor" => actor}));
             state.insert("leases".into(), Value::Object(Map::new()));
             state.insert("activeSessions".into(), Value::Object(Map::new()));
@@ -380,24 +407,24 @@ impl Store {
     }
 
     /// `commit(actor, build)`.
-    pub fn commit(&self, actor: &str, build: &mut Build<'_>) -> Result<Map> {
-        self.commit_full(actor, build, &[], None, &[]).map(|(r, _)| r)
+    pub fn commit(&self, actor: &ActorId, build: &mut Build<'_>) -> Result<Map> {
+        self.commit_full(actor.as_ref(), build, &[], None, &[]).map(|(r, _)| r)
     }
 
     /// `commitWithState(actor, build)`: the result plus the durable post-edit
     /// state (Java put it under `result["state"]`).
-    pub fn commit_with_state(&self, actor: &str, build: &mut Build<'_>) -> Result<(Map, State)> {
-        self.commit_full(actor, build, &[], None, &[])
+    pub fn commit_with_state(&self, actor: &ActorId, build: &mut Build<'_>) -> Result<(Map, State)> {
+        self.commit_full(actor.as_ref(), build, &[], None, &[])
     }
 
     /// `commit(actor, build, dependencies)`.
-    pub fn commit_with_dependencies(&self, actor: &str, build: &mut Build<'_>, dependencies: &[Value]) -> Result<Map> {
-        self.commit_full(actor, build, dependencies, None, &[]).map(|(r, _)| r)
+    pub fn commit_with_dependencies(&self, actor: &ActorId, build: &mut Build<'_>, dependencies: &[Value]) -> Result<Map> {
+        self.commit_full(actor.as_ref(), build, dependencies, None, &[]).map(|(r, _)| r)
     }
 
     /// `commitSelected(actor, session, entities, build, dependencies)`.
-    pub fn commit_selected(&self, actor: &str, session: &str, entities: &[Value], build: &mut Build<'_>, dependencies: &[Value]) -> Result<Map> {
-        self.commit_full(actor, build, dependencies, Some(session), entities).map(|(r, _)| r)
+    pub fn commit_selected(&self, actor: &ActorId, session: &SessionId, entities: &[Value], build: &mut Build<'_>, dependencies: &[Value]) -> Result<Map> {
+        self.commit_full(actor.as_ref(), build, dependencies, Some(session.as_ref()), entities).map(|(r, _)| r)
     }
 
     fn commit_full(&self, actor: &str, build: &mut Build<'_>, dependencies: &[Value], required_session: Option<&str>, selected: &[Value]) -> Result<(Map, State)> {
@@ -407,13 +434,13 @@ impl Store {
             let mut model = model(state)?;
             require(!model.deleted, "Document is deleted")?;
             if let Some(session) = required_session {
-                collaboration::require_selection(state, &model, actor, session, selected)?;
+                collaboration::require_selection(state, &model, &ActorId::from(actor), &SessionId::from(session), selected)?;
             }
             let baseline = model.clone();
-            mark("geometry_begin");
+            mark(TimingPhase("geometry_begin"));
             let requested = build(&mut model)?;
             let mut ops: Vec<Value> = Vec::new();
-            mark("geometry_done");
+            mark(TimingPhase("geometry_done"));
             for value in requested {
                 let op = json::map(&value)?;
                 let kind = json::string(op, "kind")?;
@@ -454,19 +481,19 @@ impl Store {
                 inverse.insert(0, actions::inverse(&model, op)?);
                 model.apply(op)?;
             }
-            mark("inverse_done");
-            collaboration::require_unlocked(state, actor, &ops, collaboration::now_millis())?;
-            collaboration::require_unlocked(state, actor, dependencies, collaboration::now_millis())?;
+            mark(TimingPhase("inverse_done"));
+            collaboration::require_unlocked(state, &ActorId::from(actor), &ops, EpochMillis::now())?;
+            collaboration::require_unlocked(state, &ActorId::from(actor), dependencies, EpochMillis::now())?;
             actions::validate_references(&model, &ops)?;
-            mark("locks_done");
-            let mut batch = object! {"kind" => "batch", "id" => ids::random_uuid(), "actor" => actor, "actions" => Value::Array(ops.clone())};
+            mark(TimingPhase("locks_done"));
+            let mut batch = object! {"kind" => "batch", "id" => String::from(ids::Uuid::random()), "actor" => actor, "actions" => Value::Array(ops.clone())};
             Model::with_bases(&mut batch, &baseline)?;
             if let Some(session) = active_session(state, actor)? {
                 batch.insert("session".into(), session);
             }
             require(json::write_map(&batch).len() <= 3000000, "Action exceeds 3 MB")?;
             require(json::write_list(&inverse).len() <= 3000000, "Undo snapshot exceeds 3 MB; split this action")?;
-            mark("limits_done");
+            mark(TimingPhase("limits_done"));
             let batch_id = batch.get("id").cloned().unwrap_or(Value::Null);
             json::list_at_mut(state, "pending")?.push(Value::Object(batch));
             let history = history_of(state, actor)?;
@@ -480,12 +507,13 @@ impl Store {
     }
 
     /// `history(actor, redo)`: undo or redo the actor's last action.
-    pub fn history(&self, actor: &str, redo: bool) -> Result<Map> {
-        self.history_with_state(actor, redo).map(|(r, _)| r)
+    pub fn history(&self, actor: &ActorId, direction: HistoryDirection) -> Result<Map> {
+        self.history_with_state(actor, direction).map(|(r, _)| r)
     }
 
     /// `history(actor, redo, true)`: the result plus the post-edit state.
-    pub fn history_with_state(&self, actor: &str, redo: bool) -> Result<(Map, State)> {
+    pub fn history_with_state(&self, actor: &ActorId, direction: HistoryDirection) -> Result<(Map, State)> {
+        let (actor, redo) = (actor.as_ref(), direction == HistoryDirection::Redo);
         let mut result = Map::new();
         let (from_key, to_key, part) = if redo { ("redo", "undo", "forward") } else { ("undo", "redo", "inverse") };
         let after = self.edit_appending(&mut |state: &mut State| {
@@ -500,13 +528,13 @@ impl Store {
             };
             let entry_map = json::map(&entry)?;
             let actions = json::list(entry_map.get(part).unwrap_or(&Value::Null))?.clone();
-            collaboration::require_unlocked(state, actor, &actions, collaboration::now_millis())?;
+            collaboration::require_unlocked(state, &ActorId::from(actor), &actions, EpochMillis::now())?;
             {
                 let h = history_of(state, actor)?;
                 json::list_at_mut(h, from_key)?.pop();
                 json::list_at_mut(h, to_key)?.push(entry.clone());
             }
-            let id = ids::random_uuid();
+            let id = String::from(ids::Uuid::random());
             let mut batch = object! {"kind" => "batch", "id" => id.clone(), "actor" => actor, "actions" => entry_map.get(part).cloned().unwrap_or(Value::Null)};
             Model::with_bases(&mut batch, &current)?;
             if let Some(session) = active_session(state, actor)? {
@@ -550,7 +578,7 @@ impl Store {
                     "Server database differs from this replica",
                 )?;
                 for op in &fresh {
-                    collaboration::require_incoming_unlocked(state, json::map(op)?, collaboration::now_millis())?;
+                    collaboration::require_incoming_unlocked(state, json::map(op)?, EpochMillis::now())?;
                 }
                 if let Some(root) = root {
                     state.insert("serverId".into(), root.clone());
@@ -573,7 +601,8 @@ impl Store {
     }
 
     /// `Store.page(values, start)`: at most 100 values / ~3 MB.
-    pub fn page(values: &[Value], start: i32) -> Result<Vec<Value>> {
+    pub fn page(values: &[Value], start: ReplicaCursor) -> Result<Vec<Value>> {
+        let start = start.0;
         require(start >= 0 && start as usize <= values.len(), "Invalid replica cursor")?;
         let mut out = Vec::new();
         let mut bytes: i32 = 0;
@@ -592,13 +621,14 @@ impl Store {
     }
 
     /// `replica(after, pendingAfter)`: committed and provisional pages.
-    pub fn replica(&self, after: i32, pending_after: i32) -> Result<Map> {
+    pub fn replica(&self, after: ReplicaCursor, pending_after: ReplicaCursor) -> Result<Map> {
+        let (after, pending_after) = (after.0, pending_after.0);
         let state = self.read()?;
         let events = json::list_at(&state, "events")?;
         let empty = Value::Array(Vec::new());
         let ingress = json::list(json::get_or_default(&state, "relay", &empty))?;
-        let committed = Store::page(events, after)?;
-        let provisional = Store::page(ingress, pending_after)?;
+        let committed = Store::page(events, ReplicaCursor(after))?;
+        let provisional = Store::page(ingress, ReplicaCursor(pending_after))?;
         let after_next = after + committed.len() as i32;
         let pending_next = pending_after + provisional.len() as i32;
         Ok(object! {
@@ -630,7 +660,8 @@ impl Store {
     }
 
     /// `sync(upstream, info, upload, gate)`: called only by the proxy's single sync worker.
-    pub fn sync(&self, upstream: &Endpoint, info: &Map, upload: bool, gate: &mut UploadGate<'_>) -> Result<Map> {
+    pub fn sync(&self, upstream: &Endpoint, info: &Map, mode: SyncMode, gate: &mut UploadGate<'_>) -> Result<Map> {
+        let upload = mode == SyncMode::Upload;
         let peer = json::string(info, "id")?.to_string();
         let root = info.get("rootId").filter(|r| !r.is_null()).cloned();
         let initial = self.read()?;
@@ -772,7 +803,7 @@ impl Store {
         if locks.contains_key("leases") {
             let leases = json::map(&locks["leases"])?.clone();
             self.edit_transient(&mut |state: &mut State| {
-                collaboration::expire(state, collaboration::now_millis())?;
+                collaboration::expire(state, EpochMillis::now())?;
                 state.insert("leases".into(), Value::Object(leases.clone()));
                 Ok(())
             })?;
@@ -794,13 +825,15 @@ impl Store {
     }
 
     /// `conflict(id, choice, actor)`: resolve with `local`, `remote` or `both`.
-    pub fn conflict(&self, id: &str, choice: &str, actor: &str) -> Result<Map> {
-        require(matches!(choice, "local" | "remote" | "both"), "Conflict choice must be local, remote, or both")?;
+    /// Parse the choice with [`ConflictChoice::parse`] first, as Java
+    /// validated it before anything else.
+    pub fn conflict(&self, id: &ConflictId, choice: ConflictChoice, actor: &ActorId) -> Result<Map> {
+        let id: &str = id;
         self.commit(actor, &mut |m: &mut Model| {
             let c = m.conflicts.get(id);
             require(c.is_some() && m.conflict_active.get(id) != Some(&false), "Unknown active conflict")?;
             let c = c.unwrap();
-            let side = if choice == "remote" { "remote" } else { "local" };
+            let side = if choice == ConflictChoice::Remote { "remote" } else { "local" };
             let chosen = json::map(c.get(side).unwrap_or(&Value::Null))?.clone();
             let kind = json::string(&chosen, "kind")?.to_string();
             let active_kind = if kind == "stroke" { "active" } else { "object-active" };
@@ -808,9 +841,9 @@ impl Store {
                 Value::Object(chosen.clone()),
                 Value::Object(object! {"kind" => active_kind, kind.as_str() => chosen.get(&kind).cloned().unwrap_or(Value::Null), "active" => c.get(&format!("{}Active", side)).cloned().unwrap_or(Value::Null)}),
             ];
-            if choice == "both" {
+            if choice == ConflictChoice::Both {
                 let mut duplicate = json::map(c.get("remote").unwrap_or(&Value::Null))?.clone();
-                duplicate.insert(kind.clone(), Value::String(actions::id()));
+                duplicate.insert(kind.clone(), Value::String(String::from(ids::Uuid::random())));
                 if kind == "object" {
                     let x = json::number(&duplicate, "x")? + 24.0;
                     let y = json::number(&duplicate, "y")? + 24.0;
@@ -861,17 +894,4 @@ fn index(state: &Map) -> Result<HashMap<String, Value>> {
         }
     }
     Ok(out)
-}
-
-/// `URLEncoder.encode(s, "UTF-8")`.
-pub fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*' | b'_' => out.push(b as char),
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
 }

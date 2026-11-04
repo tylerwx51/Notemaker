@@ -44,13 +44,13 @@ impl ExecutorService {
         let (lock, cv) = &*self.state;
         let mut q = lock.lock().unwrap();
         if q.shutdown {
-            crate::jx::log::w("NoteMaker", &format!("Task rejected by shut down executor {}", self.name));
+            crate::jx::log::w(crate::jx::log::NOTEMAKER, &format!("Task rejected by shut down executor {}", self.name));
             return;
         }
         q.tasks.push_back(Box::new(task));
         if q.worker.is_none() {
             let state = self.state.clone();
-            q.worker = Some(JThread::spawn(&self.name, move || worker(state)));
+            q.worker = Some(JThread::spawn(&crate::jx::ThreadName::from(&self.name), move || worker(state)));
         }
         cv.notify_all();
     }
@@ -104,7 +104,7 @@ fn worker(state: Arc<(Mutex<Queue>, Condvar)>) {
         // only worker, so it is logged and the loop continues.
         if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::jx::frame(task))) {
             let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
-            crate::jx::log::e("NoteMaker", &format!("Uncaught failure in executor task: {msg}"));
+            crate::jx::log::e(crate::jx::log::NOTEMAKER, &format!("Uncaught failure in executor task: {msg}"));
         }
     }
 }

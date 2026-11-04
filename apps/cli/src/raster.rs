@@ -1,10 +1,21 @@
 //! tiny-skia [`Canvas`] backend: the CLI's replacement for the JVM
 //! `BufferedImage`/`Graphics2D` pair and the Android CLI's `Bitmap`/`Canvas`.
 
-use crate::canvas::{Canvas, Cap, Join, Paint, Path, RectF, Style};
+use crate::canvas::{
+    Bitmap, Canvas, CanvasMatrix, CanvasSegment, CanvasSize, Cap, Join, Paint, Path,
+    RectF, Rotation, SaveCount, ScaleFactors, SkiaPath, Style, SvgTree, Translation,
+};
+use notemaker_core::style::{ArgbColor, ArgbPixels};
 use notemaker_core::{Error, Result};
-use resvg::{tiny_skia, usvg};
+use resvg::tiny_skia;
 use std::sync::Arc;
+
+/// A raster's width and height in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixelSize {
+    pub width: u32,
+    pub height: u32,
+}
 
 /// An ARGB raster with an Android-style save stack (matrix + clip mask).
 pub struct RasterCanvas {
@@ -14,8 +25,8 @@ pub struct RasterCanvas {
     saved: Vec<(tiny_skia::Transform, Option<Arc<tiny_skia::Mask>>)>,
 }
 
-fn color_of(argb: i32) -> tiny_skia::Color {
-    let c = argb as u32;
+fn color_of(argb: ArgbColor) -> tiny_skia::Color {
+    let c = argb.0 as u32;
     tiny_skia::Color::from_rgba8((c >> 16) as u8, (c >> 8) as u8, c as u8, (c >> 24) as u8)
 }
 
@@ -46,8 +57,8 @@ fn skia_stroke(paint: &Paint) -> tiny_skia::Stroke {
 
 impl RasterCanvas {
     /// `Bitmap.createBitmap(w, h, ARGB_8888)`: transparent pixels.
-    pub fn new(width: u32, height: u32) -> Result<RasterCanvas> {
-        let pixmap = tiny_skia::Pixmap::new(width, height)
+    pub fn new(size: PixelSize) -> Result<RasterCanvas> {
+        let pixmap = tiny_skia::Pixmap::new(size.width, size.height)
             .ok_or_else(|| Error::illegal_argument("width and height must be > 0"))?;
         Ok(RasterCanvas {
             pixmap,
@@ -56,21 +67,9 @@ impl RasterCanvas {
             saved: Vec::new(),
         })
     }
-    pub fn width(&self) -> u32 {
-        self.pixmap.width()
-    }
-    pub fn height(&self) -> u32 {
-        self.pixmap.height()
-    }
-    pub fn pixmap(&self) -> &tiny_skia::Pixmap {
-        &self.pixmap
-    }
-    pub fn into_pixmap(self) -> tiny_skia::Pixmap {
-        self.pixmap
-    }
     /// `getRGB`/`getPixels`: unpremultiplied ARGB ints, row-major.
-    pub fn argb_pixels(&self) -> Vec<i32> {
-        self.pixmap
+    pub fn argb_pixels(&self) -> ArgbPixels {
+        ArgbPixels(self.pixmap
             .pixels()
             .iter()
             .map(|p| {
@@ -80,7 +79,7 @@ impl RasterCanvas {
                     | ((c.green() as u32) << 8)
                     | c.blue() as u32) as i32
             })
-            .collect()
+            .collect())
     }
     /// PNG bytes (RGBA, unpremultiplied), as `ImageIO.write(image, "png", …)`.
     pub fn encode_png(&self) -> Result<Vec<u8>> {
@@ -101,7 +100,7 @@ impl RasterCanvas {
     }
 
     fn fill(&mut self, path: &Path, paint: &Paint) {
-        if let Some((p, rule)) = path.to_skia() {
+        if let Some(SkiaPath { path: p, rule }) = path.to_skia() {
             let sp = skia_paint(paint);
             let clip = self.clip.clone();
             self.pixmap
@@ -110,7 +109,7 @@ impl RasterCanvas {
     }
 
     fn stroke(&mut self, path: &Path, paint: &Paint) {
-        if let Some((p, _)) = path.to_skia() {
+        if let Some(SkiaPath { path: p, .. }) = path.to_skia() {
             let sp = skia_paint(paint);
             let clip = self.clip.clone();
             self.pixmap
@@ -127,10 +126,10 @@ impl RasterCanvas {
 }
 
 impl Canvas for RasterCanvas {
-    fn save(&mut self) -> i32 {
+    fn save(&mut self) -> SaveCount {
         let count = self.saved.len() as i32 + 1;
         self.saved.push((self.matrix, self.clip.clone()));
-        count
+        SaveCount(count)
     }
     fn restore(&mut self) {
         if let Some((m, c)) = self.saved.pop() {
@@ -138,40 +137,41 @@ impl Canvas for RasterCanvas {
             self.clip = c;
         }
     }
-    fn restore_to_count(&mut self, count: i32) {
+    fn restore_to_count(&mut self, count: SaveCount) {
+        let count = count.0;
         while self.saved.len() as i32 + 1 > count.max(1) {
             self.restore();
         }
     }
-    fn translate(&mut self, dx: f32, dy: f32) {
-        self.matrix = self.matrix.pre_translate(dx, dy);
+    fn translate(&mut self, offset: Translation) {
+        self.matrix = self.matrix.pre_translate(offset.dx, offset.dy);
     }
-    fn rotate(&mut self, degrees: f32) {
+    fn rotate(&mut self, degrees: Rotation) {
         self.matrix = self
             .matrix
-            .pre_concat(tiny_skia::Transform::from_rotate(degrees));
+            .pre_concat(tiny_skia::Transform::from_rotate(degrees.0));
     }
-    fn scale(&mut self, sx: f32, sy: f32) {
-        self.matrix = self.matrix.pre_scale(sx, sy);
+    fn scale(&mut self, factors: ScaleFactors) {
+        self.matrix = self.matrix.pre_scale(factors.sx, factors.sy);
     }
-    fn matrix(&self) -> tiny_skia::Transform {
-        self.matrix
+    fn matrix(&self) -> CanvasMatrix {
+        CanvasMatrix(self.matrix)
     }
-    fn clip_rect(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
+    fn clip_rect(&mut self, rect: RectF) {
         let mut path = Path::new();
-        path.add_rect(RectF::new(left, top, right, bottom));
+        path.add_rect(rect);
         let mut mask = match self.clip.take() {
             Some(m) => Arc::try_unwrap(m).unwrap_or_else(|m| (*m).clone()),
             None => self.full_mask(),
         };
         match path.to_skia() {
-            Some((p, rule)) => mask.intersect_path(&p, rule, true, self.matrix),
+            Some(SkiaPath { path: p, rule }) => mask.intersect_path(&p, rule, true, self.matrix),
             None => mask.clear(),
         }
         self.clip = Some(Arc::new(mask));
     }
     fn clip_out_path(&mut self, path: &Path) {
-        let Some((p, rule)) = path.to_skia() else {
+        let Some(SkiaPath { path: p, rule }) = path.to_skia() else {
             return;
         };
         let mut out = tiny_skia::Mask::new(self.pixmap.width(), self.pixmap.height())
@@ -190,7 +190,7 @@ impl Canvas for RasterCanvas {
         };
         self.clip = Some(Arc::new(mask));
     }
-    fn draw_color(&mut self, color: i32) {
+    fn draw_color(&mut self, color: ArgbColor) {
         let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
         let mut sp = tiny_skia::Paint::default();
         sp.set_color(color_of(color));
@@ -204,10 +204,10 @@ impl Canvas for RasterCanvas {
     fn draw_path(&mut self, path: &Path, paint: &Paint) {
         self.paint_path(path, paint);
     }
-    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, paint: &Paint) {
+    fn draw_line(&mut self, line: CanvasSegment, paint: &Paint) {
         let mut path = Path::new();
-        path.move_to(x0, y0);
-        path.line_to(x1, y1);
+        path.move_to(line.start);
+        path.line_to(line.end);
         // A line is always stroked (Canvas.drawLine ignores FILL style).
         self.stroke(&path, paint);
     }
@@ -221,7 +221,8 @@ impl Canvas for RasterCanvas {
         path.add_oval(rect);
         self.paint_path(&path, paint);
     }
-    fn draw_bitmap(&mut self, bitmap: &tiny_skia::Pixmap, dst: RectF, paint: &Paint) {
+    fn draw_bitmap(&mut self, bitmap: &Bitmap, dst: RectF, paint: &Paint) {
+        let bitmap = &bitmap.0;
         let Some(rect) = tiny_skia::Rect::from_ltrb(dst.left, dst.top, dst.right, dst.bottom)
         else {
             return;
@@ -241,7 +242,8 @@ impl Canvas for RasterCanvas {
         self.pixmap
             .fill_rect(rect, &sp, self.matrix, clip.as_deref());
     }
-    fn draw_svg(&mut self, tree: &usvg::Tree, w: f32, h: f32) {
+    fn draw_svg(&mut self, tree: &SvgTree, size: CanvasSize) {
+        let (tree, w, h) = (&tree.0, size.width, size.height);
         let size = tree.size();
         let transform = self.matrix.pre_scale(w / size.width(), h / size.height());
         match self.mask() {

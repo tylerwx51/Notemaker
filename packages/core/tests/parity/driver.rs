@@ -3,17 +3,21 @@
 //! example (used by `parity.sh`) and the `parity_snapshot` integration test.
 #![allow(dead_code)]
 
-use notemaker_core::collaboration;
-use notemaker_core::coverage::{Coverage, CoverageFactory, Painter, Tiles};
+use notemaker_core::clock::EpochMillis;
+use notemaker_core::collaboration::{self, SelectionTransform};
+use notemaker_core::coverage::{Coverage, CoverageFactory, CoverageTile, Painter, Tiles};
 use notemaker_core::draw_item::DrawItem;
 use notemaker_core::error::{Error, ErrorKind, Result};
-use notemaker_core::geometry::{self, Polygon};
-use notemaker_core::ink_geometry::InkGeometry;
+use notemaker_core::geometry::{Bounds, DocPoint, DocRect, Polygon, Radius, Segment, Size};
+use notemaker_core::gif_asset::FrameIndex;
+use notemaker_core::ids::{ActorId, ConflictChoice, ConflictChoiceName, ConflictId, DocumentName, EntityId, EntityKind, LayerId, LayerPosition, PageNumber, SessionId, ShapeId};
+use notemaker_core::ink_geometry::{AreaOverlap, InkGeometry, InkPart};
 use notemaker_core::json::{self, Map, Value};
-use notemaker_core::layer_editor::LayerEditor;
+use notemaker_core::layer_editor::{HitMode, ItemFilter, LayerEditor};
 use notemaker_core::model::{Entity, Model};
-use notemaker_core::render::{self, Svg};
-use notemaker_core::store::{State, Store};
+use notemaker_core::render::{self, HiddenLayers, Svg};
+use notemaker_core::store::{HistoryDirection, ReplicaCursor, State, Store};
+use notemaker_core::style::{ArgbPixels, RectShape, StrokeWidth};
 use notemaker_core::{actions, drawing_actions, gif_asset, image_asset, jfmt, object, shape_catalog, svg_asset};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -42,6 +46,36 @@ fn arr(v: &[f64]) -> String {
 fn arr2(v: &[[f64; 2]]) -> String {
     let parts: Vec<String> = v.iter().map(|p| arr(p)).collect();
     format!("[{}]", parts.join(", "))
+}
+
+/// `double[4]` form of bounds: `{left, top, right, bottom}`.
+fn bounds4(b: Bounds) -> [f64; 4] {
+    [b.left, b.top, b.right, b.bottom]
+}
+
+/// `double[][]` form of a polygon.
+fn points(p: &Polygon) -> Vec<[f64; 2]> {
+    p.iter().map(|q| [q.x, q.y]).collect()
+}
+
+fn poly(p: &Polygon) -> String {
+    arr2(&points(p))
+}
+
+fn pt(x: f64, y: f64) -> DocPoint {
+    DocPoint { x, y }
+}
+
+fn rect(x: f64, y: f64, width: f64, height: f64) -> Polygon {
+    DocRect { x, y, width, height }.polygon()
+}
+
+fn bounds(b: [f64; 4]) -> Bounds {
+    Bounds { left: b[0], top: b[1], right: b[2], bottom: b[3] }
+}
+
+fn actor(s: &str) -> ActorId {
+    ActorId::from(s)
 }
 
 fn err(e: &Error) -> String {
@@ -175,7 +209,22 @@ impl From<[f64; 4]> for Shown {
 }
 impl From<Polygon> for Shown {
     fn from(v: Polygon) -> Shown {
-        Shown::Str(arr2(&v))
+        Shown::Str(poly(&v))
+    }
+}
+impl From<Bounds> for Shown {
+    fn from(v: Bounds) -> Shown {
+        Shown::Str(arr(&bounds4(v)))
+    }
+}
+impl From<Size> for Shown {
+    fn from(v: Size) -> Shown {
+        Shown::Str(arr(&[v.width, v.height]))
+    }
+}
+impl From<Segment> for Shown {
+    fn from(v: Segment) -> Shown {
+        Shown::Str(arr(&[v.start.x, v.start.y, v.end.x, v.end.y]))
     }
 }
 impl From<State> for Shown {
@@ -199,8 +248,8 @@ pub struct TestFactory;
 
 struct FnPainter<F: Fn(i32, i32, i32) -> Vec<i32> + Send + Sync>(F);
 impl<F: Fn(i32, i32, i32) -> Vec<i32> + Send + Sync> Painter for FnPainter<F> {
-    fn paint(&self, x: i32, y: i32, size: i32) -> notemaker_core::Result<Vec<i32>> {
-        Ok((self.0)(x, y, size))
+    fn paint(&self, tile: CoverageTile) -> notemaker_core::Result<ArgbPixels> {
+        Ok(ArgbPixels((self.0)(tile.x, tile.y, tile.size)))
     }
 }
 
@@ -226,7 +275,7 @@ impl CoverageFactory for TestFactory {
             b[3] += width;
             let rr = width / 2.0 + 0.5;
             return Ok(Box::new(Tiles::new(
-                b,
+                bounds(b),
                 Box::new(FnPainter(move |x, y, size| {
                     let mut px = vec![0i32; (size * size) as usize];
                     for j in 0..size {
@@ -258,7 +307,7 @@ impl CoverageFactory for TestFactory {
         let h = json::number(local, "h")?;
         let b = [wd.min(0.0) - width, h.min(0.0) - width, wd.max(0.0) + width, h.max(0.0) + width];
         Ok(Box::new(Tiles::new(
-            b,
+            bounds(b),
             Box::new(FnPainter(move |x, y, size| {
                 let mut px = vec![0i32; (size * size) as usize];
                 for j in 0..size {
@@ -286,7 +335,7 @@ fn gif_info(info: &gif_asset::Info) -> String {
         ints(&info.delays),
         ints(&info.offsets),
         info.duration,
-        if info.offsets.len() > 1 { info.time_for_frame(1) } else { -1 }
+        if info.offsets.len() > 1 { info.time_for_frame(FrameIndex(1)).0 } else { -1 }
     )
 }
 
@@ -479,12 +528,12 @@ impl Driver {
         for p in sorted_files(&self.fixtures.join("svg")) {
             let source = read_text(&p);
             self.begin(&format!("svg/{}", file_name(&p)));
-            self.attempt("size", |_| svg_asset::validate(&source).map(|s| arr(&s)));
+            self.attempt("size", |_| svg_asset::validate(&source));
             self.attempt("viewport", |_| svg_asset::viewport(&source));
             self.attempt("dots", |_| {
                 Ok(match svg_asset::dot_grid(&source)? {
                     None => "none".to_string(),
-                    Some(g) => format!("{} {} {} {} {} {}", d(g.width), d(g.height), d(g.stroke_width), d(g.stroke_opacity), g.color, arr(&g.circles())),
+                    Some(g) => format!("{} {} {} {} {} {}", d(g.width), d(g.height), d(g.stroke_width), d(g.stroke_opacity), g.color, arr(&g.circles().flat_map(|c| [c.center.x, c.center.y, c.radius.0]).collect::<Vec<f64>>())),
                 })
             });
         }
@@ -495,9 +544,9 @@ impl Driver {
         self.begin("geometry/capsule");
         for radius in [0.05, 0.5, 1.0, 3.3, 12.0, 100.0, 10000.0] {
             for i in 0..4 {
-                let a = [self.coord(), self.coord()];
-                let b = if i == 0 { a } else { [self.coord(), self.coord()] };
-                let text = format!("{} {}", d(radius), arr2(&geometry::capsule(a, b, radius)));
+                let a = pt(self.coord(), self.coord());
+                let b = if i == 0 { a } else { pt(self.coord(), self.coord()) };
+                let text = format!("{} {}", d(radius), poly(&Polygon::capsule(Segment { start: a, end: b }, Radius(radius))));
                 self.line(&text);
             }
         }
@@ -507,14 +556,14 @@ impl Driver {
             let m = 3 + (((self.next() as u64) >> 1) % 5) as usize;
             let ox = self.coord();
             let oy = self.coord();
-            let mut a: Polygon = Vec::new();
+            let mut a = Polygon::default();
             for _ in 0..n {
-                let p = [ox + self.coord() / 50.0, oy + self.coord() / 50.0];
+                let p = pt(ox + self.coord() / 50.0, oy + self.coord() / 50.0);
                 a.push(p);
             }
-            let mut b: Polygon = Vec::new();
+            let mut b = Polygon::default();
             for _ in 0..m {
-                let p = [ox + self.coord() / 50.0, oy + self.coord() / 50.0];
+                let p = pt(ox + self.coord() / 50.0, oy + self.coord() / 50.0);
                 b.push(p);
             }
             let px = ox + self.coord() / 40.0;
@@ -522,49 +571,55 @@ impl Driver {
             let text = format!(
                 "{} {} {} {} {}",
                 i,
-                geometry::intersects(&a, &b),
-                geometry::contains(&a, px, py),
-                arr(&geometry::bounds(&a)),
-                arr2(&geometry::rect(px, py, ox, oy))
+                a.intersects(&b),
+                a.contains(pt(px, py)),
+                arr(&bounds4(a.bounds())),
+                poly(&rect(px, py, ox, oy))
             );
             self.line(&text);
         }
         self.begin("geometry/polygon");
         for raw in ["[[0,0],[1,0],[0,1]]", "[[0,0],[1,0]]", "[[0,0],[1,0],[0,\"1\"]]", "[[0,0],[1,0],[0,1,2]]", "[[0,0],[1,0],[0,1e10]]", "{}", "[[0.5,1.25],[2,3],[4,5],[6,7]]"] {
-            self.attempt(raw, |_| Ok(geometry::json(&geometry::polygon(&json::parse(raw)?)?)));
+            self.attempt(raw, |_| Ok(Polygon::from_json(&json::parse(raw)?)?.to_json()));
         }
         self.begin("shapes");
         self.line(&w(&shape_catalog::json()));
         for id in shape_catalog::ids() {
-            self.attempt(&format!("{} polygon={}", id, shape_catalog::polygon(id)), |_| shape_catalog::vertices(id));
-            self.attempt(&format!("{} svg", id), |_| shape_catalog::drawing_svg(id).map(str::to_string));
+            self.attempt(&format!("{} polygon={}", id, shape_catalog::polygon(&id)), |_| shape_catalog::vertices(&id));
+            self.attempt(&format!("{} svg", id), |_| shape_catalog::drawing_svg(&id).map(str::to_string));
         }
-        self.attempt("name nope", |_| shape_catalog::name("nope").map(str::to_string));
-        self.attempt("known svg", |_| Ok(shape_catalog::known("svg")));
-        self.attempt("known template", |_| Ok(shape_catalog::known("template")));
+        self.attempt("name nope", |_| shape_catalog::name(&ShapeId::from("nope")).map(|n| n.to_string()));
+        self.attempt("known svg", |_| Ok(shape_catalog::known(&ShapeId::from("svg"))));
+        self.attempt("known template", |_| Ok(shape_catalog::known(&ShapeId::from("template"))));
         self.begin("ink");
         let mut ink = InkGeometry::new();
-        self.line(&format!("{} {}", arr(&ink.bounds()), ink.size()));
+        self.line(&format!("{} {}", arr(&bounds4(ink.bounds())), ink.parts(Bounds::EMPTY).count()));
         for i in 0..40 {
             if i % 3 == 0 {
                 let (x, y, wv, h) = (self.coord(), self.coord(), self.coord().abs(), self.coord().abs());
-                ink.dot(x, y, wv, h, i % 2 == 0);
+                ink.dot(DocRect { x, y, width: wv, height: h }, if i % 2 == 0 { RectShape::Ellipse } else { RectShape::Rectangle });
             } else {
                 let (x, y, ex, ey, wd) = (self.coord(), self.coord(), self.coord(), self.coord(), self.coord().abs() / 10.0);
-                ink.line(x, y, ex, ey, wd);
+                ink.line(Segment { start: pt(x, y), end: pt(ex, ey) }, StrokeWidth(wd));
             }
         }
         ink.finish();
-        self.line(&format!("{} {}", arr(&ink.bounds()), ink.size()));
-        for i in 0..ink.size() {
+        self.line(&format!("{} {}", arr(&bounds4(ink.bounds())), ink.parts(Bounds::EMPTY).count()));
+        for i in 0..ink.parts(Bounds::EMPTY).count() {
             let l = self.coord();
             let t = self.coord();
-            let text = format!("{} {} {} {}", i, d(ink.value(i, 0)), d(ink.value(i, 5)), ink.overlaps(i, l, t, l + 300.0, t + 300.0));
+            let (part, overlap) = ink.parts(Bounds { left: l, top: t, right: l + 300.0, bottom: t + 300.0 }).nth(i).unwrap();
+            let (kind, width) = match part {
+                InkPart::Line { width, .. } => (0.0, width.0),
+                InkPart::Dot { shape: RectShape::Ellipse, .. } => (1.0, 0.0),
+                InkPart::Dot { shape: RectShape::Rectangle, .. } => (2.0, 0.0),
+            };
+            let text = format!("{} {} {} {}", i, d(kind), d(width), overlap == AreaOverlap::Overlapping);
             self.line(&text);
         }
         self.begin("coverage/tiles");
         let tiles = Tiles::new(
-            [-70.0, -10.0, 130.0, 90.0],
+            bounds([-70.0, -10.0, 130.0, 90.0]),
             Box::new(FnPainter(|x, y, size| {
                 let mut px = vec![0i32; (size * size) as usize];
                 for j in 0..size {
@@ -584,12 +639,12 @@ impl Driver {
             let ex = x + self.coord() / 20.0;
             let ey = y + self.coord() / 20.0;
             let r = 1.0 + self.coord().abs() / 100.0;
-            let poly = geometry::capsule([x, y], [ex, ey], r);
-            self.attempt(&i.to_string(), |_| tiles.intersects(&poly));
+            let capsule = Polygon::capsule(Segment { start: pt(x, y), end: pt(ex, ey) }, Radius(r));
+            self.attempt(&i.to_string(), |_| tiles.intersects(&capsule));
         }
-        self.attempt("huge", |_| tiles.intersects(&geometry::rect(-1e6, -1e6, 2e6, 2e6)));
-        let big = Tiles::new([-1e6, -1e6, 1e6, 1e6], Box::new(FnPainter(|_, _, size| vec![0; (size * size) as usize])));
-        self.attempt("too large", |_| big.intersects(&geometry::rect(-1e5, -1e5, 2e5, 2e5)));
+        self.attempt("huge", |_| tiles.intersects(&rect(-1e6, -1e6, 2e6, 2e6)));
+        let big = Tiles::new(bounds([-1e6, -1e6, 1e6, 1e6]), Box::new(FnPainter(|_, _, size| vec![0; (size * size) as usize])));
+        self.attempt("too large", |_| big.intersects(&rect(-1e5, -1e5, 2e5, 2e5)));
     }
 
     // ------------------------------------------------------------------ scenes
@@ -634,7 +689,7 @@ impl Driver {
             let layers: Vec<String> = m.layers.keys().cloned().collect();
             for layer in &layers {
                 for page in 0..3 {
-                    let items = m.layer_items(layer, page);
+                    let items = m.layer_items(&LayerId::from(layer), PageNumber(page));
                     if items.is_empty() {
                         continue;
                     }
@@ -651,11 +706,11 @@ impl Driver {
                 let vp = list_of(render.get("viewport"));
                 let f = |i: usize| json::as_double(vp.get(i)).unwrap();
                 let (x, y, wv, h) = (f(0), f(1), f(2), f(3));
-                let hidden: HashSet<String> = list_of(render.get("hidden")).iter().map(|v| v.as_str().unwrap().to_string()).collect();
-                let page = json::as_int(render.get("page")).unwrap();
+                let hidden = HiddenLayers( list_of(render.get("hidden")).iter().map(|v| v.as_str().unwrap().to_string()).collect::<HashSet<String>>());
+                let page = PageNumber(json::as_int(render.get("page")).unwrap());
                 let model = &m;
                 self.attempt(&format!("render {}", wm(&render)), |_| {
-                    let mut svg = Svg::new(x, y, wv, h);
+                    let mut svg = Svg::new(DocRect { x, y, width: wv, height: h });
                     render::draw(model, page, &hidden, &mut svg)?;
                     Ok(svg.to_string())
                 });
@@ -672,14 +727,14 @@ impl Driver {
                     b.push_str(&format!(
                         "{} {} {} erasures={}",
                         item.active(),
-                        arr(&item.local(10.0, 20.0)?),
+                        { let p = item.local(pt(10.0, 20.0))?; arr(&[p.x, p.y]) },
                         wm(&item.ref_()),
                         DrawItem::erasures(&o)?.len()
                     ));
                     b.push_str(&format!(" geometry={} local={}", wm(item.geometry()), wm(&*item.local_content()?)));
                     match item.paint_bounds(&FACTORY) {
                         Ok(p) => match item.has_coverage(&FACTORY) {
-                            Ok(has) => b.push_str(&format!(" paint={} has={}", arr(&p), has)),
+                            Ok(has) => b.push_str(&format!(" paint={} has={}", arr(&bounds4(p)), has)),
                             Err(e) => b.push_str(&format!(" paint={}", err(&e))),
                         },
                         Err(e) => b.push_str(&format!(" paint={}", err(&e))),
@@ -714,24 +769,26 @@ impl Driver {
                         }
                         drawing_actions::paste(&m, &input)?.into()
                     }
-                    "duplicateLayer" => drawing_actions::duplicate_layer(&m, &s("id"))?.into(),
-                    "mergeLayer" => drawing_actions::merge_layer(&m, &s("source"), &s("target"))?.into(),
-                    "reorderLayer" => drawing_actions::reorder_layer(&m, &s("id"), json::as_int(call.get("index"))?)?.into(),
+                    "duplicateLayer" => drawing_actions::duplicate_layer(&m, &LayerId::from(s("id")))?.into(),
+                    "mergeLayer" => drawing_actions::merge_layer(&m, &LayerId::from(s("source")), &LayerId::from(s("target")))?.into(),
+                    "reorderLayer" => drawing_actions::reorder_layer(&m, &LayerId::from(s("id")), LayerPosition(json::as_int(call.get("index"))?))?.into(),
                     "template" => drawing_actions::template(&m, &map_of(call.get("input")))?.into(),
                     "fill" => drawing_actions::fill(&m, &map_of(call.get("input")))?.into(),
                     "erase" => drawing_actions::erase(&m, &map_of(call.get("input")), &FACTORY)?.into(),
                     "eraseRegions" => {
                         let r = drawing_actions::erase_regions(&map_of(call.get("input")))?;
                         let again = drawing_actions::erase_regions(&map_of(call.get("input")))?;
-                        format!("{} {}", r.len(), arr2(&again[0])).into()
+                        format!("{} {}", r.len(), poly(&again[0])).into()
                     }
                     "transform" => collaboration::transform(&m, &list_of(call.get("entities")), &map_of(call.get("spec")))?.into(),
                     "transformSimple" => collaboration::transform_simple(
                         &m,
                         &list_of(call.get("entities")),
-                        json::as_double(call.get("scale"))?,
-                        json::as_double(call.get("dx"))?,
-                        json::as_double(call.get("dy"))?,
+                        SelectionTransform {
+                            scale: json::as_double(call.get("scale"))?,
+                            dx: json::as_double(call.get("dx"))?,
+                            dy: json::as_double(call.get("dy"))?,
+                        },
                     )?
                     .into(),
                     "diagram" => actions::diagram(&m, &map_of(call.get("input")))?.into(),
@@ -756,27 +813,27 @@ impl Driver {
                     "select" => {
                         let region = match call.get("region") {
                             None | Some(Value::Null) => None,
-                            Some(r) => Some(geometry::polygon(r)?),
+                            Some(r) => Some(Polygon::from_json(r)?),
                         };
-                        let layer = s("layer");
-                        let page = json::as_int(call.get("page"))?;
-                        let top = json::is_true(call.get("topmost"));
-                        let r = region.as_deref();
+                        let layer = LayerId::from(s("layer"));
+                        let page = PageNumber(json::as_int(call.get("page"))?);
+                        let top = if json::is_true(call.get("topmost")) { HitMode::Topmost } else { HitMode::All };
+                        let r = region.as_ref();
                         format!(
                             "{} | {} | {}",
                             wl(&LayerEditor::select_in(&m, &layer, page, r, top, &FACTORY)?),
                             wl(&LayerEditor::new(&m, &layer, page)?.select(r, top, &FACTORY)?),
-                            wl(&LayerEditor::with_inactive(&m, &layer, page, true)?.select(r, top, &FACTORY)?)
+                            wl(&LayerEditor::with_filter(&m, &layer, page, ItemFilter::IncludeInactive)?.select(r, top, &FACTORY)?)
                         )
                         .into()
                     }
                     "paintBounds" => {
                         let mut b = String::new();
-                        let editor = LayerEditor::new(&m, &s("layer"), json::as_int(call.get("page"))?)?;
+                        let editor = LayerEditor::new(&m, &LayerId::from(s("layer")), PageNumber(json::as_int(call.get("page"))?))?;
                         for item in editor.items() {
                             b.push_str(&format!("{}:{}=", item.kind, item.id));
                             match item.paint_bounds(&FACTORY) {
-                                Ok(p) => b.push_str(&arr(&p)),
+                                Ok(p) => b.push_str(&arr(&bounds4(p))),
                                 Err(e) => b.push_str(&err(&e)),
                             }
                             b.push(' ');
@@ -784,7 +841,7 @@ impl Driver {
                         b.into()
                     }
                     "requireReferences" => {
-                        LayerEditor::require_references(&m, &s("layer"), json::as_int(call.get("page"))?, &list_of(call.get("refs")))?;
+                        LayerEditor::require_references(&m, &LayerId::from(s("layer")), PageNumber(json::as_int(call.get("page"))?), &list_of(call.get("refs")))?;
                         "OK".into()
                     }
                     "locks" => {
@@ -793,25 +850,25 @@ impl Driver {
                         for (k, v) in map_of(call.get("state")) {
                             snap.insert(k, v);
                         }
-                        match collaboration::require_unlocked(&mut snap, "me", &list_of(call.get("ops")), 1000) {
+                        match collaboration::require_unlocked(&mut snap, &actor("me"), &list_of(call.get("ops")), EpochMillis(1000)) {
                             Ok(()) => b.push_str("unlocked"),
                             Err(e) => b.push_str(&err(&e)),
                         }
                         b.push_str(&format!(" | leases={}", w(snap.get("leases").unwrap_or(&Value::Null))));
-                        match collaboration::require_incoming_unlocked(&mut snap, &map_of(call.get("incoming")), 1000) {
+                        match collaboration::require_incoming_unlocked(&mut snap, &map_of(call.get("incoming")), EpochMillis(1000)) {
                             Ok(()) => b.push_str(" | incoming ok"),
                             Err(e) => b.push_str(&format!(" | {}", err(&e))),
                         }
                         b.push_str(&format!(" | affected={}", wl(&collaboration::affected(&list_of(call.get("ops")))?)));
                         let refs = vec![Value::Object(object! {"kind" => "object", "id" => "app"}), Value::Object(object! {"kind" => "object", "id" => "state", "page" => 1})];
-                        b.push_str(&format!(" | conflicts={}", wl(&collaboration::conflicts(&snap, "me", &refs)?)));
-                        b.push_str(&format!(" | key={},{}", collaboration::key("object", "x", None), collaboration::key("object", "x", Some(&json::double(2.0)))));
+                        b.push_str(&format!(" | conflicts={}", wl(&collaboration::conflicts(&snap, &actor("me"), &refs)?)));
+                        b.push_str(&format!(" | key={},{}", collaboration::key(&EntityKind::from("object"), &EntityId::from("x"), None), collaboration::key(&EntityKind::from("object"), &EntityId::from("x"), Some(&json::double(2.0)))));
                         let one = vec![Value::Object(object! {"kind" => "object", "id" => "app"})];
-                        match collaboration::require_selection(&mut snap, &m, "other", "s2", &one) {
+                        match collaboration::require_selection(&mut snap, &m, &actor("other"), &SessionId::from("s2"), &one) {
                             Ok(()) => b.push_str(" | selection ok"),
                             Err(e) => b.push_str(&format!(" | {}", err(&e))),
                         }
-                        match collaboration::require_selection(&mut snap, &m, "me", "s1", &one) {
+                        match collaboration::require_selection(&mut snap, &m, &actor("me"), &SessionId::from("s1"), &one) {
                             Ok(()) => b.push_str(" | selection ok"),
                             Err(e) => b.push_str(&format!(" | {}", err(&e))),
                         }
@@ -837,7 +894,7 @@ impl Driver {
     // ------------------------------------------------------------------ store
     fn read_store(&mut self, dir: &Path, document: &str) {
         self.begin(&format!("store/{}", document));
-        let store = match Store::new(dir, document) {
+        let store = match Store::new(dir, &DocumentName::from(document)) {
             Ok(s) => s,
             Err(e) => {
                 self.line(&err(&e));
@@ -847,13 +904,13 @@ impl Driver {
         self.attempt("file", |_| Ok(file_name(&store.file)));
         self.attempt("read", |_| store.read());
         self.attempt("model", |_| store.model().map(|m| m.json()));
-        self.attempt("replica", |_| store.replica(0, 0));
-        self.attempt("replica-tail", |_| store.replica(1, 2));
-        self.attempt("replica-bad", |_| store.replica(-1, 0));
+        self.attempt("replica", |_| store.replica(ReplicaCursor(0), ReplicaCursor(0)));
+        self.attempt("replica-tail", |_| store.replica(ReplicaCursor(1), ReplicaCursor(2)));
+        self.attempt("replica-bad", |_| store.replica(ReplicaCursor(-1), ReplicaCursor(0)));
         self.attempt("needsUpload", |_| store.needs_upload("peer"));
         self.attempt("conflicts", |_| store.conflicts());
-        self.attempt("page", |_| Ok(Value::from(Store::page(json::list_at(&*store.read()?, "events")?, 0)?.len() as i64)));
-        self.attempt("writeRequiresProxy", |_| store.append(&object! {"kind" => "active", "stroke" => "x", "active" => true}, "me"));
+        self.attempt("page", |_| Ok(Value::from(Store::page(json::list_at(&*store.read()?, "events")?, ReplicaCursor(0))?.len() as i64)));
+        self.attempt("writeRequiresProxy", |_| store.append(&object! {"kind" => "active", "stroke" => "x", "active" => true}, &actor("me")));
     }
 
     fn dump(&mut self, dir: &Path) {
@@ -886,7 +943,7 @@ impl Driver {
 
     fn write_sequence(&mut self, dir: &Path) {
         self.begin("write");
-        let w = Store::writer(dir, "parity-doc").unwrap();
+        let w = Store::writer(dir, &DocumentName::from("parity-doc")).unwrap();
         let diagram = json::parse(&read_text(&self.fixtures.join("../../../../../apps/cli/examples/diagram.json"))).unwrap().as_object().unwrap().clone();
         let pts = |v: &[(f64, f64, f64)]| Value::Array(v.iter().map(|(x, y, p)| point(*x, *y, *p)).collect());
         let int_point = |x: i64, y: i64, p: f64| Value::Array(vec![Value::from(x), Value::from(y), json::double(p)]);
@@ -903,8 +960,8 @@ impl Driver {
         self.attempt("accept-conflict", |_| w.accept(&[conflicting_doc], None));
         self.attempt("accept-root", |_| w.accept(&[], Some(&Value::from("root-2"))));
         let s1 = object! {"kind" => "stroke", "stroke" => "s1", "layer" => "base", "page" => 0, "width" => 3, "color" => -16777216, "points" => Value::Array(vec![int_point(1, 2, 0.5)])};
-        self.attempt("append", |_| w.append(&s1, "alice").map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
-        self.attempt("commit", |_| w.commit("alice", &mut |m: &mut Model| actions::diagram(m, &diagram)));
+        self.attempt("append", |_| w.append(&s1, &actor("alice")).map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
+        self.attempt("commit", |_| w.commit(&actor("alice"), &mut |m: &mut Model| actions::diagram(m, &diagram)));
         let star = |x: i64, fill: bool| {
             let mut o = object! {"object" => "bob-1", "shape" => "star", "x" => x, "y" => 6};
             if fill {
@@ -912,17 +969,17 @@ impl Driver {
             }
             o
         };
-        self.attempt("commit-bob", |_| w.commit("bob", &mut |_m: &mut Model| Ok(vec![Value::Object(actions::drawing(&star(5, true), "base")?)])));
-        self.attempt("undo", |_| w.history("alice", false));
-        self.attempt("redo", |_| w.history("alice", true));
-        self.attempt("undo-bob", |_| w.history("bob", false));
-        self.attempt("undo-empty", |_| w.history("carol", false));
-        self.attempt("redo-bob", |_| w.history("bob", true));
-        self.attempt("redo-bob-2", |_| w.history("bob", true));
+        self.attempt("commit-bob", |_| w.commit(&actor("bob"), &mut |_m: &mut Model| Ok(vec![Value::Object(actions::drawing(&star(5, true), &LayerId::from("base"))?)])));
+        self.attempt("undo", |_| w.history(&actor("alice"), HistoryDirection::Undo));
+        self.attempt("redo", |_| w.history(&actor("alice"), HistoryDirection::Redo));
+        self.attempt("undo-bob", |_| w.history(&actor("bob"), HistoryDirection::Undo));
+        self.attempt("undo-empty", |_| w.history(&actor("carol"), HistoryDirection::Undo));
+        self.attempt("redo-bob", |_| w.history(&actor("bob"), HistoryDirection::Redo));
+        self.attempt("redo-bob-2", |_| w.history(&actor("bob"), HistoryDirection::Redo));
         let hide = object! {"kind" => "active", "stroke" => "s1", "active" => false};
         let settings = object! {"hidden" => Value::Array(vec![Value::from("x")]), "undo" => Value::Array(vec![Value::from("u1")]), "redo" => Value::Array(vec![]), "selected" => "base", "page" => 0};
-        self.attempt("settings", |_| w.append_with_settings(&hide, "alice", Some(&settings)).map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
-        self.attempt("settings-bad", |_| w.append_with_settings(&hide, "alice", Some(&object! {"color" => 1})));
+        self.attempt("settings", |_| w.append_with_settings(&hide, &actor("alice"), Some(&settings)).map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
+        self.attempt("settings-bad", |_| w.append_with_settings(&hide, &actor("alice"), Some(&object! {"color" => 1})));
         self.attempt("lists", |_| {
             w.edit(&mut |s: &mut State| {
                 s.insert("undo".into(), Value::Array(vec![Value::from("u1"), Value::from("u2")]));
@@ -946,9 +1003,9 @@ impl Driver {
             })
             .map(|s| s.get("leases").cloned().unwrap_or(Value::Null))
         });
-        self.attempt("locked", |_| w.commit("bob", &mut |_m: &mut Model| Ok(vec![Value::Object(actions::drawing(&star(9, false), "base")?)])));
+        self.attempt("locked", |_| w.commit(&actor("bob"), &mut |_m: &mut Model| Ok(vec![Value::Object(actions::drawing(&star(9, false), &LayerId::from("base"))?)])));
         let sel = vec![Value::Object(object! {"kind" => "object", "id" => "bob-1"})];
-        self.attempt("selected", |_| w.commit_selected("alice", "s9", &sel, &mut |m: &mut Model| collaboration::transform_simple(m, &sel, 2.0, 1.0, 1.0), &[]));
+        self.attempt("selected", |_| w.commit_selected(&actor("alice"), &SessionId::from("s9"), &sel, &mut |m: &mut Model| collaboration::transform_simple(m, &sel, SelectionTransform { scale: 2.0, dx: 1.0, dy: 1.0 }), &[]));
         self.attempt("unlease", |_| {
             w.edit_transient(&mut |s: &mut State| {
                 s.insert("leases".into(), Value::Object(Map::new()));
@@ -962,7 +1019,7 @@ impl Driver {
                 p.push(Value::Array(vec![json::double(j as f64 * 1.5), json::double(((j * 7) % 13) as f64 / 4.0), json::double(0.5)]));
             }
             let op = object! {"kind" => "stroke", "stroke" => "grow", "layer" => "base", "page" => 0, "width" => 4, "color" => -65536, "points" => Value::Array(p)};
-            self.attempt(&format!("grow-{}", i), |_| w.append(&op, "alice").map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
+            self.attempt(&format!("grow-{}", i), |_| w.append(&op, &actor("alice")).map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
         }
         self.attempt("commit-move", |_| {
             w.edit(&mut |s: &mut State| {
@@ -988,16 +1045,16 @@ impl Driver {
                 return Ok(Shown::from("none"));
             }
             let id = json::string(json::map(&c[0])?, "id")?.to_string();
-            Ok(Shown::from(w.conflict(&id, "both", "alice")?))
+            Ok(Shown::from(resolve(&w, &id, "both", "alice")?))
         });
-        self.attempt("resolve-bad", |_| w.conflict("nope", "local", "alice"));
-        self.attempt("resolve-choice", |_| w.conflict("nope", "mine", "alice"));
+        self.attempt("resolve-bad", |_| resolve(&w, "nope", "local", "alice"));
+        self.attempt("resolve-choice", |_| resolve(&w, "nope", "mine", "alice"));
         self.attempt("model", |_| w.model().map(|m| m.json()));
-        self.attempt("delete", |_| w.delete_document("alice"));
-        self.attempt("delete-again", |_| w.delete_document("alice"));
-        self.attempt("after-delete", |_| w.commit("alice", &mut |_m: &mut Model| Ok(vec![Value::Object(actions::drawing(&object! {"shape" => "rect"}, "base")?)])));
+        self.attempt("delete", |_| w.delete_document(&actor("alice")));
+        self.attempt("delete-again", |_| w.delete_document(&actor("alice")));
+        self.attempt("after-delete", |_| w.commit(&actor("alice"), &mut |_m: &mut Model| Ok(vec![Value::Object(actions::drawing(&object! {"shape" => "rect"}, &LayerId::from("base"))?)])));
         self.attempt("read", |_| w.read());
-        self.attempt("invalid-doc", |_| Store::writer(dir, "").map(|_| "store"));
+        self.attempt("invalid-doc", |_| Store::writer(dir, &DocumentName::from("")).map(|_| "store"));
         self.flush();
         self.begin("write/files");
         self.dump(dir);
@@ -1005,20 +1062,26 @@ impl Driver {
 
     fn mutate(&mut self, dir: &Path, document: &str) {
         self.begin(&format!("mutate/{}", document));
-        let w = Store::writer(dir, document).unwrap();
+        let w = Store::writer(dir, &DocumentName::from(document)).unwrap();
         self.attempt("commit", |_| {
-            w.commit("cross", &mut |_m: &mut Model| {
-                Ok(vec![Value::Object(actions::drawing(&object! {"object" => "cross-1", "shape" => "hexagon", "x" => 11, "y" => 12, "text" => "from mutate"}, "base")?)])
+            w.commit(&actor("cross"), &mut |_m: &mut Model| {
+                Ok(vec![Value::Object(actions::drawing(&object! {"object" => "cross-1", "shape" => "hexagon", "x" => 11, "y" => 12, "text" => "from mutate"}, &LayerId::from("base"))?)])
             })
         });
         let op = object! {"kind" => "stroke", "stroke" => "cross-s", "layer" => "base", "page" => 0, "width" => 3, "color" => -16777216,
             "points" => Value::Array(vec![Value::Array(vec![Value::from(1), Value::from(2), json::double(0.5)]), Value::Array(vec![Value::from(5), Value::from(6), json::double(0.7)])])};
-        self.attempt("append", |_| w.append(&op, "cross").map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
-        self.attempt("undo", |_| w.history("cross", false));
+        self.attempt("append", |_| w.append(&op, &actor("cross")).map(|s| s.get("revision").cloned().unwrap_or(Value::Null)));
+        self.attempt("undo", |_| w.history(&actor("cross"), HistoryDirection::Undo));
         self.attempt("checkpoint", |_| w.checkpoint().map(|m| m.get("journalBytesAfter").cloned().unwrap_or(Value::Null)));
-        self.attempt("redo", |_| w.history("cross", true));
+        self.attempt("redo", |_| w.history(&actor("cross"), HistoryDirection::Redo));
         self.attempt("model", |_| w.model().map(|m| m.json()));
     }
+}
+
+/// Old `Store.conflict(id, choice, actor)`: the choice is validated first.
+fn resolve(w: &Store, id: &str, choice: &str, actor: &str) -> Result<Map> {
+    let choice = ConflictChoice::parse(&ConflictChoiceName::from(choice))?;
+    w.conflict(&ConflictId::from(id), choice, &ActorId::from(actor))
 }
 
 trait Pipe: Sized {

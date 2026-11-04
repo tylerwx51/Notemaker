@@ -5,9 +5,10 @@
 use crate::android_consts::*;
 use crate::concurrent::CountDownLatch;
 use crate::error::{self, AppError, AppResult};
-use crate::integration::{self as it, Integration};
+use crate::ink_cache::BitmapSize;
+use crate::integration::{self as it, InputSource, Integration, PointerId, PointerTool, Pointers, TouchSize};
 use crate::jx::{self, Obj};
-use crate::main_activity::MainActivity;
+use crate::main_activity::{MainActivity, ScreenPoint, StylusPressure};
 use crate::org_json::JSONObject;
 use crate::replica_service;
 use notemaker_core::json::Value;
@@ -23,17 +24,17 @@ pub fn on_main(test: &Arc<Integration>, task: impl FnOnce() -> AppResult<()> + S
 /// `static Bitmap snapshot(MainActivity app)` (UI thread).
 pub fn snapshot(app: &Arc<MainActivity>) -> AppResult<Obj> {
     let canvas = app.canvas();
-    let image = it::create_bitmap(canvas.width(), canvas.height())?;
+    let image = it::create_bitmap(BitmapSize { width: canvas.width().0, height: canvas.height().0 })?;
     it::draw_view(&canvas.view(), &image)?;
     Ok(image)
 }
 /// `static void equal(MainActivity app, Bitmap before, Bitmap after, String stage)`.
-pub fn equal(app: &Arc<MainActivity>, before: &Obj, after: &Obj, stage: &str) -> AppResult<()> {
+fn equal(app: &Arc<MainActivity>, before: &Obj, after: &Obj, stage: &str) -> AppResult<()> {
     if it::same_as(before, after)? {
         return Ok(());
     }
     let a = crate::android_canvas::bitmap_pixels(before)?;
-    let mut b = a.clone();
+    let mut b = a.0.clone();
     let after_pixels = crate::android_canvas::bitmap_pixels(after)?;
     // `after.getPixels(b, ...)` into an array sized like `before`.
     let n = b.len().min(after_pixels.len());
@@ -49,12 +50,13 @@ pub fn equal(app: &Arc<MainActivity>, before: &Obj, after: &Obj, stage: &str) ->
     Err(AppError::illegal_state(format!("{stage}: {differences} canvas pixels changed")))
 }
 /// `static void input(MainActivity app, long down, int action, float x, float y, float pressure)` (UI thread).
-pub fn input(app: &Arc<MainActivity>, down: i64, action: i32, x: f32, y: f32, pressure: f32) -> AppResult<()> {
-    let property = it::pointer_properties(0, MOTIONEVENT_TOOL_TYPE_STYLUS)?;
+fn input(app: &Arc<MainActivity>, down: i64, action: i32, x: f32, y: f32, pressure: f32) -> AppResult<()> {
+    let property = it::pointer_properties(PointerId(0), PointerTool::Stylus)?;
     let canvas = app.canvas();
-    let scale = canvas.scale() * canvas.zoom.get();
-    let coords = it::pointer_coords(x * scale + canvas.offset_x.get(), y * scale + canvas.offset_y.get(), pressure, 1.0)?;
-    let event = it::obtain(down, jx::uptime_millis(), action, &[&property], &[&coords], INPUTDEVICE_SOURCE_STYLUS)?;
+    let scale = canvas.scale().0 * canvas.zoom.get();
+    let point = ScreenPoint { x: x * scale + canvas.offset_x.get(), y: y * scale + canvas.offset_y.get() };
+    let coords = it::pointer_coords(point, StylusPressure(pressure), TouchSize(1.0))?;
+    let event = it::obtain(jx::UptimeMillis(down), jx::uptime_millis(), MotionAction(action), &Pointers::single(property, coords), InputSource::Stylus)?;
     let dispatched = jcall!(canvas.view(), "android/view/View", "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", &event);
     let recycled = it::recycle(&event);
     dispatched?;
@@ -76,10 +78,10 @@ fn run_case(test: &Arc<Integration>, app: &Arc<MainActivity>, brush: &str, trans
     drain()?;
     test.wait_for_idle_sync()?;
     on_main(test, || {
-        app.document.set(format!("stroke-pixels-{}", ids::random_uuid()));
+        app.document.set(format!("stroke-pixels-{}", String::from(ids::Uuid::random())));
         app.host.set(String::new());
         app.proxy_url.set(String::new());
-        app.load("fixed")?;
+        app.load(&crate::main_activity::DocumentType::from("fixed"))?;
         app.configure_proxy()?;
         app.set_drawing_tool(None)?;
         app.erase.set(false);
@@ -97,7 +99,7 @@ fn run_case(test: &Arc<Integration>, app: &Arc<MainActivity>, brush: &str, trans
         // Existing content exercises compositing and stable stacking, not just blank paper.
         let background = object! {"kind" => "stroke", "stroke" => "background", "layer" => "base", "page" => 0, "width" => 25, "color" => 0x80770000u32 as i32, "brush" => "pen", "points" => vec![Value::from(vec![20, 20, 1]), Value::from(vec![900, 1100, 1])]};
         app.enqueue(&json_object(background))?;
-        let bx = notemaker_core::actions::drawing(&object! {"object" => "box", "shape" => "rect", "x" => 170, "y" => 20, "w" => 35, "h" => 1100, "fill" => 0x800000ffu32 as i32}, "base")?;
+        let bx = notemaker_core::actions::drawing(&object! {"object" => "box", "shape" => "rect", "x" => 170, "y" => 20, "w" => 35, "h" => 1100, "fill" => 0x800000ffu32 as i32}, &notemaker_core::ids::LayerId::from("base"))?;
         app.enqueue(&json_object(bx))?;
         app.update()
     })?;
@@ -116,7 +118,7 @@ fn run_case(test: &Arc<Integration>, app: &Arc<MainActivity>, brush: &str, trans
     let mut before: Option<Obj> = None;
     let mut id: Option<String> = None;
     let body = on_main(test, || {
-        let down = jx::uptime_millis();
+        let down = jx::uptime_millis().0;
         input(app, down, MOTIONEVENT_ACTION_DOWN, 80.0, 80.0, 0.7)?;
         let points: [[f32; 2]; 4] = [[280.0, 230.0], [80.0, 230.0], [280.0, 80.0], [300.0, 100.0]];
         for p in points {

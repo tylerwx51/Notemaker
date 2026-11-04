@@ -6,8 +6,9 @@
 //! `shell.nix`) or the default fontconfig file on the host, then
 //! `/system/fonts` on Android.
 
-use crate::canvas::Path;
+use crate::canvas::{CanvasPoint, Path};
 use ab_glyph::{Font, OutlineCurve, VariableFont};
+use notemaker_core::style::{FontFamily, TextContent};
 use notemaker_core::{Error, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,6 +20,29 @@ pub struct Typeface {
     /// File the face was loaded from (diagnostics).
     pub source: PathBuf,
 }
+
+/// The weight and slant of a face.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct FaceStyle {
+    pub bold: bool,
+    pub italic: bool,
+}
+
+impl FaceStyle {
+    pub const REGULAR: FaceStyle = FaceStyle { bold: false, italic: false };
+}
+
+/// A font size in canvas units (`Paint.setTextSize`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct TextSize(pub f32);
+
+/// The advance width of a run of text in canvas units (`Paint.measureText`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
+pub struct TextAdvance(pub f32);
+
+/// The shared resvg font database for SVG `<text>` (see [`svg_fontdb`]).
+#[derive(Clone)]
+pub struct SvgFonts(pub Arc<resvg::usvg::fontdb::Database>);
 
 type FaceKey = (u8, bool, bool);
 
@@ -123,7 +147,8 @@ fn load(path: &std::path::Path, bold: bool) -> Option<Typeface> {
 impl Typeface {
     /// `family` is `"serif"`, `"monospace"` or anything else (sans-serif),
     /// matching the Java mapping. Faces are cached per (family, bold, italic).
-    pub fn create(family: &str, bold: bool, italic: bool) -> Result<Arc<Typeface>> {
+    pub fn create(family: &FontFamily, style: FaceStyle) -> Result<Arc<Typeface>> {
+        let FaceStyle { bold, italic } = style;
         let key = (family_index(family), bold, italic);
         let mut cache = faces().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(face) = cache.get(&key) {
@@ -155,17 +180,20 @@ impl Typeface {
     }
 
     /// `Paint.measureText` / `FontMetrics.stringWidth`: advance width at `size`.
-    pub fn measure_text(&self, text: &str, size: f32) -> f32 {
-        let s = self.scale(size);
-        text.chars()
-            .map(|c| self.font.h_advance_unscaled(self.font.glyph_id(c)) * s)
-            .sum()
+    pub fn measure_text(&self, text: &TextContent, size: TextSize) -> TextAdvance {
+        let s = self.scale(size.0);
+        TextAdvance(
+            text.chars()
+                .map(|c| self.font.h_advance_unscaled(self.font.glyph_id(c)) * s)
+                .sum(),
+        )
     }
 
     /// `Paint.getTextPath(text, 0, len, x, y, path)` / `GlyphVector.getOutline`:
     /// glyph outlines with the baseline at `y` (non-zero fill).
-    pub fn text_path(&self, text: &str, x: f32, y: f32, size: f32) -> Path {
-        let s = self.scale(size);
+    pub fn text_path(&self, text: &TextContent, baseline: CanvasPoint, size: TextSize) -> Path {
+        let CanvasPoint { x, y } = baseline;
+        let s = self.scale(size.0);
         let mut path = Path::new();
         let mut pen = x;
         for c in text.chars() {
@@ -184,25 +212,29 @@ impl Typeface {
                             path.close();
                         }
                         let (sx, sy) = map(start);
-                        path.move_to(sx, sy);
+                        path.move_to(CanvasPoint { x: sx, y: sy });
                     }
                     match curve {
                         OutlineCurve::Line(_, b) => {
                             let (bx, by) = map(*b);
-                            path.line_to(bx, by);
+                            path.line_to(CanvasPoint { x: bx, y: by });
                             end = Some(*b);
                         }
                         OutlineCurve::Quad(_, b, c2) => {
                             let (bx, by) = map(*b);
                             let (cx, cy) = map(*c2);
-                            path.quad_to(bx, by, cx, cy);
+                            path.quad_to(CanvasPoint { x: bx, y: by }, CanvasPoint { x: cx, y: cy });
                             end = Some(*c2);
                         }
                         OutlineCurve::Cubic(_, b, c2, d) => {
                             let (bx, by) = map(*b);
                             let (cx, cy) = map(*c2);
                             let (dx, dy) = map(*d);
-                            path.cubic_to(bx, by, cx, cy, dx, dy);
+                            path.cubic_to(
+                                CanvasPoint { x: bx, y: by },
+                                CanvasPoint { x: cx, y: cy },
+                                CanvasPoint { x: dx, y: dy },
+                            );
                             end = Some(*d);
                         }
                     }
@@ -220,7 +252,7 @@ impl Typeface {
 /// `Png.ensureFonts()`: fails with `IllegalState("Could not initialize fonts")`
 /// when no sans-serif face can be found.
 pub fn ensure_fonts() -> Result<()> {
-    Typeface::create("sans-serif", false, false).map(|_| ())
+    Typeface::create(&FontFamily::from("sans-serif"), FaceStyle::REGULAR).map(|_| ())
 }
 
 fn fontconfig_dirs(file: &std::path::Path, out: &mut Vec<PathBuf>, depth: usize) {
@@ -277,7 +309,7 @@ fn fontconfig_dirs(file: &std::path::Path, out: &mut Vec<PathBuf>, depth: usize)
 }
 
 /// Directories searched for font files, in order.
-pub fn font_dirs() -> Vec<PathBuf> {
+fn font_dirs() -> Vec<PathBuf> {
     static DIRS: OnceLock<Vec<PathBuf>> = OnceLock::new();
     DIRS.get_or_init(|| {
         let mut dirs = Vec::new();
@@ -300,8 +332,8 @@ pub fn font_dirs() -> Vec<PathBuf> {
 }
 
 /// Shared resvg font database built from [`font_dirs`] (SVG `<text>`).
-pub fn svg_fontdb() -> Arc<resvg::usvg::fontdb::Database> {
-    static DB: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
+pub fn svg_fontdb() -> SvgFonts {
+    static DB: OnceLock<SvgFonts> = OnceLock::new();
     DB.get_or_init(|| {
         let mut db = resvg::usvg::fontdb::Database::new();
         // Only the faces Png itself uses: /system/fonts is large on Android.
@@ -348,7 +380,7 @@ pub fn svg_fontdb() -> Arc<resvg::usvg::fontdb::Database> {
         if let Some(n) = mono {
             db.set_monospace_family(n);
         }
-        Arc::new(db)
+        SvgFonts(Arc::new(db))
     })
     .clone()
 }

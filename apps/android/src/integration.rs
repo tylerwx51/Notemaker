@@ -15,15 +15,19 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::android_consts::*;
+use crate::components::ComponentEvent;
 use crate::concurrent::CountDownLatch;
 use crate::error::{AppError, AppResult};
 use crate::field::Field;
-use crate::jx::{self, JResult, Local, Obj, Reply};
-use crate::main_activity::MainActivity;
+use crate::editor_ui::ToolKind;
+use crate::ink_cache::BitmapSize;
+use crate::jx::{self, Arg, JResult, Obj, Reply, UptimeMillis};
+use crate::main_activity::{MainActivity, ScreenPoint, StylusPressure};
 use crate::org_json::{JSONArray, JSONObject, JV};
 use crate::{replica_service, ui};
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::object;
+use notemaker_core::style::ArgbColor;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,8 +45,9 @@ pub struct Integration {
 }
 
 /// Routes the shim's `onCreate(Bundle)` / `onStart()`.
-pub fn component_event(component: &Local, event: &str, args: &[Local]) -> JResult<Reply> {
-    match event {
+pub fn component_event(event: &ComponentEvent) -> JResult<Reply> {
+    let ComponentEvent { component, name, args } = *event;
+    match &**name {
         "onCreate" => {
             let this = jx::global(component).expect("instrumentation");
             let test = Arc::new(Integration { this, arguments: Field::new(None) });
@@ -117,7 +122,7 @@ impl Integration {
         Ok(jcall!(self.this, "android/app/Instrumentation", "startActivitySync", "(Landroid/content/Intent;)Landroid/app/Activity;", intent)?.some())
     }
     /// `finish(resultCode, results)`.
-    pub fn finish(&self, result_code: i32, results: &Obj) -> JResult<()> {
+    fn finish(&self, result_code: i32, results: &Obj) -> JResult<()> {
         jcall!(self.this, "android/app/Instrumentation", "finish", "(ILandroid/os/Bundle;)V", result_code, results)?;
         Ok(())
     }
@@ -130,7 +135,7 @@ impl Integration {
     // Integration.java
 
     /// `static void liveGesture(MainActivity app, float shift, CountDownLatch done)`.
-    pub fn live_gesture(app: &Arc<MainActivity>, shift: f32, done: Arc<CountDownLatch>) -> AppResult<()> {
+    fn live_gesture(app: &Arc<MainActivity>, shift: f32, done: Arc<CountDownLatch>) -> AppResult<()> {
         let handler = ui::main_handler()?;
         let count = 24;
         let index = Arc::new(AtomicI32::new(0));
@@ -146,9 +151,10 @@ impl Integration {
             {
                 let _lock = app.lock.enter();
                 let canvas = app.canvas();
-                let property = pointer_properties(0, MOTIONEVENT_TOOL_TYPE_STYLUS)?;
-                let scale = canvas.scale();
-                let coords = pointer_coords(((100 + i * 18) as f32 + shift) * scale, ((200 + i * 12) as f32 + shift) * scale, 0.2f32 + (i % 10) as f32 * 0.06f32, 1.0)?;
+                let property = pointer_properties(PointerId(0), PointerTool::Stylus)?;
+                let scale = canvas.scale().0;
+                let point = ScreenPoint { x: ((100 + i * 18) as f32 + shift) * scale, y: ((200 + i * 12) as f32 + shift) * scale };
+                let coords = pointer_coords(point, StylusPressure(0.2f32 + (i % 10) as f32 * 0.06f32), TouchSize(1.0))?;
                 let action = if i == 0 {
                     MOTIONEVENT_ACTION_DOWN
                 } else if i == count - 1 {
@@ -156,14 +162,14 @@ impl Integration {
                 } else {
                     MOTIONEVENT_ACTION_MOVE
                 };
-                let event = obtain(start, jx::uptime_millis(), action, &[&property], &[&coords], INPUTDEVICE_SOURCE_STYLUS)?;
+                let event = obtain(start, jx::uptime_millis(), MotionAction(action), &Pointers::single(property, coords), InputSource::Stylus)?;
                 canvas.on_touch_event(&event)?;
                 recycle(&event)?;
             }
             if index.load(Ordering::SeqCst) < count {
                 let next = slot.lock().unwrap().clone();
                 if let Some(next) = next {
-                    ui::post_delayed(&posting, &next, 500)?;
+                    ui::post_delayed(&posting, &next, crate::jx::DelayMillis(500))?;
                 }
             } else {
                 slot.lock().unwrap().take();
@@ -175,8 +181,11 @@ impl Integration {
         ui::post(&handler, &runnable)?;
         Ok(())
     }
-    /// `static void gesture(MainActivity app, float x, float y, float w, float h, boolean cancel)` (UI thread).
-    pub fn gesture(app: &Arc<MainActivity>, x: f32, y: f32, w: f32, h: f32, cancel: bool) -> AppResult<()> {
+    /// `static void gesture(MainActivity app, float x, float y, float w, float h, boolean cancel)` (UI thread):
+    /// stylus down at `(x, y)`, one move to `(x + w, y + h)`, then up or cancel there.
+    pub fn gesture(app: &Arc<MainActivity>, drag: GestureDrag, end: GestureEnd) -> AppResult<()> {
+        let GestureDrag { x, y, width: w, height: h } = drag;
+        let cancel = end == GestureEnd::Cancel;
         let start = jx::uptime_millis();
         for i in 0..3 {
             let action = if i == 0 {
@@ -188,26 +197,24 @@ impl Integration {
             } else {
                 MOTIONEVENT_ACTION_UP
             };
-            let property = pointer_properties(0, MOTIONEVENT_TOOL_TYPE_STYLUS)?;
+            let property = pointer_properties(PointerId(0), PointerTool::Stylus)?;
             let canvas = app.canvas();
-            let coords = pointer_coords((x + if i == 0 { 0.0 } else { w }) * canvas.scale(), (y + if i == 0 { 0.0 } else { h }) * canvas.scale(), 0.7, 1.0)?;
-            let event = obtain(start, start + i * 20, action, &[&property], &[&coords], INPUTDEVICE_SOURCE_STYLUS)?;
+            let point = ScreenPoint { x: (x + if i == 0 { 0.0 } else { w }) * canvas.scale().0, y: (y + if i == 0 { 0.0 } else { h }) * canvas.scale().0 };
+            let coords = pointer_coords(point, StylusPressure(0.7), TouchSize(1.0))?;
+            let event = obtain(start, UptimeMillis(start.0 + i * 20), MotionAction(action), &Pointers::single(property, coords), InputSource::Stylus)?;
             canvas.on_touch_event(&event)?;
             recycle(&event)?;
         }
         Ok(())
     }
     /// `static MotionEvent touch(long start, long time, int action, int count, float x0, float y0, float x1, float y1)`.
-    pub fn touch(start: i64, time: i64, action: i32, count: i32, x0: f32, y0: f32, x1: f32, y1: f32) -> AppResult<Obj> {
-        let mut properties = Vec::new();
-        let mut coords = Vec::new();
+    fn touch(start: i64, time: i64, action: i32, count: i32, x0: f32, y0: f32, x1: f32, y1: f32) -> AppResult<Obj> {
+        let mut pointers = Pointers { properties: Vec::new(), coords: Vec::new() };
         for i in 0..count {
-            properties.push(pointer_properties(i, MOTIONEVENT_TOOL_TYPE_FINGER)?);
-            coords.push(pointer_coords(if i == 0 { x0 } else { x1 }, if i == 0 { y0 } else { y1 }, 1.0, 1.0)?);
+            pointers.properties.push(pointer_properties(PointerId(i), PointerTool::Finger)?);
+            pointers.coords.push(pointer_coords(ScreenPoint { x: if i == 0 { x0 } else { x1 }, y: if i == 0 { y0 } else { y1 } }, StylusPressure(1.0), TouchSize(1.0))?);
         }
-        let properties: Vec<&Obj> = properties.iter().collect();
-        let coords: Vec<&Obj> = coords.iter().collect();
-        obtain(start, time, action, &properties, &coords, INPUTDEVICE_SOURCE_TOUCHSCREEN)
+        obtain(UptimeMillis(start), UptimeMillis(time), MotionAction(action), &pointers, InputSource::Touchscreen)
     }
     /// `static void copy(InputStream in, OutputStream out)`: an `IOException`
     /// becomes `RuntimeException(e)`.
@@ -231,7 +238,7 @@ impl Integration {
     }
     /// `public void onStart()` (instrumentation thread).
     pub fn on_start(self: &Arc<Self>) -> AppResult<()> {
-        jx::log::i("NoteMakerPerformance", "Instrumentation starting");
+        jx::log::i(crate::jx::log::PERFORMANCE, "Instrumentation starting");
         let mut result = new_bundle()?;
         // `catch (Throwable error)`: Rust panics are caught as well.
         let outcome = catch(|| -> AppResult<()> {
@@ -241,7 +248,7 @@ impl Integration {
             jcall!(intent, "android/content/Intent", "addFlags", "(I)Landroid/content/Intent;", INTENT_FLAG_ACTIVITY_NEW_TASK)?;
             let activity = self.start_activity_sync(&intent)?;
             let app = MainActivity::from_java(activity.as_obj());
-            jx::log::i("NoteMakerPerformance", "Activity started");
+            jx::log::i(crate::jx::log::PERFORMANCE, "Activity started");
             self.wait_for_idle_sync()?;
             let arguments = self.arguments.get().ok_or_else(null_pointer)?;
             if bundle_string(&arguments, "action")?.as_deref() == Some("bridge") {
@@ -359,7 +366,7 @@ impl Integration {
         if action == "file-preview" {
             let snapshot = app.replica().read()?;
             let preview = crate::document_browser::DocumentBrowser::thumbnail(&snapshot)?;
-            let ink = crate::android_canvas::bitmap_pixels(&preview)?.into_iter().filter(|p| *p != COLOR_WHITE).count();
+            let ink = crate::android_canvas::bitmap_pixels(&preview)?.0.into_iter().filter(|p| *p != COLOR_WHITE).count();
             recycle_bitmap(&preview)?;
             if ink == 0 {
                 return Err(AppError::illegal_state("Document preview contains no drawing"));
@@ -386,7 +393,7 @@ impl Integration {
                 cli_args.push(arguments_json.get_string(i)?);
             }
             let cli_args: Vec<&str> = cli_args.iter().map(String::as_str).collect();
-            let mut started = app.start_cli(&cli_args)?;
+            let mut started = app.start_cli(crate::app_replica::CliArgs(&cli_args))?;
             let input = base64_decode(Some(&bundle_string_or(arguments, "input", "")?))?;
             if let Some(mut stdin) = started.stdin.take() {
                 stdin.write_all(&input)?;
@@ -473,13 +480,13 @@ impl Integration {
             let entity = object! {"kind" => "object", "id" => "locked-undo-object", "page" => app.page.get()};
             let proxy = replica_service::ensure(&app.this)?;
             proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "select", "-"], "input" => object! {"session" => session, "page" => app.page.get(), "entities" => vec![Value::Object(entity)]}})?;
-            self.run_on_main_sync(|| app.history(false))??;
+            self.run_on_main_sync(|| app.history(notemaker_core::store::HistoryDirection::Undo))??;
             self.wait_until(&|| Ok(!app.history_pending.get()), 10000, "rejected locked undo")?;
             if app.undo.get() != undo_before || app.redo.get() != redo_before || model_before != json::write_map(&app.model().json()) {
                 return Err(AppError::illegal_state("Rejected locked undo changed model or local history"));
             }
             proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "deselect", session]})?;
-            self.run_on_main_sync(|| app.history(false))??;
+            self.run_on_main_sync(|| app.history(notemaker_core::store::HistoryDirection::Undo))??;
             self.wait_until(&|| Ok(!app.history_pending.get() && app.undo.with(|u| u.len()) as i64 == undo_before.len() as i64 - 1), 10000, "unlocked undo")?;
             if app.model().object_active.get("locked-undo-object") != Some(&false) || app.redo.with(|r| r.len()) != redo_before.len() + 1 {
                 return Err(AppError::illegal_state("Undo did not succeed after foreign lease release"));
@@ -536,7 +543,7 @@ impl Integration {
             self.wait_for_idle_sync()?;
             self.run_on_main_sync(|| {
                 app.selecting.set(true);
-                Integration::gesture(app, 50.0, 50.0, 500.0, 500.0, false)
+                Integration::gesture(app, GestureDrag { x: 50.0, y: 50.0, width: 500.0, height: 500.0 }, GestureEnd::Up)
             })??;
             self.wait_for_selection_condition(app, &|| Ok(app.selected_entities.with(|s| s.len()) == 2), "lasso selection")?;
             self.drain_writes()?;
@@ -553,7 +560,7 @@ impl Integration {
             }
             self.run_on_main_sync(|| app.deselect())??;
             self.drain_writes()?;
-            self.run_on_main_sync(|| app.select_at(400.0, 250.0))??;
+            self.run_on_main_sync(|| app.select_at(crate::main_activity::DocPointF { x: 400.0, y: 250.0 }))??;
             self.wait_for_selection_condition(app, &|| Ok(app.selected_entities.with(|s| s.len()) == 1), "stroke midpoint selection")?;
             let selected = app.selected_entities.get();
             if !id_is(first(&selected)?, "lasso-stroke") {
@@ -565,7 +572,7 @@ impl Integration {
         if action == "freeform-lasso" {
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
-            let start = jx::uptime_millis();
+            let start = jx::uptime_millis().0;
             let path: [[f32; 2]; 4] = [[100.0, 100.0], [300.0, 100.0], [100.0, 300.0], [100.0, 100.0]];
             self.run_on_main_sync(|| -> AppResult<()> {
                 app.selecting.set(true);
@@ -578,7 +585,7 @@ impl Integration {
                         MOTIONEVENT_ACTION_MOVE
                     };
                     let canvas = app.canvas();
-                    let event = jstatic!("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", start, start + i as i64 * 40, mode, point[0] * canvas.scale(), point[1] * canvas.scale(), 0)?.some();
+                    let event = jstatic!("android/view/MotionEvent", "obtain", "(JJIFFI)Landroid/view/MotionEvent;", start, start + i as i64 * 40, mode, point[0] * canvas.scale().0, point[1] * canvas.scale().0, 0)?.some();
                     canvas.on_touch_event(&event)?;
                     recycle(&event)?;
                 }
@@ -604,7 +611,8 @@ impl Integration {
             self.wait_for_idle_sync()?;
             let first_image = self.capture_canvas(app)?;
             let before = [self.canvas_pixel(app, &first_image, 160.0, 150.0)?, self.canvas_pixel(app, &first_image, 550.0, 550.0)?];
-            if red(before[0]) < 220 || green(before[0]) > 80 || blue(before[0]) > 80 || red(before[1]) > 60 || green(before[1]) > 60 || blue(before[1]) > 60 {
+            let (top, bottom) = (ArgbColor(before[0]).channels(), ArgbColor(before[1]).channels());
+            if top.red < 220 || top.green > 80 || top.blue > 80 || bottom.red > 60 || bottom.green > 60 || bottom.blue > 60 {
                 return Err(AppError::illegal_state(format!("Template/layer paint order is incorrect: [{}, {}]", before[0], before[1])));
             }
             let proxy = replica_service::ensure(&app.this)?;
@@ -617,8 +625,9 @@ impl Integration {
             self.wait_for_idle_sync()?;
             let second = self.capture_canvas(app)?;
             let after = self.canvas_pixel(app, &second, 160.0, 150.0)?;
-            if blue(after) < 220 || red(after) > 80 {
-                return Err(AppError::illegal_state(format!("Layer reorder did not update Android compositing: {},{},{}", red(after), green(after), blue(after))));
+            let after = ArgbColor(after).channels();
+            if after.blue < 220 || after.red > 80 {
+                return Err(AppError::illegal_state(format!("Layer reorder did not update Android compositing: {},{},{}", after.red, after.green, after.blue)));
             }
             recycle_bitmap(&first_image)?;
             recycle_bitmap(&second)?;
@@ -700,7 +709,7 @@ impl Integration {
                 let mut output = Vec::new();
                 if let Some(s) = stdout.as_mut() {
                     if let Err(e) = Integration::copy(s, &mut output) {
-                        jx::log::e_err("NoteMaker", "CLI stdout copy failed", &e);
+                        jx::log::e_err(crate::jx::log::NOTEMAKER, "CLI stdout copy failed", &e);
                     }
                 }
                 output
@@ -709,7 +718,7 @@ impl Integration {
                 let mut errors = Vec::new();
                 if let Some(s) = stderr.as_mut() {
                     if let Err(e) = Integration::copy(s, &mut errors) {
-                        jx::log::e_err("NoteMaker", "CLI stderr copy failed", &e);
+                        jx::log::e_err(crate::jx::log::NOTEMAKER, "CLI stderr copy failed", &e);
                     }
                 }
                 errors
@@ -773,13 +782,13 @@ impl Integration {
                 app.host.set(bundle_string_or(arguments, "host", "http://10.0.2.2:8765")?);
                 app.proxy_url.set(bundle_string_or(arguments, "proxyUrl", "")?);
                 app.proxy_token.set(bundle_string_or(arguments, "proxyToken", "")?);
-                app.load(&bundle_string_or(arguments, "type", "fixed")?)?;
+                app.load(&crate::main_activity::DocumentType::from(bundle_string_or(arguments, "type", "fixed")?))?;
                 app.configure_proxy()?;
                 let editor = ui::edit(&app.this)?;
-                ui::put_string(&editor, "host", &app.host.get())?;
-                ui::put_string(&editor, "document", &app.document.get())?;
-                ui::put_string(&editor, "proxyUrl", &app.proxy_url.get())?;
-                ui::put_string(&editor, "proxyToken", &app.proxy_token.get())?;
+                ui::put_string(&editor, &ui::PrefKey::from("host"), &ui::PrefText::from(&app.host.get()))?;
+                ui::put_string(&editor, &ui::PrefKey::from("document"), &ui::PrefText::from(&app.document.get()))?;
+                ui::put_string(&editor, &ui::PrefKey::from("proxyUrl"), &ui::PrefText::from(&app.proxy_url.get()))?;
+                ui::put_string(&editor, &ui::PrefKey::from("proxyToken"), &ui::PrefText::from(&app.proxy_token.get()))?;
                 jcall!(editor, "android/content/SharedPreferences$Editor", "commit", "()Z")?;
             }
             if action == "live-draw" {
@@ -793,14 +802,15 @@ impl Integration {
                 app.pan.set(false);
                 let shift = parse_float(&bundle_string_or(arguments, "shift", "0")?)?;
                 let canvas = app.canvas();
-                let scale = canvas.scale();
-                let start = jx::uptime_millis();
+                let scale = canvas.scale().0;
+                let start = jx::uptime_millis().0;
                 let count = 12;
                 let finger = bundle_string_or(arguments, "tool", "stylus")? == "finger";
                 for i in 0..count {
-                    let tool_type = if finger { MOTIONEVENT_TOOL_TYPE_FINGER } else { MOTIONEVENT_TOOL_TYPE_STYLUS };
-                    let property = pointer_properties(0, tool_type)?;
-                    let coords = pointer_coords(((100 + i * 30) as f32 + shift) * scale, ((200 + i * 20) as f32 + shift) * scale, 0.2f32 + i as f32 * 0.06f32, 1.0)?;
+                    let tool_type = if finger { PointerTool::Finger } else { PointerTool::Stylus };
+                    let property = pointer_properties(PointerId(0), tool_type)?;
+                    let point = ScreenPoint { x: ((100 + i * 30) as f32 + shift) * scale, y: ((200 + i * 20) as f32 + shift) * scale };
+                    let coords = pointer_coords(point, StylusPressure(0.2f32 + i as f32 * 0.06f32), TouchSize(1.0))?;
                     let event_action = if i == 0 {
                         MOTIONEVENT_ACTION_DOWN
                     } else if i == count - 1 {
@@ -808,8 +818,8 @@ impl Integration {
                     } else {
                         MOTIONEVENT_ACTION_MOVE
                     };
-                    let source = if tool_type == MOTIONEVENT_TOOL_TYPE_FINGER { INPUTDEVICE_SOURCE_TOUCHSCREEN } else { INPUTDEVICE_SOURCE_STYLUS };
-                    let event = obtain(start, start + i as i64 * 20, event_action, &[&property], &[&coords], source)?;
+                    let source = if tool_type == PointerTool::Finger { InputSource::Touchscreen } else { InputSource::Stylus };
+                    let event = obtain(UptimeMillis(start), UptimeMillis(start + i as i64 * 20), MotionAction(event_action), &Pointers::single(property, coords), source)?;
                     canvas.on_touch_event(&event)?;
                     if i == 0 {
                         *drawn_stroke = canvas.current.get();
@@ -821,22 +831,22 @@ impl Integration {
                 }
             }
             if action == "shape" {
-                app.set_drawing_tool(Some(&bundle_string_or(arguments, "shape", "triangle")?))?;
+                app.set_drawing_tool(Some(&notemaker_core::ids::ShapeId::from(bundle_string_or(arguments, "shape", "triangle")?)))?;
                 app.object_fill_color.set(COLOR_LTGRAY);
                 let x = parse_float(&bundle_string_or(arguments, "x", "100")?)?;
                 let y = parse_float(&bundle_string_or(arguments, "y", "100")?)?;
                 let w = parse_float(&bundle_string_or(arguments, "w", "160")?)?;
                 let h = parse_float(&bundle_string_or(arguments, "h", "120")?)?;
-                let cancel = parse_boolean(&bundle_string_or(arguments, "cancel", "false")?)?;
-                Integration::gesture(app, x, y, w, h, cancel)?;
+                let end = if parse_boolean(&bundle_string_or(arguments, "cancel", "false")?)? { GestureEnd::Cancel } else { GestureEnd::Up };
+                Integration::gesture(app, GestureDrag { x, y, width: w, height: h }, end)?;
                 app.set_drawing_tool(None)?;
             }
             if action == "fill-tap" {
                 app.set_drawing_tool(None)?;
                 app.object_fill_color.set(COLOR_RED);
-                app.enqueue(&jo! {"kind" => "object", "object" => MainActivity::id(), "shape" => "rect", "layer" => app.selected.get(), "page" => app.page.get(), "x" => 100, "y" => 100, "w" => 240, "h" => 180, "color" => COLOR_BLACK, "width" => 5, "fontSize" => 24, "text" => ""})?;
+                app.enqueue(&jo! {"kind" => "object", "object" => String::from(MainActivity::id()), "shape" => "rect", "layer" => app.selected.get(), "page" => app.page.get(), "x" => 100, "y" => 100, "w" => 240, "h" => 180, "color" => COLOR_BLACK, "width" => 5, "fontSize" => 24, "text" => ""})?;
                 app.fill_tap_mode.set(true);
-                Integration::gesture(app, 180.0, 160.0, 0.0, 0.0, false)?;
+                Integration::gesture(app, GestureDrag { x: 180.0, y: 160.0, width: 0.0, height: 0.0 }, GestureEnd::Up)?;
             }
             if action == "collaboration" {
                 app.set_drawing_tool(None)?;
@@ -879,18 +889,18 @@ impl Integration {
                 app.enqueue(&jo! {"kind" => "object", "object" => "lasso-object", "shape" => "rect", "layer" => app.selected.get(), "page" => app.page.get(), "x" => 100, "y" => 100, "w" => 150, "h" => 150, "color" => COLOR_BLACK, "width" => 5, "fontSize" => 24, "text" => ""})?;
             }
             if action == "mixed-drawing" {
-                app.set_drawing_tool(Some("triangle"))?;
-                Integration::gesture(app, 100.0, 100.0, 100.0, 100.0, false)?;
+                app.set_drawing_tool(Some(&notemaker_core::ids::ShapeId::from("triangle")))?;
+                Integration::gesture(app, GestureDrag { x: 100.0, y: 100.0, width: 100.0, height: 100.0 }, GestureEnd::Up)?;
                 app.set_drawing_tool(None)?;
-                Integration::gesture(app, 300.0, 100.0, 100.0, 100.0, false)?;
-                app.set_drawing_tool(Some("star"))?;
-                Integration::gesture(app, 100.0, 300.0, 100.0, 100.0, false)?;
+                Integration::gesture(app, GestureDrag { x: 300.0, y: 100.0, width: 100.0, height: 100.0 }, GestureEnd::Up)?;
+                app.set_drawing_tool(Some(&notemaker_core::ids::ShapeId::from("star")))?;
+                Integration::gesture(app, GestureDrag { x: 100.0, y: 300.0, width: 100.0, height: 100.0 }, GestureEnd::Up)?;
                 app.set_drawing_tool(None)?;
-                Integration::gesture(app, 300.0, 300.0, 100.0, 100.0, false)?;
-                app.history(false)?; // Pending object saves must block this attempt.
+                Integration::gesture(app, GestureDrag { x: 300.0, y: 300.0, width: 100.0, height: 100.0 }, GestureEnd::Up)?;
+                app.history(notemaker_core::store::HistoryDirection::Undo)?; // Pending object saves must block this attempt.
             }
             if action == "text" {
-                app.place_text(Some(&bundle_string_or(arguments, "text", "Editable text")?), 32.0, 300.0, 400.0)?;
+                app.place_text(Some(&notemaker_core::style::TextContent::from(bundle_string_or(arguments, "text", "Editable text")?)), notemaker_core::style::FontSize(32.0), crate::main_activity::DocPointF { x: 300.0, y: 400.0 })?;
             }
             if action == "layer" {
                 app.selected.set(bundle_string_or(arguments, "layer", "test-layer")?);
@@ -904,10 +914,10 @@ impl Integration {
                 app.save();
             }
             if action == "undo" {
-                app.history(false)?;
+                app.history(notemaker_core::store::HistoryDirection::Undo)?;
             }
             if action == "redo" {
-                app.history(true)?;
+                app.history(notemaker_core::store::HistoryDirection::Redo)?;
             }
             if action == "page" {
                 app.page.set(parse_int(&bundle_string_or(arguments, "page", "1")?)?);
@@ -917,7 +927,7 @@ impl Integration {
                 app.erase.set(true);
                 let shift = parse_float(&bundle_string_or(arguments, "shift", "0")?)?;
                 let canvas = app.canvas();
-                canvas.erase_at((200.0 + shift) * canvas.scale(), (266.0 + shift) * canvas.scale())?;
+                canvas.erase_at(crate::main_activity::ScreenPoint { x: (200.0 + shift) * canvas.scale().0, y: (266.0 + shift) * canvas.scale().0 })?;
                 app.save();
             }
             app.update()?;
@@ -925,9 +935,9 @@ impl Integration {
         if action == "gesture-routing" {
             app.set_drawing_tool(None)?;
             let strokes_before = app.strokes.with(|s| s.len());
-            let start = jx::uptime_millis();
+            let start = jx::uptime_millis().0;
             let canvas = app.canvas();
-            let scale = canvas.scale();
+            let scale = canvas.scale().0;
             let send = |event: Obj| -> AppResult<()> {
                 canvas.on_touch_event(&event)?;
                 recycle(&event)?;
@@ -976,7 +986,7 @@ impl Integration {
         let item = || vec![object! {"kind" => "object", "id" => "tool-switch-item"}];
         self.run_on_main_sync(|| -> AppResult<()> {
             app.start_selection(item())?;
-            app.editor().open_tool("pen", Some(&app.canvas().view()))
+            app.editor().open_tool(&ToolKind::from("pen"), Some(&app.canvas().view()))
         })??;
         release.count_down();
         self.drain_writes()?;
@@ -995,7 +1005,7 @@ impl Integration {
         self.run_on_main_sync(|| app.start_selection(item()))??;
         self.wait_for_selection(app, 1, "active selection for Select mode")?;
         let session = app.selection_session.get();
-        self.run_on_main_sync(|| app.editor().open_tool("select", Some(&app.canvas().view())))??;
+        self.run_on_main_sync(|| app.editor().open_tool(&ToolKind::from("select"), Some(&app.canvas().view())))??;
         self.drain_writes()?;
         state = app.replica().read()?;
         leases = map_or_empty(&state, "leases")?;
@@ -1007,9 +1017,9 @@ impl Integration {
         let model_before = json::write_map(&app.model().json());
         let undo_before = app.undo.get();
         let revision_before = app.revision.get();
-        self.run_on_main_sync(|| app.preview_selection(1.0, 120.0, 20.0))??;
+        self.run_on_main_sync(|| app.preview_selection(notemaker_core::collaboration::SelectionTransform { scale: 1.0, dx: 120.0, dy: 20.0 }))??;
         self.wait_until(&|| Ok(app.transform_previews.with(|p| p.contains_key(&session))), 10000, "active transform preview before tool switch")?;
-        self.run_on_main_sync(|| app.editor().open_tool("pen", Some(&app.canvas().view())))??;
+        self.run_on_main_sync(|| app.editor().open_tool(&ToolKind::from("pen"), Some(&app.canvas().view())))??;
         self.drain_writes()?;
         self.wait_for_idle_sync()?;
         self.drain_writes()?;
@@ -1027,7 +1037,7 @@ impl Integration {
                 self.run_on_main_sync(|| app.start_selection(item()))??;
                 self.wait_for_selection(app, 1, &format!("selection before {kind} switch"))?;
                 let selected_tool = kind;
-                self.run_on_main_sync(|| app.editor().open_tool(selected_tool, Some(&app.canvas().view())))??;
+                self.run_on_main_sync(|| app.editor().open_tool(&ToolKind::from(selected_tool), Some(&app.canvas().view())))??;
                 self.drain_writes()?;
                 self.wait_for_idle_sync()?;
                 self.drain_writes()?;
@@ -1041,7 +1051,7 @@ impl Integration {
         }
         self.run_on_main_sync(|| app.start_selection(item()))??;
         self.wait_for_selection(app, 1, "selection before shape setter")?;
-        self.run_on_main_sync(|| app.set_drawing_tool(Some("rect")))??;
+        self.run_on_main_sync(|| app.set_drawing_tool(Some(&notemaker_core::ids::ShapeId::from("rect"))))??;
         self.drain_writes()?;
         self.wait_for_idle_sync()?;
         self.drain_writes()?;
@@ -1067,8 +1077,8 @@ impl Integration {
             return Err(AppError::illegal_state("deselect race gate did not start"));
         }
         self.run_on_main_sync(|| -> AppResult<()> {
-            app.deselect_entity("object", "tool-switch-item")?;
-            app.editor().open_tool("move", Some(&app.canvas().view()))
+            app.deselect_entity(&notemaker_core::ids::EntityKind::object(), &notemaker_core::ids::EntityId::from("tool-switch-item"))?;
+            app.editor().open_tool(&ToolKind::from("move"), Some(&app.canvas().view()))
         })??;
         deselect_release.count_down();
         self.drain_writes()?;
@@ -1087,10 +1097,10 @@ impl Integration {
     fn report_state(&self, app: &Arc<MainActivity>, arguments: &Obj, action: &str, result: &Obj) -> AppResult<()> {
         if action == "state" && parse_boolean(&bundle_string_or(arguments, "verifyCache", "false")?)? {
             let canvas = app.canvas();
-            let width = canvas.width();
-            let height = canvas.height();
-            let cached = create_bitmap(width, height)?;
-            let reference = create_bitmap(width, height)?;
+            let width = canvas.width().0;
+            let height = canvas.height().0;
+            let cached = create_bitmap(BitmapSize { width, height })?;
+            let reference = create_bitmap(BitmapSize { width, height })?;
             draw_view(&canvas.view(), &cached)?;
             canvas.cull_tile_items.set(false);
             let drawn = draw_view(&canvas.view(), &reference);
@@ -1101,9 +1111,10 @@ impl Integration {
             let (mut mismatched, mut min_x, mut min_y, mut max_x, mut max_y, mut max_channel_diff) = (0, width, height, -1, -1, 0);
             for i in 0..a.len() {
                 if a[i] != b[i] {
-                    let dr = (red(a[i]) - red(b[i])).abs();
-                    let dg = (green(a[i]) - green(b[i])).abs();
-                    let db = (blue(a[i]) - blue(b[i])).abs();
+                    let (ca, cb) = (ArgbColor(a[i]).channels(), ArgbColor(b[i]).channels());
+                    let dr = (ca.red - cb.red).abs();
+                    let dg = (ca.green - cb.green).abs();
+                    let db = (ca.blue - cb.blue).abs();
                     mismatched += 1;
                     let x = i as i32 % width;
                     let y = i as i32 / width;
@@ -1146,25 +1157,25 @@ impl Integration {
             "editorUndoCount" => app.undo.with(|u| u.len()) as i32,
             "storedUndoCount" => stored_undo,
             "events" => events,
-            "visible" => app.canvas().visible("test-layer"),
+            "visible" => app.canvas().visible(&notemaker_core::ids::LayerId::from("test-layer")),
             "page" => app.page.get(),
             "model" => JSONObject::parse(&json::write_map(&app.model().json()))?,
         };
         let text = state.to_string();
         write_file(app, "integration.json", text.as_bytes())?;
         if parse_boolean(&bundle_string_or(arguments, "image", "false")?)? {
-            let image = create_bitmap(1000, 1400)?;
+            let image = create_bitmap(BitmapSize { width: 1000, height: 1400 })?;
             let c = jnew!("android/graphics/Canvas", "(Landroid/graphics/Bitmap;)V", &image)?;
             jcall!(c, "android/graphics/Canvas", "drawColor", "(I)V", COLOR_WHITE)?;
             let hidden = app.hidden.get();
             let mut surface = crate::android_canvas::AndroidCanvas::new(c);
-            notemaker_core::render::draw(&app.model(), app.page.get(), &hidden, &mut notemaker_cli::png::Png::new(&mut surface))?;
+            notemaker_core::render::draw(&app.model(), notemaker_core::ids::PageNumber(app.page.get()), &notemaker_core::render::HiddenLayers(hidden), &mut notemaker_cli::png::Png::new(&mut surface))?;
             write_png(app, "integration.png", &image)?;
             let pixels = crate::android_canvas::bitmap_pixels(&image)?;
             let (mut count, mut min_x, mut min_y, mut max_x, mut max_y) = (0, 1000, 1400, -1, -1);
             for (i, pixel) in pixels.iter().enumerate() {
-                let pixel = *pixel;
-                if red(pixel) < 245 || green(pixel) < 245 || blue(pixel) < 245 {
+                let pixel = ArgbColor(*pixel).channels();
+                if pixel.red < 245 || pixel.green < 245 || pixel.blue < 245 {
                     count += 1;
                     let x = i as i32 % 1000;
                     let y = i as i32 / 1000;
@@ -1211,11 +1222,11 @@ impl Integration {
         Ok(())
     }
     /// `private void waitForSelection(MainActivity app, int count, String label) throws Exception`.
-    pub fn wait_for_selection(&self, app: &Arc<MainActivity>, count: i32, label: &str) -> AppResult<()> {
+    fn wait_for_selection(&self, app: &Arc<MainActivity>, count: i32, label: &str) -> AppResult<()> {
         self.wait_for_selection_condition(app, &|| Ok(app.selection_session.with(|s| s.is_some()) && app.selected_entities.with(|s| s.len()) as i32 >= count), label)
     }
     /// `private void waitForSelectionCondition(MainActivity app, Callable<Boolean> condition, String label) throws Exception`.
-    pub fn wait_for_selection_condition(&self, app: &Arc<MainActivity>, condition: &dyn Fn() -> AppResult<bool>, label: &str) -> AppResult<()> {
+    fn wait_for_selection_condition(&self, app: &Arc<MainActivity>, condition: &dyn Fn() -> AppResult<bool>, label: &str) -> AppResult<()> {
         self.wait_until(&|| Ok(app.selection_error.with(|e| e.is_some()) || condition()?), 30000, label)?;
         if let Some(error) = app.selection_error.get() {
             return Err(AppError::illegal_state(format!("Could not acquire {label}: {error}")));
@@ -1223,9 +1234,9 @@ impl Integration {
         Ok(())
     }
     /// `private void waitUntil(Callable<Boolean> condition, long timeout, String label) throws Exception`.
-    pub fn wait_until(&self, condition: &dyn Fn() -> AppResult<bool>, timeout: i64, label: &str) -> AppResult<()> {
-        let deadline = jx::current_time_millis() + timeout;
-        while jx::current_time_millis() < deadline {
+    fn wait_until(&self, condition: &dyn Fn() -> AppResult<bool>, timeout: i64, label: &str) -> AppResult<()> {
+        let deadline = jx::current_time_millis().0 + timeout;
+        while jx::current_time_millis().0 < deadline {
             self.wait_for_idle_sync()?;
             if condition()? {
                 return Ok(());
@@ -1239,11 +1250,11 @@ impl Integration {
         use notemaker_core::store::Store;
         let id = "android-conflict-item";
         let root = ui::cache_dir(&app.this)?.join("drawing-conflict-fixture");
-        let document = app.document.get();
+        let document = notemaker_core::ids::DocumentName::from(app.document.get());
         let a = Store::writer(&root.join("a"), &document)?;
         let b = Store::writer(&root.join("b"), &document)?;
-        let seed = notemaker_core::actions::drawing(&object! {"object" => id, "shape" => "rect", "x" => 80, "y" => 90, "w" => 180, "h" => 120, "color" => COLOR_BLACK, "width" => 5}, "base")?;
-        a.append(&seed, "fixture-seed")?;
+        let seed = notemaker_core::actions::drawing(&object! {"object" => id, "shape" => "rect", "x" => 80, "y" => 90, "w" => 180, "h" => 120, "color" => COLOR_BLACK, "width" => 5}, &notemaker_core::ids::LayerId::from("base"))?;
+        a.append(&seed, &notemaker_core::ids::ActorId::from("fixture-seed"))?;
         let common = {
             let state = a.read()?;
             let pending = json::list(state.get("pending").unwrap_or(&Value::Null))?;
@@ -1251,12 +1262,12 @@ impl Integration {
             json::map(first)?.clone()
         };
         b.accept(&[Value::Object(common)], None)?;
-        a.commit("writer-a", &mut |model| {
+        a.commit(&notemaker_core::ids::ActorId::from("writer-a"), &mut |model| {
             let mut changed = (**model.objects.get(id).ok_or_else(notemaker_core::Error::null_pointer)?).clone();
             changed.insert("x".into(), Value::from(100));
             Ok(vec![Value::Object(changed)])
         })?;
-        b.commit("writer-b", &mut |model| {
+        b.commit(&notemaker_core::ids::ActorId::from("writer-b"), &mut |model| {
             let mut changed = (**model.objects.get(id).ok_or_else(notemaker_core::Error::null_pointer)?).clone();
             changed.insert("shape".into(), Value::from("ellipse"));
             changed.insert("x".into(), Value::from(250));
@@ -1295,24 +1306,24 @@ impl Integration {
     pub fn capture_canvas(&self, app: &Arc<MainActivity>) -> AppResult<Obj> {
         self.run_on_main_sync(|| -> AppResult<Obj> {
             let canvas = app.canvas();
-            let bitmap = create_bitmap(canvas.width(), canvas.height())?;
+            let bitmap = create_bitmap(BitmapSize { width: canvas.width().0, height: canvas.height().0 })?;
             draw_view(&canvas.view(), &bitmap)?;
             Ok(bitmap)
         })?
     }
     /// `private int canvasPixel(MainActivity app, Bitmap bitmap, float x, float y)`.
-    pub fn canvas_pixel(&self, app: &Arc<MainActivity>, bitmap: &Obj, x: f32, y: f32) -> AppResult<i32> {
+    fn canvas_pixel(&self, app: &Arc<MainActivity>, bitmap: &Obj, x: f32, y: f32) -> AppResult<i32> {
         let canvas = app.canvas();
-        let (width, height) = bitmap_size(bitmap)?;
-        let px = 0.max((width - 1).min(ui::round_f32(canvas.offset_x.get() + x * canvas.scale() * canvas.zoom.get())));
-        let py = 0.max((height - 1).min(ui::round_f32(canvas.offset_y.get() + y * canvas.scale() * canvas.zoom.get())));
-        Ok(jcall!(bitmap, "android/graphics/Bitmap", "getPixel", "(II)I", px, py)?.int())
+        let BitmapSize { width, height } = bitmap_size(bitmap)?;
+        let px = 0.max((width - 1).min(ui::round_f32(canvas.offset_x.get() + x * canvas.scale().0 * canvas.zoom.get())));
+        let py = 0.max((height - 1).min(ui::round_f32(canvas.offset_y.get() + y * canvas.scale().0 * canvas.zoom.get())));
+        Ok(pixel(bitmap, BitmapPoint { x: px, y: py })?.0)
     }
     /// `private boolean imagesDiffer(Bitmap a, Bitmap b)`: compares every
     /// fourth pixel in both directions (read in bulk).
     pub fn images_differ(&self, a: &Obj, b: &Obj) -> AppResult<bool> {
-        let (aw, ah) = bitmap_size(a)?;
-        let (bw, bh) = bitmap_size(b)?;
+        let BitmapSize { width: aw, height: ah } = bitmap_size(a)?;
+        let BitmapSize { width: bw, height: bh } = bitmap_size(b)?;
         if aw != bw || ah != bh {
             return Ok(true);
         }
@@ -1421,62 +1432,47 @@ fn accept_ready(server: &std::net::TcpListener, timeout_ms: i32) -> AppResult<()
     }
 }
 
-/// `Color.red/green/blue(color)`.
-pub(crate) fn red(c: i32) -> i32 {
-    (c >> 16) & 0xff
-}
-pub(crate) fn green(c: i32) -> i32 {
-    (c >> 8) & 0xff
-}
-pub(crate) fn blue(c: i32) -> i32 {
-    c & 0xff
-}
-/// `Color.alpha(color)`.
-pub(crate) fn alpha(c: i32) -> i32 {
-    (c as u32 >> 24) as i32
-}
-
 /// `Float.parseFloat(s)` (Java parsing rules).
-pub(crate) fn parse_float(s: &str) -> AppResult<f32> {
+fn parse_float(s: &str) -> AppResult<f32> {
     Ok(jstatic!("java/lang/Float", "parseFloat", "(Ljava/lang/String;)F", s)?.float())
 }
 /// `Integer.parseInt(s)`.
-pub(crate) fn parse_int(s: &str) -> AppResult<i32> {
+fn parse_int(s: &str) -> AppResult<i32> {
     Ok(jstatic!("java/lang/Integer", "parseInt", "(Ljava/lang/String;)I", s)?.int())
 }
 /// `Boolean.parseBoolean(s)`.
-pub(crate) fn parse_boolean(s: &str) -> AppResult<bool> {
+fn parse_boolean(s: &str) -> AppResult<bool> {
     Ok(jstatic!("java/lang/Boolean", "parseBoolean", "(Ljava/lang/String;)Z", s)?.bool())
 }
 /// `android.util.Base64.decode(s, Base64.DEFAULT)`.
-pub(crate) fn base64_decode(s: Option<&str>) -> AppResult<Vec<u8>> {
+fn base64_decode(s: Option<&str>) -> AppResult<Vec<u8>> {
     let bytes = jstatic!("android/util/Base64", "decode", "(Ljava/lang/String;I)[B", s, BASE64_DEFAULT)?.global();
     Ok(bytes.map(|b| jx::byte_array(b.as_obj())).unwrap_or_default())
 }
 
 /// `new Bundle()`.
-pub(crate) fn new_bundle() -> AppResult<Obj> {
+fn new_bundle() -> AppResult<Obj> {
     Ok(jnew!("android/os/Bundle", "()V")?)
 }
 /// `bundle.putString(key, value)`.
-pub(crate) fn put_string(bundle: &Obj, key: &str, value: &str) -> AppResult<()> {
+fn put_string(bundle: &Obj, key: &str, value: &str) -> AppResult<()> {
     jcall!(bundle, "android/os/Bundle", "putString", "(Ljava/lang/String;Ljava/lang/String;)V", key, value)?;
     Ok(())
 }
 /// `bundle.getString(key)`.
-pub(crate) fn bundle_string(bundle: &Obj, key: &str) -> AppResult<Option<String>> {
+fn bundle_string(bundle: &Obj, key: &str) -> AppResult<Option<String>> {
     Ok(jcall!(bundle, "android/os/Bundle", "getString", "(Ljava/lang/String;)Ljava/lang/String;", key)?.string())
 }
 /// `bundle.getString(key, fallback)`.
-pub(crate) fn bundle_string_or(bundle: &Obj, key: &str, fallback: &str) -> AppResult<String> {
+fn bundle_string_or(bundle: &Obj, key: &str, fallback: &str) -> AppResult<String> {
     Ok(jcall!(bundle, "android/os/Bundle", "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", key, fallback)?.string().unwrap_or_else(|| fallback.to_string()))
 }
 /// `bundle.containsKey(key)`.
-pub(crate) fn bundle_contains(bundle: &Obj, key: &str) -> AppResult<bool> {
+fn bundle_contains(bundle: &Obj, key: &str) -> AppResult<bool> {
     Ok(jcall!(bundle, "android/os/Bundle", "containsKey", "(Ljava/lang/String;)Z", key)?.bool())
 }
 /// `bundle.keySet()` in iteration order.
-pub(crate) fn bundle_keys(bundle: &Obj) -> AppResult<Vec<String>> {
+fn bundle_keys(bundle: &Obj) -> AppResult<Vec<String>> {
     let keys = jcall!(bundle, "android/os/Bundle", "keySet", "()Ljava/util/Set;")?.some();
     let array = jcall!(keys, "java/util/Set", "toArray", "()[Ljava/lang/Object;")?.some();
     let mut out = Vec::new();
@@ -1488,36 +1484,114 @@ pub(crate) fn bundle_keys(bundle: &Obj) -> AppResult<Vec<String>> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// Synthesized MotionEvents
+
+/// A synthesized stylus drag in page units at the canvas view's base scale
+/// (multiplied by [`crate::main_activity::CanvasView::scale`], before zoom
+/// and pan): from `(x, y)` to `(x + width, y + height)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GestureDrag {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// How a synthesized gesture ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GestureEnd {
+    /// `MotionEvent.ACTION_UP`
+    Up,
+    /// `MotionEvent.ACTION_CANCEL`
+    Cancel,
+}
+
+/// `MotionEvent.PointerProperties.id` of a synthesized pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointerId(pub i32);
+
+/// `MotionEvent.PointerProperties.toolType` of a synthesized pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerTool {
+    /// `MotionEvent.TOOL_TYPE_FINGER`
+    Finger,
+    /// `MotionEvent.TOOL_TYPE_STYLUS`
+    Stylus,
+}
+impl<'a> From<PointerTool> for Arg<'a> {
+    fn from(tool: PointerTool) -> Self {
+        Arg::Int(match tool {
+            PointerTool::Finger => MOTIONEVENT_TOOL_TYPE_FINGER,
+            PointerTool::Stylus => MOTIONEVENT_TOOL_TYPE_STYLUS,
+        })
+    }
+}
+
+/// `MotionEvent.PointerCoords.size`: the normalized contact size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TouchSize(pub f32);
+
+/// The `InputDevice.SOURCE_*` a synthesized MotionEvent claims.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputSource {
+    /// `InputDevice.SOURCE_TOUCHSCREEN`
+    Touchscreen,
+    /// `InputDevice.SOURCE_STYLUS`
+    Stylus,
+}
+impl<'a> From<InputSource> for Arg<'a> {
+    fn from(source: InputSource) -> Self {
+        Arg::Int(match source {
+            InputSource::Touchscreen => INPUTDEVICE_SOURCE_TOUCHSCREEN,
+            InputSource::Stylus => INPUTDEVICE_SOURCE_STYLUS,
+        })
+    }
+}
+
+/// The `PointerProperties[]` and `PointerCoords[]` of one synthesized
+/// MotionEvent, in pointer-index order (both lists have one entry per pointer).
+pub struct Pointers {
+    pub properties: Vec<Obj>,
+    pub coords: Vec<Obj>,
+}
+impl Pointers {
+    /// A single pointer.
+    pub fn single(properties: Obj, coords: Obj) -> Pointers {
+        Pointers { properties: vec![properties], coords: vec![coords] }
+    }
+}
+
 /// `new MotionEvent.PointerProperties()` with `id` and `toolType`.
-pub(crate) fn pointer_properties(id: i32, tool_type: i32) -> AppResult<Obj> {
+pub(crate) fn pointer_properties(id: PointerId, tool: PointerTool) -> AppResult<Obj> {
     let property = jnew!("android/view/MotionEvent$PointerProperties", "()V")?;
-    jset!(property, "android/view/MotionEvent$PointerProperties", "id", "I", id)?;
-    jset!(property, "android/view/MotionEvent$PointerProperties", "toolType", "I", tool_type)?;
+    jset!(property, "android/view/MotionEvent$PointerProperties", "id", "I", id.0)?;
+    jset!(property, "android/view/MotionEvent$PointerProperties", "toolType", "I", tool)?;
     Ok(property)
 }
 /// `new MotionEvent.PointerCoords()` with `x`, `y`, `pressure`, `size`.
-pub(crate) fn pointer_coords(x: f32, y: f32, pressure: f32, size: f32) -> AppResult<Obj> {
+pub(crate) fn pointer_coords(point: ScreenPoint, pressure: StylusPressure, size: TouchSize) -> AppResult<Obj> {
     let coords = jnew!("android/view/MotionEvent$PointerCoords", "()V")?;
-    jset!(coords, "android/view/MotionEvent$PointerCoords", "x", "F", x)?;
-    jset!(coords, "android/view/MotionEvent$PointerCoords", "y", "F", y)?;
-    jset!(coords, "android/view/MotionEvent$PointerCoords", "pressure", "F", pressure)?;
-    jset!(coords, "android/view/MotionEvent$PointerCoords", "size", "F", size)?;
+    jset!(coords, "android/view/MotionEvent$PointerCoords", "x", "F", point.x)?;
+    jset!(coords, "android/view/MotionEvent$PointerCoords", "y", "F", point.y)?;
+    jset!(coords, "android/view/MotionEvent$PointerCoords", "pressure", "F", pressure.0)?;
+    jset!(coords, "android/view/MotionEvent$PointerCoords", "size", "F", size.0)?;
     Ok(coords)
 }
 /// `MotionEvent.obtain(down, time, action, count, properties, coords, 0, 0, 1, 1, 0, 0, source, 0)`.
-pub(crate) fn obtain(down: i64, time: i64, action: i32, properties: &[&Obj], coords: &[&Obj], source: i32) -> AppResult<Obj> {
-    let p: Vec<Option<&Obj>> = properties.iter().map(|o| Some(*o)).collect();
-    let c: Vec<Option<&Obj>> = coords.iter().map(|o| Some(*o)).collect();
+pub(crate) fn obtain(down: UptimeMillis, time: UptimeMillis, action: MotionAction, pointers: &Pointers, source: InputSource) -> AppResult<Obj> {
+    let p: Vec<Option<&Obj>> = pointers.properties.iter().map(Some).collect();
+    let c: Vec<Option<&Obj>> = pointers.coords.iter().map(Some).collect();
     let p = jx::new_object_array("android/view/MotionEvent$PointerProperties", &p)?;
     let c = jx::new_object_array("android/view/MotionEvent$PointerCoords", &c)?;
     Ok(jstatic!(
         "android/view/MotionEvent",
         "obtain",
         "(JJII[Landroid/view/MotionEvent$PointerProperties;[Landroid/view/MotionEvent$PointerCoords;IIFFIIII)Landroid/view/MotionEvent;",
-        down,
-        time,
-        action,
-        properties.len() as i32,
+        down.0,
+        time.0,
+        action.0,
+        pointers.properties.len() as i32,
         &p,
         &c,
         0,
@@ -1537,10 +1611,20 @@ pub(crate) fn recycle(event: &Obj) -> AppResult<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Bitmaps
+
+/// A pixel position in an Android `Bitmap` (`bitmap.getPixel(x, y)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BitmapPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
 /// `Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)`.
-pub(crate) fn create_bitmap(width: i32, height: i32) -> AppResult<Obj> {
+pub(crate) fn create_bitmap(size: BitmapSize) -> AppResult<Obj> {
     let config = crate::android_canvas::argb_8888()?;
-    Ok(jstatic!("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", width, height, &config)?.some())
+    Ok(jstatic!("android/graphics/Bitmap", "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", size.width, size.height, &config)?.some())
 }
 /// `view.draw(new Canvas(bitmap))`.
 pub(crate) fn draw_view(view: &Obj, bitmap: &Obj) -> AppResult<()> {
@@ -1549,8 +1633,12 @@ pub(crate) fn draw_view(view: &Obj, bitmap: &Obj) -> AppResult<()> {
     Ok(())
 }
 /// `bitmap.getWidth()`, `bitmap.getHeight()`.
-pub(crate) fn bitmap_size(bitmap: &Obj) -> AppResult<(i32, i32)> {
-    Ok((jcall!(bitmap, "android/graphics/Bitmap", "getWidth", "()I")?.int(), jcall!(bitmap, "android/graphics/Bitmap", "getHeight", "()I")?.int()))
+pub(crate) fn bitmap_size(bitmap: &Obj) -> AppResult<BitmapSize> {
+    Ok(BitmapSize { width: jcall!(bitmap, "android/graphics/Bitmap", "getWidth", "()I")?.int(), height: jcall!(bitmap, "android/graphics/Bitmap", "getHeight", "()I")?.int() })
+}
+/// `bitmap.getPixel(x, y)`.
+pub(crate) fn pixel(bitmap: &Obj, at: BitmapPoint) -> AppResult<ArgbColor> {
+    Ok(ArgbColor(jcall!(bitmap, "android/graphics/Bitmap", "getPixel", "(II)I", at.x, at.y)?.int()))
 }
 /// `a.sameAs(b)`.
 pub(crate) fn same_as(a: &Obj, b: &Obj) -> AppResult<bool> {
@@ -1562,7 +1650,7 @@ pub(crate) fn recycle_bitmap(bitmap: &Obj) -> AppResult<()> {
     Ok(())
 }
 /// `try (FileOutputStream out = app.openFileOutput(name, 0)) { out.write(bytes); }`.
-pub(crate) fn write_file(app: &MainActivity, name: &str, bytes: &[u8]) -> AppResult<()> {
+fn write_file(app: &MainActivity, name: &str, bytes: &[u8]) -> AppResult<()> {
     let out = jcall!(app.this, "android/content/Context", "openFileOutput", "(Ljava/lang/String;I)Ljava/io/FileOutputStream;", name, 0)?.some();
     let array = jx::new_byte_array(bytes)?;
     let written = jcall!(out, "java/io/FileOutputStream", "write", "([B)V", &array);
@@ -1587,9 +1675,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn colors_and_lines() {
-        let c = 0x80ff4020u32 as i32;
-        assert_eq!((alpha(c), red(c), green(c), blue(c)), (0x80, 0xff, 0x40, 0x20));
+    fn read_lines() {
         assert_eq!(read_line_text(b"{\"a\":1}\r\n"), "{\"a\":1}");
         assert_eq!(read_line_text(b"x"), "x");
     }
