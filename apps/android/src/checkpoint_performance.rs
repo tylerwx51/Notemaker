@@ -64,7 +64,7 @@ fn measure(app: &Arc<MainActivity>) -> AppResult<Map> {
     })
 }
 /// `static Map<String,Object> run(MainActivity app) throws Exception`.
-pub fn run(app: &Arc<MainActivity>) -> AppResult<Map> {
+pub fn run(app: &Arc<MainActivity>) -> AppResult<crate::performance::PerformanceReport> {
     let wal = std::path::PathBuf::from(format!("{}.journal", app.replica().local.file.display()));
     // File.length(): 0 when the file does not exist.
     let length = || std::fs::metadata(&wal).map(|m| m.len() as i64).unwrap_or(0);
@@ -77,7 +77,7 @@ pub fn run(app: &Arc<MainActivity>) -> AppResult<Map> {
     if length() != 0 {
         return Err(AppError::illegal_state("Checkpoint did not clear the WAL"));
     }
-    Ok(object! {"originalJournalBytes" => original, "checkpoint" => first, "noop" => noop})
+    Ok(crate::performance::PerformanceReport(object! {"originalJournalBytes" => original, "checkpoint" => first, "noop" => noop}))
 }
 
 #[cfg(test)]

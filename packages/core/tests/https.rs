@@ -144,10 +144,10 @@ fn https_get_post_and_framing() {
         assert_eq!(json::write_map(&peer.request(chat("host"), None).unwrap()), format!("{{\"host\":\"{host}:{port}\"}}"));
         let e = peer.request(chat("error"), None).unwrap_err();
         assert_eq!((e.kind, e.status, e.message()), (ErrorKind::Http, Some(HttpStatus::from(409)), "nope"));
-        let secret = Endpoint::new(notemaker_core::object! { "url" => url.as_str(), "token" => "secret" }).with_tls_config(trusted(&ca));
+        let secret = Endpoint::new(notemaker_core::object! { "url" => url.as_str(), "token" => "secret" }.into()).with_tls_config(trusted(&ca));
         let body = json::parse("{\"operations\":[1,\"é\"]}").unwrap();
         assert_eq!(
-            json::write_map(&secret.request(ApiPath::Events, Some(&body)).unwrap()),
+            json::write_map(&secret.request(ApiPath::Events, Some((&body).into())).unwrap()),
             "{\"echo\":{\"operations\":[1,\"é\"]},\"auth\":true,\"json\":true}"
         );
     }
@@ -159,7 +159,7 @@ fn https_stream_lines_and_disconnect() {
     let port = server(leaf(&ca, &["localhost"]), |_, _| {
         (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nc\r\ndata: one\n\n\r\n".to_vec(), false)
     });
-    let peer = Endpoint::new(notemaker_core::object! { "url" => format!("https://localhost:{port}") }).with_tls_config(trusted(&ca));
+    let peer = Endpoint::new(notemaker_core::object! { "url" => format!("https://localhost:{port}") }.into()).with_tls_config(trusted(&ca));
     let mut c = peer.open(ApiPath::Stream).unwrap();
     assert_eq!(c.response_code().unwrap(), HttpStatus::OK);
     let closer = c.disconnector();

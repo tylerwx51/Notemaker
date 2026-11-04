@@ -47,7 +47,7 @@ pub struct BitmapSize {
 pub struct VisibleInk(pub IndexMap<String, Entity>);
 
 fn ptr(e: &Entity) -> usize {
-    Arc::as_ptr(e) as *const () as usize
+    Arc::as_ptr(&e.0) as *const () as usize
 }
 
 impl InkCache {
@@ -198,7 +198,7 @@ impl InkCache {
     }
     /// `private static boolean sameInk(Map a, Map b)` (`a == b` is `Arc::ptr_eq`).
     fn same_ink(a: &Entity, b: &Entity) -> bool {
-        Arc::ptr_eq(a, b) || (InkCache::same_base(a, b) && json::objects_equal(a.get("erasures"), b.get("erasures")))
+        a.ptr_eq(b) || (InkCache::same_base(a, b) && json::objects_equal(a.get("erasures"), b.get("erasures")))
     }
     /// `private RectF bounds(Map stroke)`.
     fn bounds(&mut self, stroke: &Entity) -> AppResult<RectF> {
@@ -212,7 +212,7 @@ impl InkCache {
     /// `private static RectF computeBounds(Map stroke)`.
     fn compute_bounds(stroke: &Map) -> AppResult<RectF> {
         if stroke.get("kind").and_then(Value::as_str) == Some("object") {
-            let b = DrawItem::from_map(&Model::new(), stroke.clone())?.paint_bounds(&notemaker_cli::item_coverage::FACTORY)?;
+            let b = DrawItem::from_map(&Model::new(), stroke.clone().into())?.paint_bounds(&notemaker_cli::item_coverage::FACTORY)?;
             return Ok(RectF { left: b.left as f32 - 1.0, top: b.top as f32 - 1.0, right: b.right as f32 + 1.0, bottom: b.bottom as f32 + 1.0 });
         }
         let width = float_value(stroke.get("width"))?;
@@ -256,9 +256,9 @@ mod tests {
 
     #[test]
     fn same_ink() {
-        let a: Entity = Arc::new(map(r#"{"kind":"stroke","color":1,"width":2,"points":[[1,2]],"seq":4}"#));
-        let b: Entity = Arc::new(map(r#"{"kind":"stroke","color":1,"width":2,"points":[[1,2]],"seq":5}"#));
-        let c: Entity = Arc::new(map(r#"{"kind":"stroke","color":1,"width":2,"points":[[1,2]],"erasures":[]}"#));
+        let a: Entity = (Arc::new(map(r#"{"kind":"stroke","color":1,"width":2,"points":[[1,2]],"seq":4}"#))).into();
+        let b: Entity = (Arc::new(map(r#"{"kind":"stroke","color":1,"width":2,"points":[[1,2]],"seq":5}"#))).into();
+        let c: Entity = (Arc::new(map(r#"{"kind":"stroke","color":1,"width":2,"points":[[1,2]],"erasures":[]}"#))).into();
         assert!(InkCache::same_ink(&a, &a));
         assert!(InkCache::same_ink(&a, &b));
         assert!(!InkCache::same_ink(&a, &c));

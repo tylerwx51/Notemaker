@@ -107,6 +107,12 @@ this, and a syntax-only checker cannot resolve imports or type aliases.
   endpoint descriptor (`Endpoint::new(Map)`, `Endpoint::resolve`,
   `LocalProxy::configure` targets), replica lineage IDs, change generations,
   connection timeouts and `Endpoint::cancel(ThreadId)` are outside this pass.
+- 2026-11-03 JSON pass (ADR 0032): 51 warnings remain. `notemaker_core::wire`
+  holds thin newtypes over `serde_json` maps, arrays and values for
+  operations, replica states, entity content and references and action
+  inputs. Each command has its own result wrapper. Small Rust-only shapes are
+  real structs: editor preferences, tile and bounds cache metrics, latency
+  stats, and the UI state of the file browser and GIF player.
 - Moving to `deny` requires fixing or explicitly allowing each crate's
   warnings, then adding the lint to the check runner.
 - Bumping the pinned nightly can break the lint, because rustc internals are

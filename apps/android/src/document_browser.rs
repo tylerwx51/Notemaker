@@ -397,14 +397,13 @@ impl DocumentBrowser {
         self.refresh()
     }
     /// `Map<String,Object> state()`.
-    pub fn state(&self) -> AppResult<Map> {
+    pub fn state(&self) -> AppResult<BrowserState> {
         let search = self.search.get().ok_or_else(|| AppError::java("java.lang.NullPointerException", "search"))?;
-        let visible: Vec<Value> = self.visible.with(|v| v.iter().map(|s| Value::from(s.as_str())).collect());
-        Ok(object! {
-            "mode" => if self.grid_mode.get() { "grid" } else { "list" },
-            "query" => String::from(ui::text_of(&search)?),
-            "loaded" => self.loaded.get(),
-            "visible" => visible,
+        Ok(BrowserState {
+            grid: self.grid_mode.get(),
+            query: String::from(ui::text_of(&search)?),
+            loaded: self.loaded.get(),
+            visible: self.visible.with(|v| v.iter().map(|s| s.to_string()).collect()),
         })
     }
     /// `private boolean current()`.
@@ -773,6 +772,30 @@ impl DocumentBrowser {
         })?;
         show_dialog(&create)?;
         Ok(())
+    }
+}
+
+/// `state()`: the file browser as `ui state` reports it under `files`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BrowserState {
+    /// Grid mode (`"mode": "grid"`) or list mode (`"list"`).
+    pub grid: bool,
+    /// The search field's text.
+    pub query: String,
+    pub loaded: bool,
+    /// The names of the documents currently shown.
+    pub visible: Vec<String>,
+}
+
+impl From<&BrowserState> for Value {
+    fn from(state: &BrowserState) -> Value {
+        let visible: Vec<Value> = state.visible.iter().map(|s| Value::from(s.as_str())).collect();
+        Value::Object(object! {
+            "mode" => if state.grid { "grid" } else { "list" },
+            "query" => state.query.as_str(),
+            "loaded" => state.loaded,
+            "visible" => visible,
+        })
     }
 }
 

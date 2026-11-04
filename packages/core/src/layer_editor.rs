@@ -8,6 +8,7 @@ use crate::error::{require, require_with, Result};
 use crate::jmath;
 use crate::json::{self, Map, Value};
 use crate::model::{Entity, Model};
+use crate::wire::{ActionInput, EntityRefList, EntityRefs};
 use indexmap::IndexMap;
 
 /// `LayerEditor`.
@@ -34,7 +35,7 @@ pub enum HitMode {
 }
 
 /// `LayerEditor.page(request)`: validated integer page (default 0).
-pub fn page(request: &Map) -> Result<PageNumber> {
+pub fn page(request: &ActionInput) -> Result<PageNumber> {
     let zero = Value::from(0);
     let raw = json::get_or_default(request, "page", &zero);
     require(raw.is_number(), "Invalid page")?;
@@ -71,7 +72,7 @@ impl LayerEditor {
     fn build(model: &Model, layer: &str, page: i32, include_inactive: bool, indexed: bool) -> Result<LayerEditor> {
         editable(model, layer, page)?;
         let source: Vec<Entity> = if indexed {
-            model.layer_items(&LayerId::from(layer), PageNumber(page)).as_ref().clone()
+            model.layer_items(&LayerId::from(layer), PageNumber(page)).0.clone()
         } else {
             let mut scoped = Vec::new();
             for o in model.strokes.values().chain(model.objects.values()) {
@@ -104,7 +105,7 @@ impl LayerEditor {
     }
 
     /// `resolve(refs)`: every reference must be in scope.
-    pub fn resolve_refs<'a>(&self, refs: &'a [Value]) -> Result<&'a [Value]> {
+    pub fn resolve_refs<'a>(&self, refs: &'a EntityRefs) -> Result<&'a EntityRefs> {
         for raw in refs {
             let r = json::map(raw)?;
             self.resolve(&EntityKind::from(json::string(r, "kind")?), &EntityId::from(json::string(r, "id")?))?;
@@ -113,7 +114,7 @@ impl LayerEditor {
     }
 
     /// `LayerEditor.requireReferences(model, layer, page, refs)`.
-    pub fn require_references(model: &Model, layer: &LayerId, page: PageNumber, refs: &[Value]) -> Result<()> {
+    pub fn require_references(model: &Model, layer: &LayerId, page: PageNumber, refs: &EntityRefs) -> Result<()> {
         let (layer, page) = (&**layer, page.0);
         editable(model, layer, page)?;
         for raw in refs {
@@ -136,7 +137,7 @@ impl LayerEditor {
     }
 
     /// `select(region, topmost, factory)`: topmost first; `None` region selects any painted item.
-    pub fn select(&self, region: Option<&Polygon>, hits: HitMode, factory: &dyn CoverageFactory) -> Result<Vec<Value>> {
+    pub fn select(&self, region: Option<&Polygon>, hits: HitMode, factory: &dyn CoverageFactory) -> Result<EntityRefList> {
         let topmost = hits == HitMode::Topmost;
         let mut out = Vec::new();
         for item in self.items.values().rev() {
@@ -145,18 +146,18 @@ impl LayerEditor {
                 Some(r) => item.intersects(r, factory)?,
             };
             if hit {
-                out.push(Value::Object(item.ref_()));
+                out.push(Value::from(item.ref_()));
                 if topmost {
                     break;
                 }
             }
         }
-        Ok(out)
+        Ok(EntityRefList(out))
     }
 
     /// Static `LayerEditor.select(model, layer, page, region, topmost, factory)`:
     /// tests topmost items first without preparing unreachable `DrawItem`s.
-    pub fn select_in(model: &Model, layer: &LayerId, page: PageNumber, region: Option<&Polygon>, hits: HitMode, factory: &dyn CoverageFactory) -> Result<Vec<Value>> {
+    pub fn select_in(model: &Model, layer: &LayerId, page: PageNumber, region: Option<&Polygon>, hits: HitMode, factory: &dyn CoverageFactory) -> Result<EntityRefList> {
         let topmost = hits == HitMode::Topmost;
         editable(model, layer.as_ref(), page.0)?;
         let ordered = model.layer_items(layer, page);
@@ -173,12 +174,12 @@ impl LayerEditor {
                 Some(r) => item.intersects(r, factory)?,
             };
             if hit {
-                out.push(Value::Object(item.ref_()));
+                out.push(Value::from(item.ref_()));
                 if topmost {
                     break;
                 }
             }
         }
-        Ok(out)
+        Ok(EntityRefList(out))
     }
 }

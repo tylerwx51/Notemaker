@@ -339,13 +339,13 @@ impl Integration {
             return Ok(result);
         }
         if action == "interaction-performance" {
-            let metrics = json::write_map(&crate::interaction_performance::run(self, app)?);
+            let metrics = json::write_map(&(crate::interaction_performance::run(self, app)?).into());
             write_file(app, "interaction-performance.json", metrics.as_bytes())?;
             put_string(&result, "stream", "PASS interaction-performance\n")?;
             return Ok(result);
         }
         if action == "checkpoint-performance" {
-            let metrics = json::write_map(&crate::checkpoint_performance::run(app)?);
+            let metrics = json::write_map(&(crate::checkpoint_performance::run(app)?).into());
             write_file(app, "checkpoint-performance.json", metrics.as_bytes())?;
             put_string(&result, "stream", "PASS checkpoint-performance\n")?;
             return Ok(result);
@@ -381,7 +381,7 @@ impl Integration {
             return Ok(result);
         }
         if action == "performance" {
-            let metrics = json::write_map(&crate::performance::run(self, app)?);
+            let metrics = json::write_map(&(crate::performance::run(self, app)?).into());
             write_file(app, "performance.json", metrics.as_bytes())?;
             put_string(&result, "stream", "PASS performance; metrics saved to performance.json\n")?;
             return Ok(result);
@@ -444,9 +444,9 @@ impl Integration {
             let session = "55555555-5555-4555-8555-555555555555";
             let entity = object! {"kind" => "object", "id" => "remote-preview-object", "page" => app.page.get()};
             let proxy = replica_service::ensure(&app.this)?;
-            proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "select", "-"], "input" => object! {"session" => session, "page" => app.page.get(), "entities" => vec![Value::Object(entity.clone())]}})?;
+            proxy.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "select", "-"], "input" => object! {"session" => session, "page" => app.page.get(), "entities" => vec![Value::Object(entity.clone())]}}))?;
             let transform = object! {"session" => session, "entities" => vec![Value::Object(entity.clone())], "transform" => object! {"scale" => 1, "dx" => 180, "dy" => 40}};
-            proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["transform", "preview", "-"], "input" => transform})?;
+            proxy.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["transform", "preview", "-"], "input" => transform}))?;
             self.wait_until(&|| Ok(app.transform_previews.with(|p| p.contains_key(session))), 10000, "foreign transform preview notification")?;
             self.wait_for_idle_sync()?;
             let previewed = self.capture_canvas(app)?;
@@ -456,7 +456,7 @@ impl Integration {
             if app.revision.get() != revision_before || app.undo.get() != undo_before {
                 return Err(AppError::illegal_state("Ephemeral foreign preview changed revision or undo history"));
             }
-            proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["transform", "cancel", session]})?;
+            proxy.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["transform", "cancel", session]}))?;
             self.wait_until(&|| Ok(!app.transform_previews.with(|p| p.contains_key(session))), 10000, "foreign preview cancellation notification")?;
             self.wait_for_idle_sync()?;
             let cancelled = self.capture_canvas(app)?;
@@ -466,7 +466,7 @@ impl Integration {
             if app.revision.get() != revision_before || app.undo.get() != undo_before {
                 return Err(AppError::illegal_state("Foreign preview cancel changed revision or undo history"));
             }
-            proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "deselect", session]})?;
+            proxy.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "deselect", session]}))?;
             recycle_bitmap(&before)?;
             recycle_bitmap(&previewed)?;
             recycle_bitmap(&cancelled)?;
@@ -481,13 +481,13 @@ impl Integration {
             let session = "66666666-6666-4666-8666-666666666666";
             let entity = object! {"kind" => "object", "id" => "locked-undo-object", "page" => app.page.get()};
             let proxy = replica_service::ensure(&app.this)?;
-            proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "select", "-"], "input" => object! {"session" => session, "page" => app.page.get(), "entities" => vec![Value::Object(entity)]}})?;
+            proxy.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "select", "-"], "input" => object! {"session" => session, "page" => app.page.get(), "entities" => vec![Value::Object(entity)]}}))?;
             self.run_on_main_sync(|| app.history(notemaker_core::store::HistoryDirection::Undo))??;
             self.wait_until(&|| Ok(!app.history_pending.get()), 10000, "rejected locked undo")?;
             if app.undo.get() != undo_before || app.redo.get() != redo_before || model_before != json::write_map(&app.model().json()) {
                 return Err(AppError::illegal_state("Rejected locked undo changed model or local history"));
             }
-            proxy.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "deselect", session]})?;
+            proxy.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => vec!["selection", "deselect", session]}))?;
             self.run_on_main_sync(|| app.history(notemaker_core::store::HistoryDirection::Undo))??;
             self.wait_until(&|| Ok(!app.history_pending.get() && app.undo.with(|u| u.len()) as i64 == undo_before.len() as i64 - 1), 10000, "unlocked undo")?;
             if app.model().object_active.get("locked-undo-object") != Some(&false) || app.redo.with(|r| r.len()) != redo_before.len() + 1 {
@@ -505,10 +505,10 @@ impl Integration {
                     cli_args.push(Value::String(arguments_json.get_string(i)?));
                 }
                 let input = json::parse(&String::from_utf8_lossy(&base64_decode(Some(&bundle_string_or(arguments, "input", "")?))?))?;
-                replica_service::ensure(&app.this)?.execute(&object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => cli_args, "input" => input})?;
+                replica_service::ensure(&app.this)?.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "remote-editor", "args" => cli_args, "input" => input}))?;
             }
             let object = bundle_string_or(arguments, "object", "locked-object")?;
-            self.run_on_main_sync(|| app.start_selection(vec![object! {"kind" => "object", "id" => object.as_str()}]))??;
+            self.run_on_main_sync(|| app.start_selection(vec![Value::Object(object! {"kind" => "object", "id" => object.as_str()})]))??;
             self.wait_for_selection_condition(app, &|| Ok(app.selection_skipped.get() > 0), "locked selection result")?;
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
@@ -522,7 +522,7 @@ impl Integration {
             self.run_on_main_sync(|| app.enqueue(&jo! {"kind" => "object", "object" => "clipboard-object", "shape" => "rect", "layer" => app.selected.get(), "page" => app.page.get(), "x" => 120, "y" => 120, "w" => 80, "h" => 60, "color" => COLOR_BLACK, "width" => 4, "fontSize" => 24, "text" => ""}))??;
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
-            self.run_on_main_sync(|| app.start_selection(vec![object! {"kind" => "object", "id" => "clipboard-object"}]))??;
+            self.run_on_main_sync(|| app.start_selection(vec![Value::Object(object! {"kind" => "object", "id" => "clipboard-object"})]))??;
             self.wait_for_selection(app, 1, "clipboard selection")?;
             self.run_on_main_sync(|| app.copy_selection())??;
             self.wait_until(
@@ -618,7 +618,7 @@ impl Integration {
                 return Err(AppError::illegal_state(format!("Template/layer paint order is incorrect: [{}, {}]", before[0], before[1])));
             }
             let proxy = replica_service::ensure(&app.this)?;
-            proxy.execute(&object! {"document" => app.document.get(), "actor" => "human", "args" => vec!["layer", "reorder", "order-high", "0"]})?;
+            proxy.execute(&notemaker_cli::local_proxy::CommandRequest(object! {"document" => app.document.get(), "actor" => "human", "args" => vec!["layer", "reorder", "order-high", "0"]}))?;
             let state = app.replica().read()?;
             self.run_on_main_sync(|| -> AppResult<()> {
                 app.refresh_shared(&state)?;
@@ -640,7 +640,7 @@ impl Integration {
         if action == "select-panel" {
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
-            self.run_on_main_sync(|| app.start_selection(vec![object! {"kind" => "object", "id" => "lasso-object"}]))??;
+            self.run_on_main_sync(|| app.start_selection(vec![Value::Object(object! {"kind" => "object", "id" => "lasso-object"})]))??;
             self.wait_for_selection(app, 1, "selection panel lease")?;
             self.run_on_main_sync(|| app.editor().show_selection_panel())??;
             self.wait_for_idle_sync()?;
@@ -648,13 +648,13 @@ impl Integration {
         if action == "collaboration" {
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
-            self.run_on_main_sync(|| app.start_selection(vec![object! {"kind" => "object", "id" => "collaboration-object"}]))??;
+            self.run_on_main_sync(|| app.start_selection(vec![Value::Object(object! {"kind" => "object", "id" => "collaboration-object"})]))??;
             self.wait_for_selection(app, 1, "selection lease")?;
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
             let _session = app.selection_session.get();
             let specification = object! {"scale" => 1.5, "dx" => 20, "dy" => 30, "rotation" => 30, "flipX" => true};
-            self.run_on_main_sync(|| app.preview_transform(&specification))??;
+            self.run_on_main_sync(|| app.preview_transform((&specification).into()))??;
             self.wait_until(&|| Ok(!app.transform_previews.with(|p| p.is_empty())), 10000, "transform preview")?;
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
@@ -672,7 +672,7 @@ impl Integration {
             if (x - 120.0).abs() > 0.01 || !app.transform_previews.with(|p| p.is_empty()) {
                 return Err(AppError::illegal_state("Canceled preview changed durable state"));
             }
-            self.run_on_main_sync(|| app.preview_transform(&specification))??;
+            self.run_on_main_sync(|| app.preview_transform((&specification).into()))??;
             self.drain_writes()?;
             self.wait_for_idle_sync()?;
             self.run_on_main_sync(|| app.commit_transform_preview())??;
@@ -686,7 +686,7 @@ impl Integration {
             if !committed {
                 return Err(AppError::illegal_state(format!(
                     "Transform did not commit rotation/flip: {}",
-                    json::java_string(transformed.map(|t| Value::Object((*t).clone())).as_ref())
+                    json::java_string(transformed.map(|t| Value::Object(((*t).clone()).into())).as_ref())
                 )));
             }
             self.run_on_main_sync(|| app.duplicate_selection())??;
@@ -985,7 +985,7 @@ impl Integration {
         if !entered.await_timeout(Duration::from_secs(5)) {
             return Err(AppError::illegal_state("selection race gate did not start"));
         }
-        let item = || vec![object! {"kind" => "object", "id" => "tool-switch-item"}];
+        let item = || vec![Value::Object(object! {"kind" => "object", "id" => "tool-switch-item"})];
         self.run_on_main_sync(|| -> AppResult<()> {
             app.start_selection(item())?;
             app.editor().open_tool(&ToolKind::from("pen"), Some(&app.canvas().view()))
@@ -1062,7 +1062,7 @@ impl Integration {
         if app.selection_session.get().is_some() || leases.contains_key(&key) {
             return Err(AppError::illegal_state(format!("Direct shape selection retained a lease: {}", map_string(&leases))));
         }
-        self.run_on_main_sync(|| app.start_selection(vec![object! {"kind" => "object", "id" => "tool-switch-item"}, object! {"kind" => "object", "id" => "tool-switch-item-2"}]))??;
+        self.run_on_main_sync(|| app.start_selection(vec![Value::Object(object! {"kind" => "object", "id" => "tool-switch-item"}), Value::Object(object! {"kind" => "object", "id" => "tool-switch-item-2"})]))??;
         self.wait_for_selection(app, 2, "multi-item selection before deselect race")?;
         let deselect_entered = Arc::new(CountDownLatch::new(1));
         let deselect_release = Arc::new(CountDownLatch::new(1));
@@ -1255,7 +1255,7 @@ impl Integration {
         let document = notemaker_core::ids::DocumentName::from(app.document.get());
         let a = Store::writer(&root.join("a"), &document)?;
         let b = Store::writer(&root.join("b"), &document)?;
-        let seed = notemaker_core::actions::drawing(&object! {"object" => id, "shape" => "rect", "x" => 80, "y" => 90, "w" => 180, "h" => 120, "color" => COLOR_BLACK, "width" => 5}, &notemaker_core::ids::LayerId::from("base"))?;
+        let seed = notemaker_core::actions::drawing(&notemaker_core::wire::ActionInput(object! {"object" => id, "shape" => "rect", "x" => 80, "y" => 90, "w" => 180, "h" => 120, "color" => COLOR_BLACK, "width" => 5}), &notemaker_core::ids::LayerId::from("base"))?;
         a.append(&seed, &notemaker_core::ids::ActorId::from("fixture-seed"))?;
         let common = {
             let state = a.read()?;
@@ -1263,17 +1263,17 @@ impl Integration {
             let first = pending.first().ok_or_else(|| AppError::java("java.lang.IndexOutOfBoundsException", "Index: 0, Size: 0"))?;
             json::map(first)?.clone()
         };
-        b.accept(&[Value::Object(common)], None)?;
+        b.accept((&[Value::Object(common)]).into(), None)?;
         a.commit(&notemaker_core::ids::ActorId::from("writer-a"), &mut |model| {
             let mut changed = (**model.objects.get(id).ok_or_else(notemaker_core::Error::null_pointer)?).clone();
             changed.insert("x".into(), Value::from(100));
-            Ok(vec![Value::Object(changed)])
+            Ok((vec![Value::Object(changed.into())]).into())
         })?;
         b.commit(&notemaker_core::ids::ActorId::from("writer-b"), &mut |model| {
             let mut changed = (**model.objects.get(id).ok_or_else(notemaker_core::Error::null_pointer)?).clone();
             changed.insert("shape".into(), Value::from("ellipse"));
             changed.insert("x".into(), Value::from(250));
-            Ok(vec![Value::Object(changed)])
+            Ok((vec![Value::Object(changed.into())]).into())
         })?;
         let mut incoming: Vec<Value> = json::list(a.read()?.get("pending").unwrap_or(&Value::Null))?.clone();
         incoming.extend(json::list(b.read()?.get("pending").unwrap_or(&Value::Null))?.iter().cloned());

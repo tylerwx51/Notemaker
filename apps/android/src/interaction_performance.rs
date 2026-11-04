@@ -44,7 +44,7 @@ fn shared_values(lists: &SharedLists, name: &str) -> Vec<f64> {
     lists.lock().unwrap().get(name).cloned().unwrap_or_default()
 }
 fn command(app: &MainActivity, args: &[&str], input: Map) -> AppResult<Value> {
-    app.replica().command(crate::app_replica::CliArgs(args), Some(&Value::Object(input)))
+    app.replica().command(crate::app_replica::CliArgs(args), Some((&Value::Object(input)).into())).map(|reply| reply.0)
 }
 /// `test.runOnMainSync(()->{try{app.refreshShared(state);...}catch(Exception error){throw new RuntimeException(error);}})`.
 fn refresh<S: crate::main_activity::SharedState + ?Sized>(app: &Arc<MainActivity>, state: &S, then: impl FnOnce() -> AppResult<()>) -> AppResult<()> {
@@ -60,7 +60,7 @@ fn not_false(map: &IndexMap<String, bool>, id: &str) -> bool {
 }
 
 /// `static Map<String,Object> run(Instrumentation test, MainActivity app) throws Exception`.
-pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<crate::performance::PerformanceReport> {
     let input = async_main_handler()?;
     let frames = handler_thread(&jx::ThreadName::from("interaction-frames"))?;
     let mut draw: Lists = IndexMap::new();
@@ -556,17 +556,16 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
             mode_resources.insert(name.into(), Value::Object(object! {"before" => mode_start, "after" => performance::resources(StrokeCount(0))?}));
             if let Some(tile_start) = tile_start {
                 let tile_end = tile_metrics(test, app)?;
-                let get = |key: &str| tile_end.get(key).cloned().unwrap_or(Value::Null);
                 page_tiles = object! {
-                    "tile_renders" => delta(&tile_start, &tile_end, "tileRenders"),
-                    "item_renders" => delta(&tile_start, &tile_end, "itemRenders"),
-                    "allocated_tiles" => delta(&tile_start, &tile_end, "allocatedTiles"),
-                    "reused_tiles" => delta(&tile_start, &tile_end, "reusedTiles"),
-                    "evicted_tiles" => delta(&tile_start, &tile_end, "evictedTiles"),
-                    "cache_clears" => delta(&tile_start, &tile_end, "cacheClears"),
-                    "resident_pages" => get("residentPages"),
-                    "current_bytes" => get("currentBytes"),
-                    "peak_bytes" => get("peakBytes"),
+                    "tile_renders" => tile_end.tile_renders - tile_start.tile_renders,
+                    "item_renders" => tile_end.item_renders - tile_start.item_renders,
+                    "allocated_tiles" => tile_end.allocated_tiles - tile_start.allocated_tiles,
+                    "reused_tiles" => tile_end.reused_tiles - tile_start.reused_tiles,
+                    "evicted_tiles" => tile_end.evicted_tiles - tile_start.evicted_tiles,
+                    "cache_clears" => tile_end.cache_clears - tile_start.cache_clears,
+                    "resident_pages" => tile_end.resident_pages,
+                    "current_bytes" => tile_end.current_bytes,
+                    "peak_bytes" => tile_end.peak_bytes,
                 };
             }
         }
@@ -621,7 +620,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         "redo" => object! {"input_to_ui_draw" => performance::stats(LatencySamples(&redo_ui_draw)), "input_to_draw" => performance::stats(LatencySamples(&redo_canvas_draw))},
     };
     let state_revision = app.replica().read()?.get("revision").cloned().unwrap_or(Value::Null);
-    Ok(object! {
+    Ok(crate::performance::PerformanceReport(object! {
         "modes" => modes,
         "mode_resources" => mode_resources,
         "page_tile_cache" => page_tiles,
@@ -635,15 +634,11 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         "latency_definition" => "enqueue to first visible Canvas draw (preview or committed for object creation) and first durable updated window draw; 5 warmup actions per mode except 2 for document reopen and 6 for history; synthetic pan, viewport zoom redraw, direct page switching, and selection tap with lease acquisition; history modes alternate object or stroke undo and redo",
         "document" => app.document.get(),
         "state_revision" => state_revision,
-    })
+    }))
 }
 /// `private static Map<String,Object> tileMetrics(Instrumentation test, MainActivity app)`.
-fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<crate::tile_ink_cache::TileCacheMetrics> {
     Ok(test.run_on_main_sync(|| app.canvas().tile_cache_metrics())?)
-}
-/// `private static long delta(Map before, Map after, String key)`.
-fn delta(before: &Map, after: &Map, key: &str) -> i64 {
-    performance::long_metric(after, key) - performance::long_metric(before, key)
 }
 
 #[cfg(test)]
@@ -658,12 +653,5 @@ mod tests {
         assert!(!not_false(&m, "a"));
         assert!(not_false(&m, "b"));
         assert!(not_false(&m, "missing"));
-    }
-
-    #[test]
-    fn delta_of_metrics() {
-        let before = object! {"tileRenders" => 3};
-        let after = object! {"tileRenders" => 10};
-        assert_eq!(delta(&before, &after, "tileRenders"), 7);
     }
 }

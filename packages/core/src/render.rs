@@ -11,6 +11,7 @@ use crate::jfmt;
 use crate::jmath;
 use crate::json::{self, Map, Value};
 use crate::model::{Entity, Model};
+use crate::wire::EntityContent;
 use crate::ids::ShapeId;
 use crate::shape_catalog;
 use crate::svg_asset;
@@ -115,7 +116,7 @@ pub fn draw(m: &Model, page: PageNumber, hidden: &HiddenLayers, c: &mut dyn Surf
 }
 
 /// `Render.drawItem(m, o, c)`.
-pub fn draw_item(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
+pub fn draw_item(m: &Model, o: &EntityContent, c: &mut dyn Surface) -> Result<()> {
     if o.get("kind").and_then(Value::as_str) == Some("stroke") {
         draw_stroke(o, c)
     } else {
@@ -141,7 +142,7 @@ impl StrokePoint {
 }
 
 /// `Render.drawStroke(s, c)`.
-pub fn draw_stroke(s: &Map, c: &mut dyn Surface) -> Result<()> {
+pub fn draw_stroke(s: &EntityContent, c: &mut dyn Surface) -> Result<()> {
     c.begin_erase(&DrawItem::erasures(s)?)?;
     let body = draw_stroke_body(s, c);
     let cleanup = c.end_erase();
@@ -451,7 +452,7 @@ fn is_attached_connector(o: &Map) -> bool {
 }
 
 /// `Render.drawObject(m, o, c)`.
-pub fn draw_object(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
+pub fn draw_object(m: &Model, o: &EntityContent, c: &mut dyn Surface) -> Result<()> {
     if is_attached_connector(o) {
         let item = DrawItem::from_map(m, o.clone())?;
         return draw_object_masked(m, item.geometry(), c);
@@ -474,7 +475,7 @@ pub fn draw_object(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
 }
 
 fn draw_object_masked(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
-    c.begin_erase(&DrawItem::erasures(o)?)?;
+    c.begin_erase(&DrawItem::erasures(o.into())?)?;
     let body = draw_object_raw(m, o, c);
     let cleanup = c.end_erase();
     finally(body, cleanup)
@@ -505,7 +506,7 @@ fn draw_object_raw(m: &Model, o: &Map, c: &mut dyn Surface) -> Result<()> {
         return c.image(DocRect { x, y, width: w, height: h }, json::string(o, "gif")?);
     }
     if shape == "arrow" || shape == "arrowLine" {
-        let ends = endpoints(m, o)?;
+        let ends = endpoints(m, o.into())?;
         x = ends.start.x;
         y = ends.start.y;
         let ex = ends.end.x;
@@ -604,7 +605,7 @@ fn detail_svg(shape: &str, stroke: i32, width: f64, fill: Option<i32>) -> Result
 }
 
 /// `Render.endpoints(m, o)`: connector attachments follow node geometry.
-pub fn endpoints(m: &Model, o: &Map) -> Result<Segment> {
+pub fn endpoints(m: &Model, o: &EntityContent) -> Result<Segment> {
     let mut x = json::number(o, "x")?;
     let mut y = json::number(o, "y")?;
     let mut ex = x + json::number(o, "w")?;
@@ -619,8 +620,8 @@ pub fn endpoints(m: &Model, o: &Map) -> Result<Segment> {
         ex = json::number(b, "x")? + json::number(b, "w")? / 2.0;
         ey = json::number(b, "y")? + json::number(b, "h")? / 2.0;
     }
-    let start = boundary(a.map(|e| &**e), x, y, ex, ey)?;
-    let end = boundary(b.map(|e| &**e), ex, ey, x, y)?;
+    let start = boundary(a.map(|e| &***e), x, y, ex, ey)?;
+    let end = boundary(b.map(|e| &***e), ex, ey, x, y)?;
     Ok(Segment { start: DocPoint { x: start[0], y: start[1] }, end: DocPoint { x: end[0], y: end[1] } })
 }
 

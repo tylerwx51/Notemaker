@@ -35,6 +35,7 @@ pub mod style;
 pub mod svg_asset;
 pub mod timing;
 pub mod tls;
+pub mod wire;
 
 pub use error::{Error, ErrorKind, Result};
 pub use json::{Map, Value};

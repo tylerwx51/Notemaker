@@ -19,6 +19,7 @@ use notemaker_core::draw_item::DrawItem;
 use notemaker_core::gif_asset::{self, Info};
 use notemaker_core::ids::{EntityId, LayerId};
 use notemaker_core::json::{self, Map, Value};
+use notemaker_core::model::Entity;
 use notemaker_core::{jmath, object};
 use std::sync::{Arc, Weak};
 
@@ -154,7 +155,7 @@ impl AnimationPlayer {
     fn clip_list(&self) -> Vec<(String, Arc<Clip>)> {
         self.clips.with(|c| c.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
-    fn object(&self, id: Option<&str>) -> Option<Arc<Map>> {
+    fn object(&self, id: Option<&str>) -> Option<Entity> {
         id.and_then(|id| self.app().model().objects.get(id).cloned())
     }
     /// Body of `AnimationPlayer$1.run()`.
@@ -166,7 +167,7 @@ impl AnimationPlayer {
                 continue;
             }
             let object = self.object(Some(&id));
-            if !self.available(object.as_deref()) || object.as_ref().and_then(|o| o.get("gif")).and_then(Value::as_str) != Some(clip.source.as_str()) {
+            if !self.available(object.as_deref().map(|o| &o.0)) || object.as_ref().and_then(|o| o.get("gif")).and_then(Value::as_str) != Some(clip.source.as_str()) {
                 clip.playing.set(false);
                 continue;
             }
@@ -174,7 +175,7 @@ impl AnimationPlayer {
                 let frame = (clip.frame.get() + 1) % clip.frames();
                 clip.frame.set(frame);
                 clip.next_at.set(now + clip.info.delays[frame as usize] as i64);
-                self.invalidate(object.as_deref())?;
+                self.invalidate(object.as_deref().map(|o| &o.0))?;
             }
             more = true;
         }
@@ -202,7 +203,7 @@ impl AnimationPlayer {
     /// `private Clip clip(String id)`.
     fn clip(&self, id: &str) -> AppResult<Arc<Clip>> {
         let o = self.object(Some(id));
-        if !self.available(o.as_deref()) {
+        if !self.available(o.as_deref().map(|o| &o.0)) {
             return Err(AppError::illegal_argument("GIF is unavailable on this page"));
         }
         let o = o.unwrap();
@@ -267,7 +268,7 @@ impl AnimationPlayer {
     pub fn prepare_visible(&self) -> AppResult<()> {
         let app = self.app();
         let canvas = app.canvas();
-        let objects: Vec<Arc<Map>> = app.model().objects.values().cloned().collect();
+        let objects: Vec<Entity> = app.model().objects.values().cloned().collect();
         for o in objects {
             if self.available(Some(&o)) && canvas.visible(&notemaker_core::ids::LayerId::from(json::java_string(o.get("layer")))) {
                 self.clip(&json::java_string(o.get("object")))?;
@@ -283,7 +284,7 @@ impl AnimationPlayer {
         self.clip(id)?;
         if self.selected.get().as_deref() != Some(id) {
             self.selected.set(Some(id.to_string()));
-            self.invalidate(self.object(Some(id)).as_deref())?;
+            self.invalidate(self.object(Some(id)).as_deref().map(|o| &o.0))?;
         }
         self.refresh()
     }
@@ -312,7 +313,7 @@ impl AnimationPlayer {
         c.playing.set(false);
         c.frame.set((c.frame.get() + delta).rem_euclid(c.frames()));
         self.schedule()?;
-        self.invalidate(self.object(self.selected.get().as_deref()).as_deref())?;
+        self.invalidate(self.object(self.selected.get().as_deref()).as_deref().map(|o| &o.0))?;
         self.refresh()
     }
     /// `void seek(int frame)`.
@@ -326,7 +327,7 @@ impl AnimationPlayer {
         c.frame.set(frame);
         c.next_at.set(jx::uptime_millis().0 + c.info.delays[frame as usize] as i64);
         if changed {
-            self.invalidate(self.object(self.selected.get().as_deref()).as_deref())?;
+            self.invalidate(self.object(self.selected.get().as_deref()).as_deref().map(|o| &o.0))?;
         }
         self.refresh()
     }
@@ -335,31 +336,27 @@ impl AnimationPlayer {
         self.selected.get().ok_or_else(|| AppError::illegal_argument("Select a GIF first"))
     }
     /// `Map<String,Object> state()`.
-    pub fn state(&self) -> AppResult<Map> {
+    pub fn state(&self) -> AppResult<AnimationState> {
         let clips = self.clips.with(|c| c.clone());
-        let mut entries: Vec<Value> = Vec::new();
+        let mut entries = Vec::new();
         for id in json::java_hash_set_order(clips.keys().cloned()) {
             let c = &clips[&id];
-            entries.push(Value::Object(object! {
-                "id" => id.as_str(),
-                "frame" => c.frame.get() as i64,
-                "frames" => c.frames() as i64,
-                "playing" => c.playing.get(),
-                "durationMs" => c.info.duration as i64,
-            }));
+            entries.push(ClipState {
+                id: id.clone(),
+                frame: c.frame.get() as i64,
+                frames: c.frames() as i64,
+                playing: c.playing.get(),
+                duration_ms: c.info.duration as i64,
+            });
         }
-        let selected = match self.selected.get() {
-            Some(s) => Value::from(s),
-            None => Value::Null,
-        };
-        Ok(object! { "selected" => selected, "clips" => entries })
+        Ok(AnimationState { selected: self.selected.get(), clips: entries })
     }
     /// `void draw(Canvas canvas, String layer)`.
     pub fn draw(&self, canvas: &Obj, layer: &LayerId) -> AppResult<()> {
         let layer: &str = layer;
         for (id, c) in self.clip_list() {
             let o = self.object(Some(&id));
-            if !self.available(o.as_deref()) {
+            if !self.available(o.as_deref().map(|o| &o.0)) {
                 continue;
             }
             let o = o.unwrap();
@@ -443,7 +440,7 @@ impl AnimationPlayer {
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let app = self.app();
         let canvas = app.canvas();
-        let objects: Vec<Arc<Map>> = app.model().objects.values().cloned().collect();
+        let objects: Vec<Entity> = app.model().objects.values().cloned().collect();
         for o in objects.iter().rev() {
             if !self.available(Some(o)) || !canvas.visible(&notemaker_core::ids::LayerId::from(json::java_string(o.get("layer")))) {
                 continue;
@@ -481,7 +478,7 @@ impl AnimationPlayer {
             if let Some(id) = self.pressed_id.get() {
                 if self.pressed_control.get().as_deref() == Some("timeline") {
                     let o = self.object(Some(&id));
-                    if self.available(o.as_deref()) {
+                    if self.available(o.as_deref().map(|o| &o.0)) {
                         let bar = self.controls(&o.unwrap());
                         self.seek_at(&id, &bar, x)?;
                     }
@@ -496,7 +493,7 @@ impl AnimationPlayer {
             self.pressed_control.set(None);
             let Some(id) = id else { return Ok(true) };
             let o = self.object(Some(&id));
-            if !self.available(o.as_deref()) {
+            if !self.available(o.as_deref().map(|o| &o.0)) {
                 return Ok(true);
             }
             if control.as_deref() == Some("timeline") {
@@ -545,7 +542,7 @@ impl AnimationPlayer {
     pub fn draw_controls(&self, canvas: &Obj) -> AppResult<()> {
         let app = self.app();
         let view = app.canvas();
-        let objects: Vec<Arc<Map>> = app.model().objects.values().cloned().collect();
+        let objects: Vec<Entity> = app.model().objects.values().cloned().collect();
         let paint = &self.control_paint;
         for o in objects {
             if !self.available(Some(&o)) || !view.visible(&notemaker_core::ids::LayerId::from(json::java_string(o.get("layer")))) {
@@ -595,7 +592,7 @@ impl AnimationPlayer {
         let app = self.app();
         let mut ids: Vec<String> = Vec::new();
         let mut names: Vec<String> = Vec::new();
-        let objects: Vec<Arc<Map>> = app.model().objects.values().cloned().collect();
+        let objects: Vec<Entity> = app.model().objects.values().cloned().collect();
         for o in objects {
             if self.available(Some(&o)) {
                 ids.push(json::as_string_opt(o.get("object"))?.unwrap_or("null").to_string());
@@ -745,6 +742,48 @@ impl AnimationPlayer {
         self.clips.with_mut(|c| c.clear());
         self.selected.set(None);
         Ok(())
+    }
+}
+
+/// One GIF clip in [`AnimationState`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClipState {
+    pub id: String,
+    pub frame: i64,
+    pub frames: i64,
+    pub playing: bool,
+    pub duration_ms: i64,
+}
+
+/// `state()`: the selected GIF object and every clip's playback position,
+/// as `ui state` reports it under `gifPlayer`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AnimationState {
+    /// The selected GIF object's id (`null` when none).
+    pub selected: Option<String>,
+    pub clips: Vec<ClipState>,
+}
+
+impl From<&AnimationState> for Value {
+    fn from(state: &AnimationState) -> Value {
+        let clips = state
+            .clips
+            .iter()
+            .map(|c| {
+                Value::Object(object! {
+                    "id" => c.id.as_str(),
+                    "frame" => c.frame,
+                    "frames" => c.frames,
+                    "playing" => c.playing,
+                    "durationMs" => c.duration_ms,
+                })
+            })
+            .collect::<Vec<Value>>();
+        let selected = match &state.selected {
+            Some(s) => Value::from(s.as_str()),
+            None => Value::Null,
+        };
+        Value::Object(object! { "selected" => selected, "clips" => clips })
     }
 }
 

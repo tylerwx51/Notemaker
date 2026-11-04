@@ -76,7 +76,7 @@ fn discard(ret: Ret) {
     }
 }
 fn ptr(e: &Entity) -> usize {
-    Arc::as_ptr(e) as *const () as usize
+    Arc::as_ptr(&e.0) as *const () as usize
 }
 fn is_kind(m: &Map, kind: &str) -> bool {
     m.get("kind").and_then(Value::as_str) == Some(kind)
@@ -121,6 +121,90 @@ pub struct TileSize(pub i32);
 /// How many times [`TileInkCache::clear`] dropped every tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheClearCount(pub i64);
+
+/// `boundsCacheMetrics()`: `{entries, points}` of the shared stroke-bounds cache.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoundsCacheMetrics {
+    pub entries: i64,
+    pub points: i64,
+}
+
+impl From<&BoundsCacheMetrics> for Value {
+    fn from(m: &BoundsCacheMetrics) -> Value {
+        Value::Object(notemaker_core::object! { "entries" => m.entries, "points" => m.points })
+    }
+}
+
+/// `tileCacheMetrics()`: tile cache counters and the item ids the last draw
+/// rendered. Its JSON keeps Java's keys and order; the `pathCommand*` keys
+/// repeat the `picture*` counters under their newer names.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TileCacheMetrics {
+    pub tile_renders: i64,
+    pub item_renders: i64,
+    pub geometry_renders: i64,
+    pub picture_reuses: i64,
+    pub transient_picture_reuses: i64,
+    pub picture_misses: i64,
+    pub picture_evictions: i64,
+    pub picture_bytes: i64,
+    pub picture_points: i64,
+    pub culled_items: i64,
+    pub allocated_tiles: i64,
+    pub reused_tiles: i64,
+    pub evicted_tiles: i64,
+    pub current_bytes: i64,
+    pub peak_bytes: i64,
+    pub density_tier: i64,
+    /// `lastRenderedItemIds` (also written as `renderedItemIds`).
+    pub rendered_item_ids: Vec<String>,
+    /// `lastGeometryItemIds`.
+    pub geometry_item_ids: Vec<String>,
+    pub reused_tile_repaints: i64,
+    pub cache_clears: i64,
+    pub resident_pages: i64,
+}
+
+impl From<&TileCacheMetrics> for Value {
+    fn from(m: &TileCacheMetrics) -> Value {
+        let ids = |list: &[String]| Value::Array(list.iter().map(|s| Value::from(s.as_str())).collect());
+        Value::Object(notemaker_core::object! {
+            "tileRenders" => m.tile_renders,
+            "itemRenders" => m.item_renders,
+            "geometryRenders" => m.geometry_renders,
+            "pathCommandReuses" => m.picture_reuses,
+            "transientPathCommandReuses" => m.transient_picture_reuses,
+            "pathCommandMisses" => m.picture_misses,
+            "pathCommandEvictions" => m.picture_evictions,
+            "pathCommandBytesEstimate" => m.picture_bytes,
+            "pathCommandPointsEstimate" => m.picture_points,
+            "maxPathCommandBytesEstimate" => MAX_PICTURE_BYTES,
+            "maxPathCommandPointsEstimate" => MAX_PICTURE_POINTS as i64,
+            "pictureReuses" => m.picture_reuses,
+            "transientPictureReuses" => m.transient_picture_reuses,
+            "pictureMisses" => m.picture_misses,
+            "pictureEvictions" => m.picture_evictions,
+            "pictureBytes" => m.picture_bytes,
+            "picturePoints" => m.picture_points,
+            "maxPictureBytes" => MAX_PICTURE_BYTES,
+            "maxPicturePoints" => MAX_PICTURE_POINTS as i64,
+            "culledItems" => m.culled_items,
+            "allocatedTiles" => m.allocated_tiles,
+            "reusedTiles" => m.reused_tiles,
+            "evictedTiles" => m.evicted_tiles,
+            "currentBytes" => m.current_bytes,
+            "peakBytes" => m.peak_bytes,
+            "maxBytes" => MAX_BYTES,
+            "densityTier" => m.density_tier,
+            "lastRenderedItemIds" => ids(&m.rendered_item_ids),
+            "renderedItemIds" => ids(&m.rendered_item_ids),
+            "lastGeometryItemIds" => ids(&m.geometry_item_ids),
+            "reusedTileRepaints" => m.reused_tile_repaints,
+            "cacheClears" => m.cache_clears,
+            "residentPages" => m.resident_pages,
+        })
+    }
+}
 
 /// How many distinct pages have resident tiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,7 +341,7 @@ pub enum JavaCommand {
 
 /// `com.notemaker.cli.Png.compileStroke(item)` including the Java paths.
 fn compile_stroke(item: &Map) -> AppResult<(StrokeCommands, Arc<[JavaCommand]>)> {
-    let commands = Png::compile_stroke(item)?;
+    let commands = Png::compile_stroke(item.into())?;
     let mut java = Vec::with_capacity(commands.commands().len());
     for command in commands.commands() {
         java.push(match command {
@@ -594,7 +678,7 @@ impl TileInkCache {
             return false;
         }
         for (x, y) in a.iter().zip(b) {
-            if !Arc::ptr_eq(&x.value, &y.value) && *x.value != *y.value {
+            if !x.value.ptr_eq(&y.value) && *x.value != *y.value {
                 return false;
             }
         }
@@ -649,7 +733,7 @@ impl TileInkCache {
             self.transient_stroke_paths.get(&item.id).cloned()
         };
         if let Some(entry) = &entry {
-            if Arc::ptr_eq(&entry.source, &item.value) || *entry.source == *item.value {
+            if entry.source.ptr_eq(&item.value) || *entry.source == *item.value {
                 if item.cache_picture {
                     inc(&PICTURE_REUSES);
                 } else {
@@ -820,50 +904,40 @@ impl TileInkCache {
         CacheClearCount(self.cache_clears)
     }
     /// `static synchronized Map<String,Object> boundsCacheMetrics()`.
-    pub fn bounds_cache_metrics() -> Map {
+    pub fn bounds_cache_metrics() -> BoundsCacheMetrics {
         let guard = BOUNDS.lock().unwrap_or_else(|e| e.into_inner());
         let (entries, points) = guard.as_ref().map(|b| (b.entries.len() as i64, b.cached_bound_points as i64)).unwrap_or((0, 0));
-        notemaker_core::object! { "entries" => entries, "points" => points }
+        BoundsCacheMetrics { entries, points }
     }
     /// `int residentPageCount()`.
     pub fn resident_page_count(&self) -> ResidentPageCount {
         ResidentPageCount(self.tiles.keys().map(|k| k.page).collect::<HashSet<i32>>().len() as i32)
     }
-    /// `Map<String,Object> metrics()`.
-    pub fn metrics(&self) -> Map {
-        let rendered: Vec<Value> = self.rendered_item_ids.iter().map(|s| Value::from(s.as_str())).collect();
-        let geometry: Vec<Value> = self.geometry_item_ids.iter().map(|s| Value::from(s.as_str())).collect();
-        notemaker_core::object! {
-            "tileRenders" => get(&TILE_RENDERS),
-            "itemRenders" => get(&ITEM_RENDERS),
-            "geometryRenders" => get(&GEOMETRY_RENDERS),
-            "pathCommandReuses" => get(&PICTURE_REUSES),
-            "transientPathCommandReuses" => get(&TRANSIENT_PICTURE_REUSES),
-            "pathCommandMisses" => get(&PICTURE_MISSES),
-            "pathCommandEvictions" => get(&PICTURE_EVICTIONS),
-            "pathCommandBytesEstimate" => self.picture_bytes,
-            "pathCommandPointsEstimate" => self.picture_points,
-            "maxPathCommandBytesEstimate" => MAX_PICTURE_BYTES,
-            "maxPathCommandPointsEstimate" => MAX_PICTURE_POINTS as i64,
-            "pictureReuses" => get(&PICTURE_REUSES),
-            "transientPictureReuses" => get(&TRANSIENT_PICTURE_REUSES),
-            "pictureMisses" => get(&PICTURE_MISSES),
-            "pictureEvictions" => get(&PICTURE_EVICTIONS),
-            "pictureBytes" => self.picture_bytes,
-            "picturePoints" => self.picture_points,
-            "maxPictureBytes" => MAX_PICTURE_BYTES,
-            "maxPicturePoints" => MAX_PICTURE_POINTS as i64,
-            "culledItems" => get(&CULLED_ITEMS),
-            "allocatedTiles" => get(&ALLOCATED_TILES),
-            "reusedTiles" => get(&REUSED_TILES),
-            "evictedTiles" => get(&EVICTED_TILES),
-            "currentBytes" => self.current_bytes,
-            "peakBytes" => self.peak_bytes,
-            "maxBytes" => MAX_BYTES,
-            "densityTier" => 0i64,
-            "lastRenderedItemIds" => rendered.clone(),
-            "renderedItemIds" => rendered,
-            "lastGeometryItemIds" => geometry,
+    /// `Map<String,Object> metrics()`. `tileCacheMetrics()` fills in the
+    /// view's density tier, repaint, clear and resident-page counts.
+    pub fn metrics(&self) -> TileCacheMetrics {
+        TileCacheMetrics {
+            tile_renders: get(&TILE_RENDERS),
+            item_renders: get(&ITEM_RENDERS),
+            geometry_renders: get(&GEOMETRY_RENDERS),
+            picture_reuses: get(&PICTURE_REUSES),
+            transient_picture_reuses: get(&TRANSIENT_PICTURE_REUSES),
+            picture_misses: get(&PICTURE_MISSES),
+            picture_evictions: get(&PICTURE_EVICTIONS),
+            picture_bytes: self.picture_bytes,
+            picture_points: self.picture_points,
+            culled_items: get(&CULLED_ITEMS),
+            allocated_tiles: get(&ALLOCATED_TILES),
+            reused_tiles: get(&REUSED_TILES),
+            evicted_tiles: get(&EVICTED_TILES),
+            current_bytes: self.current_bytes,
+            peak_bytes: self.peak_bytes,
+            density_tier: 0,
+            rendered_item_ids: self.rendered_item_ids.iter().cloned().collect(),
+            geometry_item_ids: self.geometry_item_ids.iter().cloned().collect(),
+            reused_tile_repaints: 0,
+            cache_clears: 0,
+            resident_pages: 0,
         }
     }
     /// `private static synchronized RectF bounds(Map<String,Object> item)`.
@@ -896,7 +970,7 @@ impl TileInkCache {
     /// `private static RectF computeBounds(Map<String,Object> item)`.
     fn compute_bounds(item: &Map) -> AppResult<RectF> {
         if is_kind(item, "object") {
-            let b = DrawItem::from_map(&Model::new(), item.clone())?.paint_bounds(&notemaker_cli::item_coverage::FACTORY)?;
+            let b = DrawItem::from_map(&Model::new(), item.clone().into())?.paint_bounds(&notemaker_cli::item_coverage::FACTORY)?;
             return Ok(RectF { left: b.left as f32 - 2.0, top: b.top as f32 - 2.0, right: b.right as f32 + 2.0, bottom: b.bottom as f32 + 2.0 });
         }
         let width = float_value(item.get("width"))?;
@@ -963,10 +1037,10 @@ mod tests {
 
     #[test]
     fn bound_cache_identity() {
-        let a: Entity = Arc::new(map(r#"{"kind":"stroke","width":2,"points":[[1,1]]}"#));
+        let a: Entity = (Arc::new(map(r#"{"kind":"stroke","width":2,"points":[[1,1]]}"#))).into();
         let first = TileInkCache::bounds(&a).unwrap();
         assert_eq!(first, TileInkCache::bounds(&a).unwrap());
         let metrics = TileInkCache::bounds_cache_metrics();
-        assert!(metrics["entries"].as_i64().unwrap() >= 1);
+        assert!(metrics.entries >= 1);
     }
 }

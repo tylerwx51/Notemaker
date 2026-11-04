@@ -26,7 +26,8 @@ use notemaker_core::style::{
     TextAlignment, TextContent, TextStyle,
 };
 use notemaker_core::svg_asset::{self, DotGrid};
-use notemaker_core::{Error, Map, Result};
+use notemaker_core::wire::EntityContent;
+use notemaker_core::{Error, Result};
 use resvg::{tiny_skia, usvg};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -285,7 +286,7 @@ impl<'a> Png<'a> {
 
     /// `Png.coverageTile(m, item, x, y, size)`: ARGB pixels of `item`
     /// painted into a transparent `size`×`size` tile at (x, y).
-    pub fn coverage_tile(m: &Model, item: &Map, tile: CoverageTile) -> Result<ArgbPixels> {
+    pub fn coverage_tile(m: &Model, item: &EntityContent, tile: CoverageTile) -> Result<ArgbPixels> {
         let CoverageTile { x, y, size } = tile;
         let mut image = RasterCanvas::new(PixelSize { width: size as u32, height: size as u32 })?;
         image.translate(Translation { dx: -x as f32, dy: -y as f32 });
@@ -318,7 +319,7 @@ impl<'a> Png<'a> {
     }
 
     /// `Png.compileStroke(stroke)`: record `Render.drawStroke` once.
-    pub fn compile_stroke(stroke: &Map) -> Result<StrokeCommands> {
+    pub fn compile_stroke(stroke: &EntityContent) -> Result<StrokeCommands> {
         let mut recorder = Png {
             target: Target::Recorder(Vec::new()),
             paint: Png::base_paint(),

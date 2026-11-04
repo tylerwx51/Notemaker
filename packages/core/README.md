@@ -40,14 +40,15 @@ replica directory written by the Java CLI (`tests/parity/fixtures/state-java`).
 | `Collaboration` | `collaboration` | `LEASE_MILLIS`, `require_selection`, `key`, `expire`, `conflicts`, `affected`, `require_unlocked`, `require_incoming_unlocked`, `transform`, `transform_simple`, `now_millis` |
 | `CheckpointPointPrefixes` | `checkpoint_point_prefixes` | `encode`, `decode` (crate-internal use by `journal`) |
 | `DrawingActions` | `drawing_actions` | `copy_selection`, `paste`, `duplicate_layer`, `merge_layer`, `reorder_layer`, `image`, `template`, `fill`, `erase`, `erase_regions` |
-| `Model` | `model` | `Model`, `Entity = Arc<Map>`, `model::{drawing, color, range, id, bool_}` |
-| `Store` (+`Snapshot`, `Edit`, `UploadGate`) | `store` | `Store`, `State`, `StateKind`, `store::model(&State)`, `model_of_map`, `url_encode`, `type UploadGate` |
+| `Model` | `model` | `Model`, `Entity`, `LayerItems`, `model::input_color` (the `drawing`/`color`/`range`/`id`/`bool_` field checks are private) |
+| `Store` (+`Snapshot`, `Edit`, `UploadGate`) | `store` | `Store`, `State`, `StateKind`, `WithState`, `EditorPreferences`, the per-command results (`CommitResult`, `HistoryResult`, …), `store::model(&State)`, `model_of_map`, `url_encode`, `type UploadGate` |
 | `Journal` (+`State`) | `journal` | `access`, `checkpoint`, `canonical_path`, `type Edit` |
 | `Render` (+`Surface`, `Svg`) | `render` | `trait Surface`, `Svg`, `draw`, `draw_item`, `draw_stroke`, `draw_object`, `endpoints` |
 | — | `error` | `Error { kind, message, status }`, `ErrorKind`, `Result`, `require`, `require_with` |
 | — | `jfmt` | JDK 17 `Double.toString`/`Float.toString` (`double`, `float`, `append_double`), `parse_double`, `hex_color`, `base64_encode`/`base64_decode` (Java messages), `java_trim` |
 | — | `jmath` | fdlibm `atan2`, `atan`, `acos`, `hypot`; Java `round`, `rint`, `to_radians`, `min`/`max`, `floor_div`, `d2i` |
 | — | `ids` | `random_uuid`, `name_uuid_from_bytes` |
+| — | `wire` | Thin JSON newtypes (ADR 0032): `Operation`/`Operations`/`OperationList`, `ReplicaState`, `ModelJson`, `EntityContent`, `Entity`, `EntityRef`/`EntityRefs`/`EntityRefList`, `EntityPage`, `ActionInput`, `ConflictList`; macros `json_object_newtype!`, `json_array_newtype!`, `json_value_newtype!` |
 | — | `net` | `HttpUrl`, `Port`, `BearerToken`, `HttpMethod`, `HeaderName`, `HeaderValue`, `HttpStatus`, `ChatId`; `EndpointPath` → `ApiPath` → `UiPath`/`ChatPath`, every request target with its method (ADR 0030) |
 
 ## Signature mappings
@@ -60,22 +61,29 @@ replica directory written by the Java CLI (`tests/parity/fixtures/state-java`).
   are not the JVM's.
 - **JSON values**: `Map<String,Object>` is `json::Map` (insertion ordered) and
   `List<Object>` is `Vec<Value>`. Java `Integer`/`Long` are `i64` numbers and
-  `Double` is `f64`. Nullable `String` lookups use `Option<&str>`.
+  `Double` is `f64`. Nullable `String` lookups use `Option<&str>`. Public
+  signatures name the JSON they carry with the `wire` newtypes (ADR 0032),
+  which wrap the map, list or value unchanged and dereference to it; a
+  borrowed map converts with `let op: &Operation = map.into();`.
+  `Geometry.polygon(raw)`/`Geometry.json(p)` are `Polygon::try_from(&Value)`
+  and `Value::from(&Polygon)`.
 - **`double[]` / `double[][]`** are `[f64; N]` or `Vec<[f64; 2]>`
   (`geometry::Polygon`).
 - **Model maps**: `layers`/`strokes`/`objects` are `IndexMap<String, Entity>`.
-  Here `Entity = Arc<Map>` is the immutable snapshot that model copies share;
+  Here `Entity` (a newtype over `Arc<EntityContent>`) is the immutable
+  snapshot that model copies share; identity is `Entity::ptr_eq`.
   `Model::clone()` is `new Model(other)`. `active`/`object_active`/
   `layer_active`/`conflict_active` are `IndexMap<String, bool>`. Java field
-  `type` is `type_`. Constructors: `Model::new()`; `Model::from_state(&Map)` is
-  `new Model(Map state)`; `Model::from_json(&Map)`. `Model::with_bases(&mut Map, &Model)`.
+  `type` is `type_`. Constructors: `Model::new()`; `Model::from_state(&ReplicaState)`
+  is `new Model(Map state)`; `Model::from_json(&ModelJson)`.
+  `Model::with_bases(&mut Operation, &Model)`.
 - **`Render.Surface`** is the object-safe `trait Surface`, taking
   `&mut dyn Surface`. Default methods match the Java defaults, including the
   `UnsupportedOperation` errors. Methods return `Result<()>`, and Java's
   `try/finally` around erase masks and transforms is preserved.
   `Render.Svg.toString()` is `Display` (`svg.to_string()`).
 - **`Store.Edit`** is `&mut dyn FnMut(&mut State) -> Result<()>`.
-  **`Actions.Build`** is `&mut dyn FnMut(&mut Model) -> Result<Vec<Value>>`.
+  **`Actions.Build`** is `&mut dyn FnMut(&mut Model) -> Result<OperationList>`.
   **`Store.UploadGate`** is `&mut dyn FnMut() -> Result<()>`.
 - **`Store` state maps**: Java returned a `Journal.State` (a map carrying the
   model). Rust returns `store::State`, which derefs to `json::Map` and carries
@@ -87,9 +95,10 @@ replica directory written by the Java CLI (`tests/parity/fixtures/state-java`).
 - **Overloads**:
   - `commit(actor, build)` → `commit`
   - `commit(actor, build, deps)` → `commit_with_dependencies`
-  - `commitWithState` → `commit_with_state -> (Map, State)`; Java put the
-    state under `result["state"]`
-  - `history(actor, redo, true)` → `history_with_state -> (Map, State)`
+  - `commitWithState` → `commit_with_state -> WithState<CommitResult>`; Java
+    put the state under `result["state"]`
+  - `history(actor, redo, true)` → `history_with_state -> WithState<HistoryResult>`
+  - `Store.validateSettings(p)` → `EditorPreferences::try_from(&Map)`
   - `Collaboration.transform(m, e, scale, dx, dy)` → `transform_simple`
   - `GifAsset.validate(byte[])` → `validate_bytes`
   - `LayerEditor` constructors → `new` / `with_inactive` / `for_erase`

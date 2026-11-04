@@ -10,6 +10,7 @@ use crate::error::{io_message, Error, Result};
 use crate::json::{self, Map, Value};
 use crate::net::{EndpointPath, HeaderName, HeaderValue, HttpMethod, HttpStatus, HttpUrl};
 use crate::tls::{self, TlsConfig};
+use crate::{json_object_newtype, json_value_newtype};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConnection, StreamOwned};
 use std::collections::HashMap;
@@ -511,6 +512,22 @@ fn read_timeout(path: &EndpointPath) -> u32 {
     }
 }
 
+json_object_newtype! {
+    /// A peer descriptor: `{"url": …, "token"?: …}` (a private proxy
+    /// descriptor file adds the bearer token).
+    pub struct EndpointDescriptor;
+}
+
+json_value_newtype! {
+    /// A JSON request body sent to a peer.
+    pub struct RequestBody;
+}
+
+json_object_newtype! {
+    /// A peer's JSON object reply.
+    pub struct ResponseBody;
+}
+
 struct RequestState {
     cancelled: AtomicBool,
     connection: Mutex<Option<Disconnector>>,
@@ -518,13 +535,13 @@ struct RequestState {
 
 /// `Endpoint`: HTTP peer, optionally authenticated with a private proxy descriptor.
 pub struct Endpoint {
-    pub descriptor: Map,
+    pub descriptor: EndpointDescriptor,
     active_requests: Mutex<HashMap<ThreadId, Arc<RequestState>>>,
     tls: Option<TlsConfig>,
 }
 
 impl Endpoint {
-    pub fn new(descriptor: Map) -> Endpoint {
+    pub fn new(descriptor: EndpointDescriptor) -> Endpoint {
         Endpoint { descriptor, active_requests: Mutex::new(HashMap::new()), tls: None }
     }
 
@@ -550,7 +567,7 @@ impl Endpoint {
     pub fn resolve(target: &str) -> Result<Endpoint> {
         if target.starts_with("http://") || target.starts_with("https://") {
             let url = target.trim_end_matches('/');
-            return Ok(Endpoint::new(crate::object! { "url" => url }));
+            return Ok(Endpoint::new(crate::object! { "url" => url }.into()));
         }
         let bytes = std::fs::read(target).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -560,7 +577,7 @@ impl Endpoint {
             }
         })?;
         let value = json::parse(&String::from_utf8_lossy(&bytes))?;
-        Ok(Endpoint::new(json::map(&value)?.clone()))
+        Ok(Endpoint::new(json::map(&value)?.clone().into()))
     }
 
     /// `open(path)`: connection with the per-path timeouts and bearer token.
@@ -580,13 +597,13 @@ impl Endpoint {
     }
 
     /// `request(path, body)`: the path's method, with `body` as JSON when given.
-    pub fn request(&self, path: impl Into<EndpointPath>, body: Option<&Value>) -> Result<Map> {
+    pub fn request(&self, path: impl Into<EndpointPath>, body: Option<&RequestBody>) -> Result<ResponseBody> {
         let path = path.into();
         let thread = std::thread::current().id();
         let state = Arc::new(RequestState { cancelled: AtomicBool::new(false), connection: Mutex::new(None) });
         self.active_requests.lock().unwrap_or_else(|e| e.into_inner()).insert(thread, state.clone());
         let mut connection: Option<HttpConnection> = None;
-        let result = self.request_inner(&path, body, &state, &mut connection);
+        let result = self.request_inner(&path, body.map(|b| &b.0), &state, &mut connection).map(ResponseBody);
         {
             let mut active = self.active_requests.lock().unwrap_or_else(|e| e.into_inner());
             if active.get(&thread).is_some_and(|s| Arc::ptr_eq(s, &state)) {
@@ -698,10 +715,10 @@ mod tests {
         assert_eq!((e.kind, e.status, e.message()), (crate::error::ErrorKind::Http, Some(HttpStatus::from(409)), "nope"));
         let e = peer.request(chat("empty"), None).unwrap_err();
         assert_eq!((e.status, e.message()), (Some(HttpStatus::NO_CONTENT), "Peer HTTP 204"));
-        let secret = Endpoint::new(crate::object! { "url" => url.as_str(), "token" => "secret" });
+        let secret = Endpoint::new(crate::object! { "url" => url.as_str(), "token" => "secret" }.into());
         let body = json::parse("{\"operations\":[1,\"é\"]}").unwrap();
         assert_eq!(
-            json::write_map(&secret.request(ApiPath::Events, Some(&body)).unwrap()),
+            json::write_map(&secret.request(ApiPath::Events, Some((&body).into())).unwrap()),
             "{\"echo\":{\"operations\":[1,\"é\"]},\"auth\":true,\"json\":true}"
         );
     }
@@ -723,7 +740,7 @@ mod tests {
             out.extend_from_slice(b"c\r\ndata: one\n\n\r\n");
             out
         });
-        let peer = Endpoint::new(crate::object! { "url" => url.as_str() });
+        let peer = Endpoint::new(crate::object! { "url" => url.as_str() }.into());
         let mut c = peer.open(ApiPath::Stream).unwrap();
         assert_eq!(c.read_timeout(), 45000);
         assert_eq!(c.response_code().unwrap(), HttpStatus::OK);
@@ -749,7 +766,7 @@ mod tests {
             std::thread::sleep(Duration::from_secs(10));
             drop(held);
         });
-        let peer = Arc::new(Endpoint::new(crate::object! { "url" => url.as_str() }));
+        let peer = Arc::new(Endpoint::new(crate::object! { "url" => url.as_str() }.into()));
         let worker = {
             let peer = peer.clone();
             std::thread::spawn(move || peer.request(EndpointPath::Command, None))

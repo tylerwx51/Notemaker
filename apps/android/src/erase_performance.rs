@@ -38,7 +38,7 @@ fn concurrent_hash_map_order(keys: Vec<String>) -> Vec<String> {
 }
 
 /// `static Map<String,Object> run(Integration test, MainActivity app) throws Exception`.
-pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<crate::performance::PerformanceReport> {
     let package = jcall!(app.this, "android/content/Context", "getPackageName", "()Ljava/lang/String;")?.string().unwrap_or_default();
     error::require(package == "com.notemaker.latency", "Erase benchmark requires isolated latency package")?;
     coverage_check::cache_pixels()?;
@@ -150,7 +150,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     error::require(restored, "Undo did not restore source geometry and visibility")?;
     report.insert("geometry_restored".into(), Value::from(restored));
     write_file_output(app, "erase-performance.json", json::write_map(&report).as_bytes())?;
-    Ok(report)
+    Ok(report.into())
 }
 
 #[cfg(test)]

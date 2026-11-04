@@ -166,30 +166,6 @@ impl Polygon {
         false
     }
 
-    /// `Geometry.polygon(raw)`: validated region vertices.
-    pub fn from_json(raw: &Value) -> Result<Polygon> {
-        let list = json::list(raw)?;
-        require(list.len() >= 3 && list.len() <= 4096, "Region needs 3–4096 vertices")?;
-        let mut p = vec![DocPoint::default(); list.len()];
-        for (i, item) in list.iter().enumerate() {
-            let v = json::list(item)?;
-            require(v.len() == 2, "Region vertex needs x/y")?;
-            let mut xy = [0.0f64; 2];
-            for k in 0..2 {
-                require(json::is_number(Some(&v[k])), "Invalid region vertex")?;
-                xy[k] = json::as_double(Some(&v[k]))?;
-                require(xy[k].is_finite() && xy[k].abs() <= 1e9, "Invalid region vertex")?;
-            }
-            p[i] = DocPoint { x: xy[0], y: xy[1] };
-        }
-        Ok(Polygon(p))
-    }
-
-    /// `Geometry.json(p)`: `[[x,y],...]` with double values.
-    pub fn to_json(&self) -> Value {
-        Value::Array(self.0.iter().map(|v| Value::Array(vec![json::double(v.x), json::double(v.y)])).collect())
-    }
-
     /// `Geometry.capsule(a,b,radius)`: round swept segment.
     pub fn capsule(segment: Segment, radius: Radius) -> Polygon {
         let Segment { start: a, end: b } = segment;
@@ -302,4 +278,33 @@ polygon_list! {
 
 fn cross(a: DocPoint, b: DocPoint, c: DocPoint) -> f64 {
     (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+impl TryFrom<&Value> for Polygon {
+    type Error = crate::Error;
+    /// `Geometry.polygon(raw)`: validated region vertices.
+    fn try_from(raw: &Value) -> Result<Polygon> {
+        let list = json::list(raw)?;
+        require(list.len() >= 3 && list.len() <= 4096, "Region needs 3–4096 vertices")?;
+        let mut p = vec![DocPoint::default(); list.len()];
+        for (i, item) in list.iter().enumerate() {
+            let v = json::list(item)?;
+            require(v.len() == 2, "Region vertex needs x/y")?;
+            let mut xy = [0.0f64; 2];
+            for k in 0..2 {
+                require(json::is_number(Some(&v[k])), "Invalid region vertex")?;
+                xy[k] = json::as_double(Some(&v[k]))?;
+                require(xy[k].is_finite() && xy[k].abs() <= 1e9, "Invalid region vertex")?;
+            }
+            p[i] = DocPoint { x: xy[0], y: xy[1] };
+        }
+        Ok(Polygon(p))
+    }
+}
+
+impl From<&Polygon> for Value {
+    /// `Geometry.json(p)`: `[[x,y],...]` with double values.
+    fn from(p: &Polygon) -> Value {
+        Value::Array(p.0.iter().map(|v| Value::Array(vec![json::double(v.x), json::double(v.y)])).collect())
+    }
 }

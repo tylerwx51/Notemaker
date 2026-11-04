@@ -97,7 +97,7 @@ Java sources were removed once every Rust replacement passed its checks;
   filtering. A raster drawn at a fractional offset would blur sub-pixel
   shapes, which androidsvg drew as vectors. Other matrices fall back to
   `canvas::draw_svg_raster`.
-- Replica state is copy-on-write (`State.map: Arc<Map>`). Do not deep-clone
+- Replica state is copy-on-write (`State.map: Arc<ReplicaState>`). Do not deep-clone
   journal state on hot paths. See ADR 0027.
 
 ## Android

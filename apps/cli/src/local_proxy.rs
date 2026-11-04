@@ -12,7 +12,7 @@ use crate::main::{self as cli, CommandArgs};
 use crate::ui_hub::UiHub;
 use notemaker_core::clock::EpochMillis;
 use notemaker_core::collaboration::{self, LEASE_MILLIS};
-use notemaker_core::endpoint::{Disconnector, Endpoint};
+use notemaker_core::endpoint::{Disconnector, Endpoint, EndpointDescriptor};
 use notemaker_core::error::require;
 use notemaker_core::ids::{
     ActorId, DocumentName, EntityId, EntityKind, LayerId, PageNumber, SessionId,
@@ -22,7 +22,9 @@ use notemaker_core::net::{
     ApiPath, ChatId, ChatPath, EndpointPath, HeaderName, HeaderValue, HttpMethod, HttpStatus, Port,
     UiPath,
 };
-use notemaker_core::store::{self, HistoryDirection, ReplicaCursor, State, Store, SyncMode};
+use notemaker_core::store::{self, HistoryDirection, ReplicaCursor, State, Store, SyncMode, WithState};
+use notemaker_core::store::EditorPreferences;
+use notemaker_core::wire::{EntityRefList, EntityRefs, Operation, ReplicaState};
 use notemaker_core::timing::TimingPhase;
 use notemaker_core::{actions, json, object, timing, Error, ErrorKind, Map, Result, Value};
 use std::collections::{HashMap, HashSet};
@@ -71,13 +73,65 @@ fn now_millis() -> i64 {
 /// displays as `java.lang.IllegalArgumentException: …`).
 pub type UiError = Box<dyn std::error::Error + Send + Sync>;
 
+notemaker_core::json_object_newtype! {
+    /// The input of a live UI request: a `UiActions` action's structured input
+    /// (empty for `state` and `actions`).
+    pub struct UiActionInput;
+}
+
+notemaker_core::json_value_newtype! {
+    /// A live UI session's reply: the screen state, the action registry or an
+    /// action's structured result.
+    pub struct UiReply;
+}
+
+notemaker_core::json_object_newtype! {
+    /// One `/command` request body: `{document, actor, args, input}`.
+    pub struct CommandRequest;
+}
+
+notemaker_core::json_value_newtype! {
+    /// A command's structured `--input` JSON (`null` when absent).
+    pub struct CommandInput;
+}
+
+notemaker_core::json_value_newtype! {
+    /// A command's structured result, as printed by the CLI and returned
+    /// under `result` by `/command` (`null` for no result).
+    pub struct CommandReply;
+}
+
+/// [`LocalProxy::execute_with_snapshot`]'s reply with the snapshot it made.
+#[derive(Clone, Debug)]
+pub struct ExecutedCommand {
+    pub reply: CommandReply,
+    /// The reply's snapshot as a [`State`], or `None` when the command made
+    /// no snapshot.
+    pub snapshot: Option<State>,
+}
+
+notemaker_core::json_object_newtype! {
+    /// `select(…)`'s request: `{session, layer?, page?, region?, entities?, topmost?, …}`.
+    pub struct SelectionRequest;
+}
+
+notemaker_core::json_object_newtype! {
+    /// `select(…)`'s reply: `{session, selected, skipped, expires, …}`.
+    pub struct SelectionReply;
+}
+
+notemaker_core::json_object_newtype! {
+    /// `release(…)`/`releaseActor(…)`'s reply.
+    pub struct ReleaseReply;
+}
+
 /// `LocalProxy.UiSession`: a live tablet screen. Process-local; never enters
 /// the replica journal. Called from proxy worker threads.
 pub trait UiSession: Send + Sync {
     /// `Object request(String verb, String action, Map<String,Object> input)`.
     /// `verb` is `state`, `actions` or `action`; `action` is `""` unless
     /// `verb == "action"`.
-    fn request(&self, verb: &UiVerb, action: &UiActionName, input: Map) -> std::result::Result<Value, UiError>;
+    fn request(&self, verb: &UiVerb, action: &UiActionName, input: UiActionInput) -> std::result::Result<UiReply, UiError>;
 }
 
 /// A `UiError` as a core error: core errors pass through; other errors keep
@@ -107,7 +161,7 @@ type Waiter = mpsc::Sender<Result<Map>>;
 /// reserved) and the previews.
 struct SnapshotCache {
     document: String,
-    base: std::sync::Weak<Map>,
+    base: std::sync::Weak<ReplicaState>,
     previews: Map,
     reply: State,
 }
@@ -281,7 +335,7 @@ impl LocalProxy {
         let token = json::string(&settings, "token")?.to_string();
         timing::mark(TimingPhase("proxy_config_read"));
         let upstream = match settings.get("upstream") {
-            Some(v) => Some(Arc::new(Endpoint::new(map_value(Some(v))?))),
+            Some(v) => Some(Arc::new(Endpoint::new((map_value(Some(v))?).into()))),
             None => None,
         };
         let listener = {
@@ -646,7 +700,7 @@ impl LocalProxy {
 
     /// `setUiUpstream(descriptor)`; `None` is Java `null` (use the replica
     /// upstream for UI relaying).
-    pub fn set_ui_upstream(&self, descriptor: Option<&Map>) {
+    pub fn set_ui_upstream(&self, descriptor: Option<&EndpointDescriptor>) {
         *lock(&self.ui_upstream) = descriptor.map(|d| Arc::new(Endpoint::new(d.clone())));
         self.wake_ui();
     }
@@ -788,7 +842,7 @@ impl LocalProxy {
                         settings.shift_remove("upstream");
                     }
                     Some(c) => {
-                        settings.insert("upstream".into(), Value::Object(c.descriptor.clone()));
+                        settings.insert("upstream".into(), Value::Object(c.descriptor.clone().into()));
                     }
                 }
             }
@@ -1050,7 +1104,7 @@ impl LocalProxy {
             };
             let epoch = self.preview_epoch.load(Ordering::SeqCst);
             let mode = if upload { SyncMode::Upload } else { SyncMode::DownloadOnly };
-            let synced = local.sync(peer, &remote, mode, &mut gate)?;
+            let synced = local.sync(peer, (&remote.0).into(), mode, &mut gate)?;
             let raced = {
                 let mut previews = lock(&self.ephemeral_previews);
                 // Deviation from Java: a preview set/cleared locally while this
@@ -1079,7 +1133,7 @@ impl LocalProxy {
             if raced {
                 self.wake_fetch();
             }
-            result.insert(name.clone(), Value::Object(synced));
+            result.insert(name.clone(), Value::Object(synced.into()));
             let connection_changed = lock(&self.connected).insert(name.clone(), true) != Some(true);
             lock(&self.errors).remove(&name);
             let after = local.read()?;
@@ -1156,8 +1210,8 @@ impl LocalProxy {
     fn ui_relay(&self, path: UiPath, body: Option<&Map>) -> Result<Map> {
         let peer = self.ui_peer();
         if let Some(peer) = &peer {
-            match peer.request(path, body.map(|b| Value::Object(b.clone())).as_ref()) {
-                Ok(r) => return Ok(r),
+            match peer.request(path, body.map(|b| Value::Object(b.clone())).as_ref().map(Into::into)) {
+                Ok(r) => return Ok(r.into()),
                 Err(e) if e.kind == ErrorKind::Http => return Err(e),
                 Err(e) if e.kind.is_io() => {
                     if path == UiPath::Command {
@@ -1175,10 +1229,10 @@ impl LocalProxy {
                     listing.insert("scope".into(), Value::from("reachable"));
                     listing.insert("upstreamConnected".into(), Value::from(false));
                 }
-                Ok(listing)
+                Ok(listing.into())
             }
-            UiPath::Heartbeat => self.ui_hub.heartbeat(body.ok_or_else(Error::null_pointer)?),
-            UiPath::Command => self.ui_hub.command(body.ok_or_else(Error::null_pointer)?),
+            UiPath::Heartbeat => self.ui_hub.heartbeat((body.ok_or_else(Error::null_pointer)?).into()).map(Into::into),
+            UiPath::Command => self.ui_hub.command((body.ok_or_else(Error::null_pointer)?).into()).map(Into::into),
         }
     }
 
@@ -1196,7 +1250,7 @@ impl LocalProxy {
             let attempt = (|| -> Result<()> {
                 let mut states = Vec::new();
                 for (_, handler) in self.ui_sessions_ordered() {
-                    if let Ok(state) = handler.request(&UiVerb::from("state"), &UiActionName::from(""), Map::new()) {
+                    if let Ok(state) = handler.request(&UiVerb::from("state"), &UiActionName::from(""), Map::new().into()) {
                         states.push(state);
                     }
                     // The Activity will unregister or recover.
@@ -1240,8 +1294,9 @@ impl LocalProxy {
                                     .request(
                                         &UiVerb::from(json::string(&command, "verb")?),
                                         &UiActionName::from(json::string(&command, "action")?),
-                                        input,
+                                        input.into(),
                                     )
+                                    .map(|reply| reply.0)
                                     .map_err(ui_error)
                             })();
                             match outcome {
@@ -1499,7 +1554,7 @@ impl LocalProxy {
                 if fresh {
                     self.wake_fetch();
                 }
-                Value::Object(r)
+                Value::Object(r.into())
             } else if method == "GET" && path == "/api/locks" {
                 let mut state = self.store(&get("document", "notes"))?.read()?;
                 Value::Object(self.lock_state(&mut state)?)
@@ -1525,7 +1580,7 @@ impl LocalProxy {
                             "Server database differs from this replica",
                         )?;
                     }
-                    let response = local.accept(&operations, root.as_ref())?;
+                    let response = local.accept((&operations).into(), root.as_ref().map(Into::into))?;
                     if let Some(root) = &root {
                         let changed = {
                             let mut settings = lock(&self.settings);
@@ -1545,9 +1600,9 @@ impl LocalProxy {
                 if revision(&local.read()?.map)? != before {
                     self.changed(true);
                 }
-                Value::Object(response)
+                Value::Object(response.into())
             } else if method == "POST" && path == "/command" {
-                Value::Object(object! {"result" => self.execute(&body)?})
+                Value::Object(object! {"result" => self.execute((&body).into())?})
             } else {
                 return Err(Error::illegal_argument("Unsupported endpoint"));
             };
@@ -1577,8 +1632,9 @@ impl LocalProxy {
         if let Some(peer) = &peer {
             // Keep arbitration at the nearest reachable proxy.
             decision = peer
-                .request(ApiPath::LockUpdate, Some(&Value::Object(body.clone())))
-                .ok();
+                .request(ApiPath::LockUpdate, Some((&Value::Object(body.clone())).into()))
+                .ok()
+                .map(|reply| reply.0);
         }
         let mut accepted = body.clone();
         if let Some(decision) = decision.as_ref().filter(|d| d.contains_key("selected")) {
@@ -1738,7 +1794,11 @@ impl LocalProxy {
     }
 
     /// `execute(body)`: one `/command` request (`{document, actor, args, input}`).
-    pub fn execute(&self, body: &Map) -> Result<Value> {
+    pub fn execute(&self, body: &CommandRequest) -> Result<CommandReply> {
+        self.execute_value(body).map(CommandReply)
+    }
+
+    fn execute_value(&self, body: &Map) -> Result<Value> {
         require(self.running(), "Proxy is closed")?;
         let mut args: Vec<String> = Vec::new();
         for value in json::list(body.get("args").unwrap_or(&Value::Null))? {
@@ -1780,14 +1840,14 @@ impl LocalProxy {
                     if !sessions.iter().any(|item| {
                         item.get("session").and_then(Value::as_str) == Some(session.as_str())
                     }) {
-                        match handler.request(&UiVerb::from("state"), &UiActionName::from(""), Map::new()) {
-                            Ok(state) => sessions.push(state),
+                        match handler.request(&UiVerb::from("state"), &UiActionName::from(""), Map::new().into()) {
+                            Ok(state) => sessions.push(state.into()),
                             Err(unavailable) => sessions.push(Value::Object(object! {"session" => session.clone(), "error" => ui_error(unavailable).to_string()})),
                         }
                     }
                 }
                 result.insert("sessions".into(), Value::Array(sessions));
-                return Ok(Value::Object(result));
+                return Ok((Value::Object(result)).into());
             }
             require(args.len() >= 3, "Session ID is required")?;
             let session = args[2].clone();
@@ -1795,8 +1855,8 @@ impl LocalProxy {
             if verb == "state" || verb == "actions" {
                 require_msg(args.len() == 3, format!("ui {} SESSION", verb))?;
                 return match handler {
-                    Some(h) => h.request(&UiVerb::from(verb), &UiActionName::from(""), Map::new()).map_err(ui_error),
-                    None => Ok(self.ui_relay(UiPath::Command, Some(&object! {"session" => session, "verb" => verb, "action" => "", "input" => empty_map()}))?.get("result").cloned().unwrap_or(Value::Null)),
+                    Some(h) => h.request(&UiVerb::from(verb), &UiActionName::from(""), Map::new().into()).map(|reply| reply.0).map_err(ui_error),
+                    None => Ok((self.ui_relay(UiPath::Command, Some(&object! {"session" => session, "verb" => verb, "action" => "", "input" => empty_map()}))?.get("result").cloned().unwrap_or(Value::Null)).into()),
                 };
             }
             require(
@@ -1804,7 +1864,7 @@ impl LocalProxy {
                 "ui action SESSION NAME FILE|-",
             )?;
             return match handler {
-                Some(h) => h.request(&UiVerb::from("action"), &UiActionName::from(&args[3]), input()?).map_err(ui_error),
+                Some(h) => h.request(&UiVerb::from("action"), &UiActionName::from(&args[3]), (input()?).into()).map(|reply| reply.0).map_err(ui_error),
                 None => Ok(self
                     .ui_relay(UiPath::Command, Some(&object! {"session" => session, "verb" => "action", "action" => args[3].clone(), "input" => Value::Object(input()?)}))?
                     .get("result")
@@ -1815,15 +1875,15 @@ impl LocalProxy {
         *lock(&self.active_document) = doc.clone();
         let local = self.store(&doc)?;
         let finish_snapshot = |state: &mut State| -> Result<Map> {
-            Ok(self.finish_snapshot(&doc, state)?.into_map())
+            Ok((self.finish_snapshot(&doc, state)?.into_map()).into())
         };
         if cmd == "snapshot" {
             require(args.len() == 1, "snapshot takes no arguments")?;
             let mut state = local.read()?;
-            return Ok(Value::Object(finish_snapshot(&mut state)?));
+            return Ok((Value::Object(finish_snapshot(&mut state)?)).into());
         }
         if cmd == "append" && args.len() == 3 && args[1] == "snapshot" && args[2] == "-" {
-            let mut state = local.append(&input()?, &actor_id)?;
+            let mut state = local.append(&(input()?).into(), &actor_id)?;
             let operation = last_pending_id(&state)?;
             let snapshot = finish_snapshot(&mut state)?;
             self.changed(true);
@@ -1833,12 +1893,11 @@ impl LocalProxy {
         }
         if cmd == "append" && args == ["append", "settings", "-"] {
             let request = input()?;
-            let settings = map_value(request.get("settings"))?;
-            let state = local.append_with_settings(
-                &map_value(request.get("operation"))?,
-                &actor_id,
-                Some(&settings),
-            )?;
+            let operation = Operation(map_value(request.get("operation"))?);
+            // Java validated the operation before the preferences.
+            notemaker_core::Model::validate(&operation)?;
+            let settings = EditorPreferences::try_from(&map_value(request.get("settings"))?)?;
+            let state = local.append_with_settings(&operation, &actor_id, Some(&settings))?;
             let operation = last_pending_id(&state)?;
             self.changed(true);
             return Ok(Value::Object(
@@ -1847,13 +1906,13 @@ impl LocalProxy {
         }
         if (cmd == "undo" || cmd == "redo") && args.len() == 2 && args[1] == "snapshot" {
             let direction = if cmd == "redo" { HistoryDirection::Redo } else { HistoryDirection::Undo };
-            let (mut result, mut state) = local.history_with_state(&actor_id, direction)?;
+            let WithState { mut result, mut state } = local.history_with_state(&actor_id, direction)?;
             result.insert(
                 "snapshot".into(),
                 Value::Object(finish_snapshot(&mut state)?),
             );
             self.changed(true);
-            return Ok(Value::Object(result));
+            return Ok((Value::Object(result.into())).into());
         }
         if cmd == "object"
             && args.len() == 4
@@ -1861,10 +1920,10 @@ impl LocalProxy {
             && args[2] == "snapshot"
             && args[3] == "-"
         {
-            let mut drawing = actions::drawing(&input()?, &LayerId::base())?;
+            let mut drawing = actions::drawing(&(input()?).into(), &LayerId::base())?;
             drawing.insert("kind".into(), Value::from("object"));
             drawing.shift_remove("id");
-            let (mut result, mut state) = local.commit_with_state(&actor_id, &mut |model| {
+            let WithState { mut result, mut state } = local.commit_with_state(&actor_id, &mut |model| {
                 if let Some(id) = json::key_of(drawing.get("object")) {
                     if model.objects.contains_key(id) {
                         LayerEditor::with_filter(
@@ -1876,14 +1935,14 @@ impl LocalProxy {
                         .resolve(&EntityKind::object(), &EntityId::from(json::string(&drawing, "object")?))?;
                     }
                 }
-                Ok(vec![Value::Object(drawing.clone())])
+                Ok((vec![Value::Object(drawing.clone().into())]).into())
             })?;
             result.insert(
                 "snapshot".into(),
                 Value::Object(finish_snapshot(&mut state)?),
             );
             self.changed(true);
-            return Ok(Value::Object(result));
+            return Ok((Value::Object(result.into())).into());
         }
         if cmd == "configure" {
             require(
@@ -1891,7 +1950,7 @@ impl LocalProxy {
                 "configure UPSTREAM_URL_OR_DESCRIPTOR (empty to disconnect)",
             )?;
             self.configure(&DocumentName::from(&doc), Some(&args[1]))?;
-            return Ok(Value::Object(object! {"configured" => true}));
+            return Ok((Value::Object(object! {"configured" => true})).into());
         }
         if cmd == "sync" {
             require(args.len() <= 2, "sync [UPSTREAM_URL_OR_DESCRIPTOR]")?;
@@ -1989,7 +2048,7 @@ impl LocalProxy {
             }
         };
         let result = (|| -> Result<Value> {
-            let mut result = cli::run(&CommandArgs(local_args.clone()))?.unwrap_or(Value::Null);
+            let mut result = cli::run(&CommandArgs(local_args.clone()))?.unwrap_or(Value::Null.into());
             if cmd == "transform" && args.len() > 1 && args[1] == "commit" {
                 let request = input()?;
                 self.clear_preview(&doc, json::string(&request, "session")?, &actor);
@@ -2005,7 +2064,7 @@ impl LocalProxy {
                 );
                 m.insert("proxyId".into(), Value::from(self.id.clone()));
             }
-            Ok(result)
+            Ok(result.into())
         })();
         cli::PROXY_INPUT.with(|p| *p.borrow_mut() = None);
         cli::IN_PROXY.with(|p| p.set(false));
@@ -2112,19 +2171,21 @@ impl LocalProxy {
     /// POST `/command` to a proxy and return its `result` (`Value::Null` for
     /// Java `null`). `input` `None` sends JSON `null`.
     pub fn request(
-        descriptor: &Map,
+        descriptor: &EndpointDescriptor,
         document: &DocumentName,
         actor: &ActorId,
         args: &CommandArgs,
-        input: Option<&Value>,
-    ) -> Result<Value> {
+        input: Option<&CommandInput>,
+    ) -> Result<CommandReply> {
         let (document, actor): (&str, &str) = (document, actor);
-        let body = object! {"document" => document, "actor" => actor, "args" => str_list(args), "input" => input.cloned().unwrap_or(Value::Null)};
-        Ok(Endpoint::new(descriptor.clone())
-            .request(EndpointPath::Command, Some(&Value::Object(body)))?
-            .get("result")
-            .cloned()
-            .unwrap_or(Value::Null))
+        let body = object! {"document" => document, "actor" => actor, "args" => str_list(args), "input" => input.map(|i| i.0.clone()).unwrap_or(Value::Null)};
+        Ok(CommandReply(
+            Endpoint::new(descriptor.clone())
+                .request(EndpointPath::Command, Some((&Value::Object(body)).into()))?
+                .get("result")
+                .cloned()
+                .unwrap_or(Value::Null),
+        ))
     }
 
     fn lock_state(&self, state: &mut State) -> Result<Map> {
@@ -2164,11 +2225,11 @@ impl LocalProxy {
     /// no `effectiveModel`: callers use the returned state instead, which
     /// spares the deep copy into JSON and the re-parse. `None` when the
     /// command made no snapshot.
-    pub fn execute_with_snapshot(&self, body: &Map) -> Result<(Value, Option<State>)> {
+    pub fn execute_with_snapshot(&self, body: &CommandRequest) -> Result<ExecutedCommand> {
         let previous = CAPTURED_SNAPSHOT.with(|c| c.borrow_mut().replace(None));
         let result = self.execute(body);
         let snapshot = CAPTURED_SNAPSHOT.with(|c| std::mem::replace(&mut *c.borrow_mut(), previous)).flatten();
-        Ok((result?, snapshot))
+        Ok(ExecutedCommand { reply: result?, snapshot })
     }
 
     /// In-process `execute({document, actor, args: ["snapshot"]})`. Java's
@@ -2254,10 +2315,10 @@ impl LocalProxy {
     }
 
     /// Static `select(store, actor, request)`.
-    pub fn select(store: &Store, actor: &ActorId, request: &Map) -> Result<Map> {
+    pub fn select(store: &Store, actor: &ActorId, request: &SelectionRequest) -> Result<SelectionReply> {
         let actor: &str = actor;
         let scope = selection_scope(store, request)?;
-        select_validated(store, actor, request, &scope)
+        select_validated(store, actor, request, &scope).map(Into::into)
     }
 
     fn acquire_selection(
@@ -2287,7 +2348,7 @@ impl LocalProxy {
             let key = collaboration::key(
                 &EntityKind::from(json::string(e, "kind")?),
                 &EntityId::from(json::string(e, "id")?),
-                Some(&page),
+                Some((&page).into()),
             );
             candidates.insert(
                 String::from(key),
@@ -2299,8 +2360,9 @@ impl LocalProxy {
         if let Some(peer) = &peer {
             // Offline selection remains local until the next sync attempt.
             decision = peer
-                .request(ApiPath::LockUpdate, Some(&Value::Object(object! {"document" => document, "session" => session.clone(), "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})))
-                .ok();
+                .request(ApiPath::LockUpdate, Some((&Value::Object(object! {"document" => document, "session" => session.clone(), "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})).into()))
+                .ok()
+                .map(|reply| reply.0);
         }
         let mut accepted: Vec<Value> = Vec::new();
         let mut skipped: Vec<Value> = Vec::new();
@@ -2318,7 +2380,7 @@ impl LocalProxy {
             let key = collaboration::key(
                 &EntityKind::from(json::string(e, "kind")?),
                 &EntityId::from(json::string(e, "id")?),
-                Some(&page),
+                Some((&page).into()),
             );
             if keys.contains(&*key) {
                 filtered.push(value.clone());
@@ -2398,7 +2460,7 @@ impl LocalProxy {
         store: &Store,
         actor: &ActorId,
         session: &SessionId,
-        entities: &[Value],
+        entities: &EntityRefs,
     ) -> Result<()> {
         let mut state = store.read()?;
         let model = store::model(&state)?;
@@ -2406,7 +2468,7 @@ impl LocalProxy {
     }
 
     /// Static `selected(store, actor, session)`: `[{page, kind, id}]`.
-    pub fn selected(store: &Store, actor: &ActorId, session: &SessionId) -> Result<Vec<Value>> {
+    pub fn selected(store: &Store, actor: &ActorId, session: &SessionId) -> Result<EntityRefList> {
         let (actor, session): (&str, &str) = (actor, session);
         let mut state = store.read()?;
         collaboration::expire(&mut state, EpochMillis(now_millis()))?;
@@ -2441,11 +2503,11 @@ impl LocalProxy {
             !entities.is_empty(),
             "Selection session has no active entities",
         )?;
-        Ok(entities)
+        Ok(entities.into())
     }
 
     /// Static `release(store, actor, session, heartbeat)`.
-    pub fn release(store: &Store, actor: &ActorId, session: &SessionId, update: LeaseUpdate) -> Result<Map> {
+    pub fn release(store: &Store, actor: &ActorId, session: &SessionId, update: LeaseUpdate) -> Result<ReleaseReply> {
         let (actor, session): (&str, &str) = (actor, session);
         let heartbeat = update == LeaseUpdate::Renew;
         let now = now_millis();
@@ -2480,12 +2542,13 @@ impl LocalProxy {
             Ok(())
         })?;
         Ok(
-            object! {if heartbeat { "renewed" } else { "released" } => count, "session" => session, "expires" => if heartbeat { now + LEASE_MILLIS } else { 0 }},
+            object! {if heartbeat { "renewed" } else { "released" } => count, "session" => session, "expires" => if heartbeat { now + LEASE_MILLIS } else { 0 }}
+                .into(),
         )
     }
 
     /// Static `releaseActor(store, actor)`.
-    pub fn release_actor(store: &Store, actor: &ActorId) -> Result<Map> {
+    pub fn release_actor(store: &Store, actor: &ActorId) -> Result<ReleaseReply> {
         let actor: &str = actor;
         let mut released = 0;
         store.edit_transient(&mut |s| {
@@ -2506,7 +2569,7 @@ impl LocalProxy {
             s.insert("leases".into(), Value::Object(leases));
             Ok(())
         })?;
-        Ok(object! {"released" => released})
+        Ok(object! {"released" => released}.into())
     }
 
     fn release_owned(&self, store: &Store, document: &str, actor: Option<&str>) -> Result<Map> {
@@ -2586,8 +2649,9 @@ impl LocalProxy {
         let mut decision: Option<Map> = None;
         if let Some(peer) = &peer {
             decision = peer
-                .request(ApiPath::LockUpdate, Some(&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})))
-                .ok();
+                .request(ApiPath::LockUpdate, Some((&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})).into()))
+                .ok()
+                .map(|reply| reply.0);
         }
         let empty = Value::Array(Vec::new());
         let accepted: HashSet<String> = match &decision {
@@ -2656,7 +2720,7 @@ impl LocalProxy {
         let mut state = store.read()?;
         let now = now_millis();
         collaboration::expire(&mut state, EpochMillis(now))?;
-        let blocked = collaboration::conflicts(&state, &ActorId::from(actor), entities)?;
+        let blocked = collaboration::conflicts(&state, &ActorId::from(actor), entities.into())?;
         require_msg(
             blocked.is_empty(),
             format!(
@@ -2670,7 +2734,7 @@ impl LocalProxy {
             let key = collaboration::key(
                 &EntityKind::from(json::string(e, "kind")?),
                 &EntityId::from(json::string(e, "id")?),
-                Some(json::get_or_default(e, "page", &Value::from(0))),
+                Some((json::get_or_default(e, "page", &Value::from(0))).into()),
             );
             let lease = leases
                 .get(&*key)
@@ -2690,7 +2754,7 @@ impl LocalProxy {
             let key = collaboration::key(
                 &EntityKind::from(json::string(e, "kind")?),
                 &EntityId::from(json::string(e, "id")?),
-                Some(json::get_or_default(e, "page", &Value::from(0))),
+                Some((json::get_or_default(e, "page", &Value::from(0))).into()),
             );
             let lease = map_value(leases.get(&*key))?;
             lease_limit = lease_limit.min(json::as_long(lease.get("expires"))?);
@@ -2728,7 +2792,7 @@ impl LocalProxy {
         }
         let _ = peer.request(
             ApiPath::LockUpdate,
-            Some(&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => Value::Object(leases.clone()), "remove" => Value::Array(remove.to_vec()), "previews" => Value::Object(previews)})),
+            Some((&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => Value::Object(leases.clone()), "remove" => Value::Array(remove.to_vec()), "previews" => Value::Object(previews)})).into()),
         );
     }
 
@@ -2736,7 +2800,7 @@ impl LocalProxy {
         let Some(peer) = self.upstream() else { return };
         let _ = peer.request(
             ApiPath::LockUpdate,
-            Some(&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => empty_map(), "remove" => Value::Array(Vec::new()), "clearPreviews" => vec![Value::from(session)]})),
+            Some((&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => empty_map(), "remove" => Value::Array(Vec::new()), "clearPreviews" => vec![Value::from(session)]})).into()),
         );
     }
 }
@@ -2978,7 +3042,7 @@ fn normalize_preview(preview: &Map, leases: &Map) -> Result<Option<Map>> {
         let key = collaboration::key(
             &EntityKind::from(json::java_string(entity.get("kind"))),
             &EntityId::from(json::java_string(entity.get("id"))),
-            Some(json::get_or_default(entity, "page", &Value::from(0))),
+            Some((json::get_or_default(entity, "page", &Value::from(0))).into()),
         );
         let lease = leases
             .get(&*key)
@@ -3079,7 +3143,7 @@ fn requested_selection_scope(request: &Map) -> Result<SelectionScope> {
         Some(Value::Null) => return Err(Error::null_pointer()),
         Some(_) => return Err(Error::class_cast("layer is not a String")),
     };
-    let page = layer_editor::page(request)?;
+    let page = layer_editor::page(request.into())?;
     let refs = json::list(request.get("entities").unwrap_or(&Value::Null))?;
     require(
         !refs.is_empty() && refs.len() <= 200,
@@ -3094,7 +3158,7 @@ fn selection_scope(store: &Store, request: &Map) -> Result<SelectionScope> {
         &store.model()?,
         &LayerId::from(&scope.layer),
         scope.page,
-        json::list(request.get("entities").unwrap_or(&Value::Null))?,
+        (json::list(request.get("entities").unwrap_or(&Value::Null))?).into(),
     )?;
     if request.contains_key("session") {
         let state = store.read()?;
@@ -3133,7 +3197,7 @@ fn select_validated(
         "Selection needs 1–200 entities",
     )?;
     store.edit_transient(&mut |s| {
-        LayerEditor::require_references(&store::model(s)?, &LayerId::from(&scope.layer), scope.page, &entities)?;
+        LayerEditor::require_references(&store::model(s)?, &LayerId::from(&scope.layer), scope.page, (&entities).into())?;
         collaboration::expire(s, EpochMillis(now))?;
         require_session_scope(s, Some(&session), scope)?;
         let mut leases = leases_of(s)?;
@@ -3142,7 +3206,7 @@ fn select_validated(
             let e = json::map(value)?;
             let kind = json::string(e, "kind")?;
             let id = json::string(e, "id")?;
-            let key = String::from(collaboration::key(&EntityKind::from(kind), &EntityId::from(id), Some(&page)));
+            let key = String::from(collaboration::key(&EntityKind::from(kind), &EntityId::from(id), Some((&page).into())));
             let prior = leases.get(&key).map(json::map).transpose()?.cloned().unwrap_or_default();
             if !prior.is_empty() && (prior.get("actor").and_then(Value::as_str) != Some(actor) || prior.get("session").and_then(Value::as_str) != Some(session.as_str())) {
                 skipped.push(Value::Object(object! {"kind" => kind, "id" => id, "page" => page.clone(), "actor" => prior.get("actor").cloned().unwrap_or(Value::Null)}));

@@ -24,7 +24,7 @@ struct Measured {
 }
 
 impl CoverageFactory for Measured {
-    fn create(&self, o: &Map) -> Result<Box<dyn Coverage>> {
+    fn create(&self, o: &notemaker_core::wire::EntityContent) -> Result<Box<dyn Coverage>> {
         let start = Instant::now();
         let result = FACTORY.create(o);
         self.nanos
@@ -136,7 +136,7 @@ fn run(args: &[String]) -> Result<()> {
     probe::print(Value::Object(object! {"slowest" => slowest}));
     for _ in 0..3 {
         timed(&ProbePhase::from("erase_geometry"), || {
-            drawing_actions::erase(&model, &input, &FACTORY)
+            drawing_actions::erase(&model, (&input).into(), &FACTORY)
         })?;
     }
     // Diagnostic only: conservative ink-point bounds before exact coverage.
@@ -196,29 +196,29 @@ fn run(args: &[String]) -> Result<()> {
     let outcome = (|| -> Result<()> {
         for _ in 0..3 {
             timed(&ProbePhase::from("proxy_erase"), || {
-                proxy.execute(&command(&doc, &["erase", "-"], Some(&input)))
+                proxy.execute((&command(&doc, &["erase", "-"], Some(&input))).into())
             })?;
             let snap = timed(&ProbePhase::from("proxy_snapshot"), || {
-                proxy.execute(&command(&doc, &["snapshot"], None))
+                proxy.execute((&command(&doc, &["snapshot"], None)).into())
             })?;
             timed(&ProbePhase::from("snapshot_to_model"), || {
-                store::model_of_map(json::map(&snap)?)
+                store::model_of_map((json::map(&snap)?).into())
             })?;
             timed(&ProbePhase::from("proxy_undo"), || {
-                proxy.execute(&command(&doc, &["undo"], None))
+                proxy.execute((&command(&doc, &["undo"], None)).into())
             })?;
         }
         timed(&ProbePhase::from("swipe_geometry"), || {
-            drawing_actions::erase(&model, &swipe_input, &FACTORY)
+            drawing_actions::erase(&model, (&swipe_input).into(), &FACTORY)
         })?;
         timed(&ProbePhase::from("proxy_swipe"), || {
-            proxy.execute(&command(&doc, &["erase", "-"], Some(&swipe_input)))
+            proxy.execute((&command(&doc, &["erase", "-"], Some(&swipe_input))).into())
         })?;
         timed(&ProbePhase::from("post_swipe_snapshot"), || {
-            proxy.execute(&command(&doc, &["snapshot"], None))
+            proxy.execute((&command(&doc, &["snapshot"], None)).into())
         })?;
         match timed(&ProbePhase::from("post_swipe_tap_geometry"), || {
-            drawing_actions::erase(&store.model()?, &input, &FACTORY)
+            drawing_actions::erase(&store.model()?, (&input).into(), &FACTORY)
         }) {
             Ok(_) => {}
             Err(expected) if expected.kind.is_illegal_argument() => probe::print(Value::Object(
@@ -226,7 +226,7 @@ fn run(args: &[String]) -> Result<()> {
             )),
             Err(e) => return Err(e),
         }
-        proxy.execute(&command(&doc, &["undo"], None))?;
+        proxy.execute((&command(&doc, &["undo"], None)).into())?;
         let (sender, receiver) = std::sync::mpsc::channel::<(usize, Instant)>();
         let worker_proxy = proxy.clone();
         let worker_doc = doc.clone();
@@ -237,7 +237,7 @@ fn run(args: &[String]) -> Result<()> {
                 for (index, submitted) in receiver {
                     let start = Instant::now();
                     let mut error = Value::Null;
-                    if let Err(e) = worker_proxy.execute(&command(&worker_doc, &["erase", "-"], Some(&worker_input))).and_then(|_| worker_proxy.execute(&command(&worker_doc, &["snapshot"], None))) {
+                    if let Err(e) = worker_proxy.execute((&command(&worker_doc, &["erase", "-"], Some(&worker_input))).into()).and_then(|_| worker_proxy.execute((&command(&worker_doc, &["snapshot"], None)).into())) {
                         error = Value::from(e.message_or_null());
                     }
                     probe::print(Value::Object(object! {
@@ -252,7 +252,7 @@ fn run(args: &[String]) -> Result<()> {
         }
         drop(sender);
         let _ = writer.join();
-        proxy.execute(&command(&doc, &["undo"], None))?;
+        proxy.execute((&command(&doc, &["undo"], None)).into())?;
         let mut sample = 0;
         for item in editor.items() {
             if item.kind != "stroke" {
@@ -263,7 +263,7 @@ fn run(args: &[String]) -> Result<()> {
             let request = object! {"mode" => "partial", "layer" => layer.clone(), "page" => page, "radius" => 12, "points" => vec![Value::Array(vec![point[0].clone(), point[1].clone()])]};
             let start = Instant::now();
             let mut changed = true;
-            if let Err(e) = proxy.execute(&command(&doc, &["erase", "-"], Some(&request))) {
+            if let Err(e) = proxy.execute((&command(&doc, &["erase", "-"], Some(&request))).into()) {
                 if !(e.kind.is_illegal_argument()
                     && e.message_or_null() == "No matching editable content")
                 {
@@ -272,13 +272,13 @@ fn run(args: &[String]) -> Result<()> {
                 changed = false;
             }
             let command_ms = ms_since(start);
-            proxy.execute(&command(&doc, &["snapshot"], None))?;
+            proxy.execute((&command(&doc, &["snapshot"], None)).into())?;
             probe::print(Value::Object(
                 object! {"phase" => "varied_erase", "sample" => sample, "points" => pts.len(), "command_ms" => json::double(command_ms.0), "through_snapshot_ms" => json::double(ms_since(start).0), "changed" => changed},
             ));
             sample += 1;
             if changed {
-                proxy.execute(&command(&doc, &["undo"], None))?;
+                proxy.execute((&command(&doc, &["undo"], None)).into())?;
             }
         }
         Ok(())

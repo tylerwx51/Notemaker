@@ -42,7 +42,7 @@ fn main() -> notemaker_core::Result<()> {
     let body = |args: &[&str], input: Value| {
         object! {"document" => doc, "actor" => "human", "args" => Value::Array(args.iter().map(|a| Value::from(*a)).collect()), "input" => input}
     };
-    proxy.execute(&body(&["append", "-"], Value::Object(object! {"kind" => "document", "type" => "fixed"})))?;
+    proxy.execute((&body(&["append", "-"], Value::Object(object! {"kind" => "document", "type" => "fixed"}))).into())?;
     let mut undo: Vec<Value> = Vec::new();
     let (mut write_sum, mut write_max, mut read_sum, mut read_max) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
     // Per-phase totals from `timing::mark` (journal phases), printed at the end
@@ -73,10 +73,10 @@ fn main() -> notemaker_core::Result<()> {
         if objects {
             let object = object! {"object" => format!("box-{number}"), "shape" => "rect", "layer" => "base", "page" => 0, "x" => (number % 40) as i64 * 24, "y" => (number / 40) as i64 * 50, "w" => 20, "h" => 40, "color" => -16777216i64, "width" => 2};
             // As `MainActivity.persistObject`: the reply's snapshot carries the model.
-            let (_, snapshot) = proxy.execute_with_snapshot(&body(&["object", "put", "snapshot", "-"], Value::Object(object)))?;
+            let notemaker_cli::local_proxy::ExecutedCommand { snapshot, .. } = proxy.execute_with_snapshot((&body(&["object", "put", "snapshot", "-"], Value::Object(object))).into())?;
             std::hint::black_box(store::model(&snapshot.expect("snapshot"))?.objects.len());
         } else {
-            proxy.execute(&body(&["append", "settings", "-"], Value::Object(object! {"operation" => op, "settings" => settings})))?;
+            proxy.execute((&body(&["append", "settings", "-"], Value::Object(object! {"operation" => op, "settings" => settings}))).into())?;
         }
         let wrote = start.elapsed().as_secs_f64() * 1e3;
         {

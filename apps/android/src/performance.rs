@@ -8,12 +8,12 @@
 
 use crate::android_consts::*;
 use crate::concurrent::CountDownLatch;
-use crate::error::{self, AppError, AppResult};
+use crate::error::{self, AppResult};
 use crate::integration::Integration;
 use crate::jx::{self, Local, Obj, Reply};
 use crate::main_activity::MainActivity;
 use crate::replica_service;
-use crate::tile_ink_cache::TileInkCache;
+use crate::tile_ink_cache::{self, TileCacheMetrics, TileInkCache};
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::model::Model;
 use notemaker_core::{object, store};
@@ -210,16 +210,57 @@ fn percentile(values: &[f64], fraction: f64) -> f64 {
         sorted[(sorted.len() - 1).min((sorted.len() as f64 * fraction) as i32 as usize)]
     }
 }
+/// `stats(values)`: a latency sample summary in milliseconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LatencyStats {
+    /// Samples of at least 30 ms.
+    pub over_30_ms: i64,
+    pub samples: i64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+    pub max_ms: f64,
+}
+
+impl From<LatencyStats> for Map {
+    fn from(s: LatencyStats) -> Map {
+        object! {
+            "over_30_ms" => s.over_30_ms,
+            "samples" => s.samples,
+            "p50_ms" => json::double(s.p50_ms),
+            "p95_ms" => json::double(s.p95_ms),
+            "p99_ms" => json::double(s.p99_ms),
+            "max_ms" => json::double(s.max_ms),
+        }
+    }
+}
+
+impl From<LatencyStats> for Value {
+    fn from(s: LatencyStats) -> Value {
+        Value::Object(Map::from(s))
+    }
+}
+
+notemaker_core::json_object_newtype! {
+    /// `resources(strokes)`: process memory, CPU and I/O counters.
+    pub struct ResourceSample;
+}
+
+notemaker_core::json_object_newtype! {
+    /// A performance harness's JSON report (written to the test output).
+    pub struct PerformanceReport;
+}
+
 /// `static Map<String,Object> stats(List<Double> values)`.
-pub fn stats(values: LatencySamples) -> Map {
+pub fn stats(values: LatencySamples) -> LatencyStats {
     let LatencySamples(values) = values;
-    object! {
-        "over_30_ms" => values.iter().filter(|v| **v >= 30.0).count() as i64,
-        "samples" => values.len() as i64,
-        "p50_ms" => json::double(percentile(values, 0.50)),
-        "p95_ms" => json::double(percentile(values, 0.95)),
-        "p99_ms" => json::double(percentile(values, 0.99)),
-        "max_ms" => json::double(percentile(values, 1.0)),
+    LatencyStats {
+        over_30_ms: values.iter().filter(|v| **v >= 30.0).count() as i64,
+        samples: values.len() as i64,
+        p50_ms: percentile(values, 0.50),
+        p95_ms: percentile(values, 0.95),
+        p99_ms: percentile(values, 0.99),
+        max_ms: percentile(values, 1.0),
     }
 }
 /// `private static void prewarmGraphics(Instrumentation test, MainActivity app) throws Exception`.
@@ -302,7 +343,7 @@ fn stall_stacks() -> AppResult<Map> {
 }
 
 /// `static Map<String,Object> run(Instrumentation test, MainActivity app) throws Exception`.
-pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<PerformanceReport> {
     prewarm_graphics(test, app)?;
     let samples: Arc<Vec<Vec<Samples>>> = Arc::new((0..3).map(|_| (0..4).map(|_| new_samples()).collect()).collect());
     let frame_phases: Arc<Vec<Vec<Samples>>> = Arc::new((0..3).map(|_| (0..FRAME_PHASE_IDS.len()).map(|_| new_samples()).collect()).collect());
@@ -401,7 +442,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     let mut max_saving = 0;
     let start = jx::nano_time().0;
     let initial_tile_metrics = tile_metrics(test, app)?;
-    let mut resources_list: Vec<Value> = vec![Value::Object(resources(StrokeCount(0))?)];
+    let mut resources_list: Vec<Value> = vec![Value::Object((resources(StrokeCount(0))?).into())];
     for stroke in 0..1000 {
         jx::frame(|| -> AppResult<()> {
             current.store(stroke, Ordering::SeqCst);
@@ -499,7 +540,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
             let pending = test.run_on_main_sync(|| app.saving.get())?;
             max_saving = max_saving.max(pending);
             if stroke % 100 == 99 {
-                resources_list.push(Value::Object(resources(StrokeCount(stroke + 1))?));
+                resources_list.push(Value::Object((resources(StrokeCount(stroke + 1))?).into()));
                 jx::log::i(crate::jx::log::PERFORMANCE, &format!("strokes={} saveQueue={}", stroke + 1, pending));
             }
             Ok(())
@@ -527,7 +568,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     let replay = Model::from_state(&state)?;
     error::require(json::write_map(&effective.json()) == json::write_map(&replay.json()), "Incremental model differs from full replay")?;
     error::require(effective.strokes.len() == 1000, &format!("Lost strokes: {}", effective.strokes.len()))?;
-    let final_tile_metrics = test.run_on_main_sync(|| -> AppResult<Map> {
+    let final_tile_metrics = test.run_on_main_sync(|| -> AppResult<TileCacheMetrics> {
         {
             let pending = pending_draw.lock().unwrap();
             let last = match pending.last() {
@@ -547,25 +588,25 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     quit_safely(&frames)?;
     let f = &final_tile_metrics;
     let i = &initial_tile_metrics;
-    let get = |key: &str| f.get(key).cloned().unwrap_or(Value::Null);
+    let delta = |metric: fn(&TileCacheMetrics) -> i64| metric(f) - metric(i);
     let mut tile_cache = object! {
-        "tile_renders" => metric_delta(f, i, "tileRenders"),
-        "item_renders" => metric_delta(f, i, "itemRenders"),
-        "geometry_renders" => metric_delta(f, i, "geometryRenders"),
-        "path_command_reuses" => metric_delta(f, i, "pathCommandReuses"),
-        "transient_path_command_reuses" => metric_delta(f, i, "transientPathCommandReuses"),
-        "path_command_misses" => metric_delta(f, i, "pathCommandMisses"),
-        "path_command_evictions" => metric_delta(f, i, "pathCommandEvictions"),
-        "reused_tiles" => metric_delta(f, i, "reusedTiles"),
-        "current_bytes" => get("currentBytes"),
-        "peak_bytes" => get("peakBytes"),
-        "max_bytes" => get("maxBytes"),
-        "path_command_bytes_estimate" => get("pathCommandBytesEstimate"),
-        "path_command_points_estimate" => get("pathCommandPointsEstimate"),
-        "max_path_command_bytes_estimate" => get("maxPathCommandBytesEstimate"),
-        "max_path_command_points_estimate" => get("maxPathCommandPointsEstimate"),
+        "tile_renders" => delta(|m| m.tile_renders),
+        "item_renders" => delta(|m| m.item_renders),
+        "geometry_renders" => delta(|m| m.geometry_renders),
+        "path_command_reuses" => delta(|m| m.picture_reuses),
+        "transient_path_command_reuses" => delta(|m| m.transient_picture_reuses),
+        "path_command_misses" => delta(|m| m.picture_misses),
+        "path_command_evictions" => delta(|m| m.picture_evictions),
+        "reused_tiles" => delta(|m| m.reused_tiles),
+        "current_bytes" => f.current_bytes,
+        "peak_bytes" => f.peak_bytes,
+        "max_bytes" => tile_ink_cache::MAX_BYTES,
+        "path_command_bytes_estimate" => f.picture_bytes,
+        "path_command_points_estimate" => f.picture_points,
+        "max_path_command_bytes_estimate" => tile_ink_cache::MAX_PICTURE_BYTES,
+        "max_path_command_points_estimate" => tile_ink_cache::MAX_PICTURE_POINTS as i64,
     };
-    tile_cache.insert("reused_tile_repaints".into(), Value::from(metric_delta(f, i, "reusedTileRepaints")));
+    tile_cache.insert("reused_tile_repaints".into(), Value::from(delta(|m| m.reused_tile_repaints)));
     let timed_end = jx::nano_time().0;
     let bounds_cache = TileInkCache::bounds_cache_metrics();
     gc()?;
@@ -574,7 +615,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     let report = object! {
         "samples" => resources_list,
         "after_gc" => after_gc,
-        "bounds_cache" => bounds_cache,
+        "bounds_cache" => Value::from(&bounds_cache),
         "sampling" => "Process counters sampled between every 100 strokes; cost is outside input latency but included in elapsed time. After-GC resources and bounds-cache occupancy are sampled after the timed workload. I/O counters are cumulative, not storage latency.",
     };
     write_file_output(app, "performance-resources.json", json::write_map(&report).as_bytes())?;
@@ -583,7 +624,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     for b in 0..3 {
         let mut phases = Map::new();
         for m in 0..FRAME_PHASE_IDS.len() {
-            phases.insert(FRAME_PHASE_NAMES[m].into(), Value::Object(stats(LatencySamples(&values(&frame_phases[b][m])))));
+            phases.insert(FRAME_PHASE_NAMES[m].into(), Value::Object((stats(LatencySamples(&values(&frame_phases[b][m])))).into()));
         }
         windows.push(Value::Object(object! {
             "strokes" => names[b],
@@ -596,7 +637,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     }
     let dispatch_stalls_value = dispatch_stalls;
     let slow_events_value = slow_events.lock().unwrap().clone();
-    Ok(object! {
+    Ok(PerformanceReport(object! {
         "dispatch_stalls" => dispatch_stalls_value,
         "slow_events" => slow_events_value,
         "latency_definition" => "UI enqueue to end of canvas draw; every event after 10 warmup strokes, including coalesced events",
@@ -617,7 +658,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
         "tile_cache" => tile_cache,
         "incremental_matches_replay" => true,
         "windows" => windows,
-    })
+    }))
 }
 
 /// Java `String.split(":")` (trailing empty strings removed).
@@ -665,7 +706,7 @@ fn proc_io() -> Map {
 }
 
 /// `static Map<String,Object> resources(int strokes)`.
-pub fn resources(strokes: StrokeCount) -> AppResult<Map> {
+pub fn resources(strokes: StrokeCount) -> AppResult<ResourceSample> {
     let StrokeCount(strokes) = strokes;
     let start = jx::nano_time().0;
     let memory = jnew!("android/os/Debug$MemoryInfo", "()V")?;
@@ -697,20 +738,12 @@ pub fn resources(strokes: StrokeCount) -> AppResult<Map> {
         "process_cpu_ms" => cpu,
         "io" => io,
         "sampling_ms" => json::double((jx::nano_time().0 - start) as f64 / 1e6),
-    })
+    }
+    .into())
 }
 /// `private static Map<String,Object> tileMetrics(Instrumentation test, MainActivity app)`.
-fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+fn tile_metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<TileCacheMetrics> {
     Ok(test.run_on_main_sync(|| app.canvas().tile_cache_metrics())?)
-}
-/// `((Number)m.get(key)).longValue()`: Java threw (NPE/ClassCast) for a
-/// missing or non-numeric metric; this panics with the same exception text.
-pub(crate) fn long_metric(m: &Map, key: &str) -> i64 {
-    json::as_long(m.get(key)).unwrap_or_else(|e| panic!("{}", AppError::from(e)))
-}
-/// `private static long metricDelta(Map after, Map before, String key)`.
-fn metric_delta(after: &Map, before: &Map, key: &str) -> i64 {
-    long_metric(after, key) - long_metric(before, key)
 }
 
 #[cfg(test)]
@@ -737,8 +770,8 @@ mod tests {
         assert_eq!(percentile(&v, 1.0), 40.0);
         assert_eq!(percentile(&v, 0.0), 1.0);
         let s = stats(LatencySamples(&v));
-        assert_eq!(json::write_map(&s), r#"{"over_30_ms":1,"samples":4,"p50_ms":5.0,"p95_ms":40.0,"p99_ms":40.0,"max_ms":40.0}"#);
-        assert_eq!(json::write_map(&stats(LatencySamples(&[]))), r#"{"over_30_ms":0,"samples":0,"p50_ms":0.0,"p95_ms":0.0,"p99_ms":0.0,"max_ms":0.0}"#);
+        assert_eq!(json::write_map(&Map::from(s)), r#"{"over_30_ms":1,"samples":4,"p50_ms":5.0,"p95_ms":40.0,"p99_ms":40.0,"max_ms":40.0}"#);
+        assert_eq!(json::write_map(&Map::from(stats(LatencySamples(&[])))), r#"{"over_30_ms":0,"samples":0,"p50_ms":0.0,"p95_ms":0.0,"p99_ms":0.0,"max_ms":0.0}"#);
     }
 
     #[test]

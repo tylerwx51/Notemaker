@@ -8,6 +8,7 @@ use crate::json::{self, Map, Value};
 use crate::model::{Entity, Model};
 use crate::object;
 use crate::render;
+use crate::wire::{EntityContent, EntityRef, Operation};
 use indexmap::IndexMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -16,7 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[derive(Default)]
 struct Prepared {
     bounds: Mutex<Option<Bounds>>,
-    local: Mutex<Option<Arc<Map>>>,
+    local: Mutex<Option<Arc<EntityContent>>>,
 }
 
 /// Identity-keyed LRU (10,000 entries, access order). The entry keeps the
@@ -64,15 +65,15 @@ impl DrawItem {
     }
 
     /// Convenience for a freshly built (unshared) content map.
-    pub fn from_map(model: &Model, content: Map) -> Result<DrawItem> {
-        DrawItem::new(model, Arc::new(content))
+    pub fn from_map(model: &Model, content: EntityContent) -> Result<DrawItem> {
+        DrawItem::new(model, Entity::from(content))
     }
 
     fn prepared(&self) -> Arc<Prepared> {
         self.prepared
             .get_or_init(|| {
                 let mut cache = prepared_cache().lock().unwrap_or_else(|e| e.into_inner());
-                let key = Arc::as_ptr(&self.geometry) as usize;
+                let key = Arc::as_ptr(&self.geometry.0) as usize;
                 if let Some(entry) = cache.shift_remove(&key) {
                     let prepared = entry.1.clone();
                     cache.insert(key, entry);
@@ -89,8 +90,8 @@ impl DrawItem {
     }
 
     /// `ref()`: `{kind, id, page}`.
-    pub fn ref_(&self) -> Map {
-        object! {"kind" => self.kind.clone(), "id" => self.id.clone(), "page" => self.content.get("page").cloned().unwrap_or(Value::Null)}
+    pub fn ref_(&self) -> EntityRef {
+        EntityRef(object! {"kind" => self.kind.clone(), "id" => self.id.clone(), "page" => self.content.get("page").cloned().unwrap_or(Value::Null)})
     }
 
     pub fn active(&self) -> bool {
@@ -104,7 +105,7 @@ impl DrawItem {
 
     fn resolve_geometry(model: &Model, kind: &str, content: &Entity) -> Result<Entity> {
         if kind == "object" && (content.contains_key("from") || content.contains_key("to")) {
-            let mut o: Map = (**content).clone();
+            let mut o: Map = Map::clone(content);
             let e = render::endpoints(model, content)?;
             o.insert("x".into(), json::double(e.start.x));
             o.insert("y".into(), json::double(e.start.y));
@@ -115,7 +116,7 @@ impl DrawItem {
             o.insert("rotation".into(), Value::from(0));
             o.insert("flipX".into(), Value::Bool(false));
             o.insert("flipY".into(), Value::Bool(false));
-            return Ok(Arc::new(o));
+            return Ok(Entity::from(o));
         }
         Ok(content.clone())
     }
@@ -140,12 +141,12 @@ impl DrawItem {
     }
 
     /// `localContent()`: geometry translated to item-local coordinates (cached).
-    pub fn local_content(&self) -> Result<Arc<Map>> {
+    pub fn local_content(&self) -> Result<Arc<EntityContent>> {
         let prepared = self.prepared();
         if let Some(local) = prepared.local.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             return Ok(local.clone());
         }
-        let mut o: Map = (*self.geometry).clone();
+        let mut o: Map = Map::clone(&self.geometry);
         if self.kind == "object" {
             o.insert("x".into(), Value::from(0));
             o.insert("y".into(), Value::from(0));
@@ -161,7 +162,7 @@ impl DrawItem {
             }
             o.insert("points".into(), Value::Array(points));
         }
-        let local = Arc::new(o);
+        let local = Arc::new(EntityContent(o));
         *prepared.local.lock().unwrap_or_else(|e| e.into_inner()) = Some(local.clone());
         Ok(local)
     }
@@ -304,8 +305,8 @@ impl DrawItem {
     }
 
     /// `erase(regions)`: replacement operation with added local erasure masks.
-    pub fn erase(&self, regions: &Erasures) -> Result<Map> {
-        let mut next: Map = (*self.content).clone();
+    pub fn erase(&self, regions: &Erasures) -> Result<Operation> {
+        let mut next: Map = Map::clone(&self.content);
         for key in STRIPPED {
             next.shift_remove(key);
         }
@@ -324,15 +325,16 @@ impl DrawItem {
                 }
                 p.push(q);
             }
-            masks.push(p.to_json());
+            masks.push(Value::from(&p));
         }
         next.insert("erasures".into(), Value::Array(masks));
+        let next = Operation(next);
         Model::validate(&next)?;
         Ok(next)
     }
 
     /// `DrawItem.erasures(o)`: persistent local masks in unrotated paint coordinates.
-    pub fn erasures(o: &Map) -> Result<Erasures> {
+    pub fn erasures(o: &EntityContent) -> Result<Erasures> {
         let raw_masks = match o.get("erasures") {
             None => return Ok(Erasures::default()),
             Some(v) => json::list(v)?,
@@ -357,7 +359,7 @@ impl DrawItem {
         }
         let mut out = Erasures::from(Vec::with_capacity(raw_masks.len()));
         for raw in raw_masks {
-            let mut p = Polygon::from_json(raw)?;
+            let mut p = Polygon::try_from(raw)?;
             for v in p.iter_mut() {
                 v.x = x + v.x * w;
                 v.y = y + v.y * h;

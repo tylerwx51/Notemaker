@@ -16,6 +16,7 @@ use crate::model::Model;
 use crate::object;
 use crate::store::{State, StateKind};
 use crate::timing::{mark, TimingPhase};
+use crate::wire::ReplicaState;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -51,7 +52,7 @@ pub enum EditScope {
 
 struct Journal {
     /// Shared with the [`State`]s handed out (see `State.map`).
-    state: Option<Arc<Map>>,
+    state: Option<Arc<ReplicaState>>,
     committed: Model,
     effective: Model,
     received_ids: HashSet<String>,
@@ -247,8 +248,13 @@ fn without_overlay(state: &Map) -> Map {
     out
 }
 
+crate::json_object_newtype! {
+    /// `checkpoint(…)`: `{"revision", "journalBytesBefore", "journalBytesAfter", …}`.
+    pub struct CheckpointResult;
+}
+
 /// `Journal.checkpoint(file, document)`: fold the WAL into a new base file.
-pub fn checkpoint(file: &Path, document: &DocumentName) -> Result<Map> {
+pub fn checkpoint(file: &Path, document: &DocumentName) -> Result<CheckpointResult> {
     let document: &str = document;
     let path = canonical_path(file);
     let cache = cache_for(&path);
@@ -259,7 +265,7 @@ pub fn checkpoint(file: &Path, document: &DocumentName) -> Result<Map> {
     if result.is_err() {
         journal.state = None;
     }
-    result
+    result.map(CheckpointResult)
 }
 
 impl Journal {
@@ -300,7 +306,7 @@ impl Journal {
                     persisted.insert("relayFormat".into(), Value::String("ids".into()));
                 }
             }
-            checkpoint_point_prefixes::encode(&mut persisted)?;
+            checkpoint_point_prefixes::encode((&mut persisted).into())?;
             out.write_all(json::write_map(&persisted).as_bytes()).map_err(|e| io_error(&temporary, e))?;
             out.sync_all().map_err(|e| io_error(&temporary, e))?;
             fs::rename(&temporary, file).map_err(|e| io_error(&temporary, e))?;
@@ -457,7 +463,7 @@ impl Journal {
             object! {"events" => Value::Array(Vec::new()), "pending" => Value::Array(Vec::new()), "cursor" => 0}
         };
         mark(TimingPhase("journal_base_parsed"));
-        checkpoint_point_prefixes::decode(&mut state)?;
+        checkpoint_point_prefixes::decode((&mut state).into())?;
         mark(TimingPhase("journal_points_expanded"));
         json::put_if_absent(&mut state, "relay", Value::Array(Vec::new()));
         let relay_format = state.shift_remove("relayFormat");
@@ -483,15 +489,15 @@ impl Journal {
         mark(TimingPhase("journal_relay_ready"));
         let mut committed = Model::new();
         for op in json::list_at(&state, "events")? {
-            committed.apply(json::map(op)?)?;
+            committed.apply(op.try_into()?)?;
         }
         mark(TimingPhase("journal_committed_ready"));
         let mut effective = committed.clone();
         for op in json::list_at(&state, "pending")? {
-            effective.apply(json::map(op)?)?;
+            effective.apply(op.try_into()?)?;
         }
         mark(TimingPhase("journal_effective_ready"));
-        self.state = Some(Arc::new(state));
+        self.state = Some(Arc::new(state.into()));
         self.received_ids = received;
         self.committed = committed;
         self.effective = effective;
@@ -504,7 +510,7 @@ impl Journal {
     fn rebuild_effective(&mut self) -> Result<()> {
         let mut effective = self.committed.clone();
         for op in json::list_at(self.state.as_ref().unwrap(), "pending")? {
-            effective.apply(json::map(op)?)?;
+            effective.apply(op.try_into()?)?;
         }
         self.effective = effective;
         Ok(())
@@ -538,7 +544,7 @@ impl Journal {
         for (k, v) in state.iter() {
             next.insert(k.clone(), if k == "relay" { Value::Array(Vec::new()) } else { v.clone() });
         }
-        State::shared(Arc::new(next), Some(self.effective.clone()), StateKind::Journal)
+        State::shared(Arc::new(ReplicaState(next)), Some(self.effective.clone()), StateKind::Journal)
     }
 
     fn snapshot(&self) -> State {
@@ -558,18 +564,18 @@ impl Journal {
         let added = json::list_at(delta, "added")?;
         let removed = json::list_at(delta, "removed")?;
         for op in events {
-            self.committed.apply(json::map(op)?)?;
+            self.committed.apply(op.try_into()?)?;
         }
         if !replay {
             if !events.is_empty() || !removed.is_empty() {
                 let mut effective = self.committed.clone();
                 for op in json::list_at(self.state.as_ref().unwrap(), "pending")? {
-                    effective.apply(json::map(op)?)?;
+                    effective.apply(op.try_into()?)?;
                 }
                 self.effective = effective;
             } else {
                 for op in added {
-                    self.effective.apply(json::map(op)?)?;
+                    self.effective.apply(op.try_into()?)?;
                 }
             }
         }
@@ -613,7 +619,7 @@ impl Journal {
     /// state equal what the Full path computes (checked under
     /// `debug_assertions` or `NOTEMAKER_VERIFY_APPEND=1`).
     fn append_edit(&mut self, edit: &mut Edit<'_>, before: &[ActorRecord], log: &mut File, wal: &Path) -> std::result::Result<(), Failure> {
-        let original: Option<(Map, HashSet<String>)> = if verify_append() { Some(((**self.state.as_ref().unwrap()).clone(), self.received_ids.clone())) } else { None };
+        let original: Option<(Map, HashSet<String>)> = if verify_append() { Some((Map::clone(self.state.as_ref().unwrap()), self.received_ids.clone())) } else { None };
         let mut next = Map::new();
         {
             let state = Arc::make_mut(self.state.as_mut().unwrap());
@@ -626,7 +632,7 @@ impl Journal {
                 next.insert(k.clone(), value);
             }
         }
-        let mut next = State::shared(Arc::new(next), Some(self.effective.clone()), StateKind::Journal);
+        let mut next = State::shared(Arc::new(ReplicaState(next)), Some(self.effective.clone()), StateKind::Journal);
         let prepared = (|| -> Result<(Map, Vec<u8>)> {
             mark(TimingPhase("edit_begin"));
             edit(&mut next)?;

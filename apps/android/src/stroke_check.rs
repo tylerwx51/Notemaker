@@ -99,8 +99,8 @@ fn run_case(test: &Arc<Integration>, app: &Arc<MainActivity>, brush: &str, trans
         // Existing content exercises compositing and stable stacking, not just blank paper.
         let background = object! {"kind" => "stroke", "stroke" => "background", "layer" => "base", "page" => 0, "width" => 25, "color" => 0x80770000u32 as i32, "brush" => "pen", "points" => vec![Value::from(vec![20, 20, 1]), Value::from(vec![900, 1100, 1])]};
         app.enqueue(&json_object(background))?;
-        let bx = notemaker_core::actions::drawing(&object! {"object" => "box", "shape" => "rect", "x" => 170, "y" => 20, "w" => 35, "h" => 1100, "fill" => 0x800000ffu32 as i32}, &notemaker_core::ids::LayerId::from("base"))?;
-        app.enqueue(&json_object(bx))?;
+        let bx = notemaker_core::actions::drawing(&notemaker_core::wire::ActionInput(object! {"object" => "box", "shape" => "rect", "x" => 170, "y" => 20, "w" => 35, "h" => 1100, "fill" => 0x800000ffu32 as i32}), &notemaker_core::ids::LayerId::from("base"))?;
+        app.enqueue(&json_object(bx.into()))?;
         app.update()
     })?;
     drain()?;

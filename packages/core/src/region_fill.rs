@@ -5,10 +5,11 @@ use crate::actions;
 use crate::draw_item::DrawItem;
 use crate::error::{require, Error, Result};
 use crate::geometry::{DocPoint, Erasures, Polygon};
+use crate::wire::{ActionInput, OperationList};
 use crate::ids::{LayerId, PageNumber, ShapeId};
 use crate::jfmt;
 use crate::jmath;
-use crate::json::{self, Map, Value};
+use crate::json::{self, Value};
 use crate::layer_editor::LayerEditor;
 use crate::model::{self, Model};
 use crate::object;
@@ -40,10 +41,10 @@ fn add(lines: &mut Vec<[f64; 5]>, bounds: &mut [f64; 4], x: f64, y: f64, xx: f64
 }
 
 /// `RegionFill.create(model, input)`: an SVG fill object for the region around (x, y).
-pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
+pub fn create(model: &Model, input: &ActionInput) -> Result<OperationList> {
     let x = json::number(input, "x")?;
     let y = json::number(input, "y")?;
-    model::color(input, "color")?;
+    model::input_color(input)?;
     let requested_page = match input.get("page") {
         None => 0.0,
         v => json::as_double(v)?,
@@ -251,7 +252,7 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
         h = height
     );
     let drawing = actions::drawing(
-        &object! {
+        &ActionInput(object! {
             "shape" => "svg",
             "svg" => svg,
             "x" => json::double(left),
@@ -259,8 +260,8 @@ pub fn create(model: &Model, input: &Map) -> Result<Vec<Value>> {
             "w" => json::double(width as f64 * scale),
             "h" => json::double(height as f64 * scale),
             "page" => page,
-        },
+        }),
         &LayerId::from(&layer),
     )?;
-    Ok(vec![Value::Object(drawing)])
+    Ok(OperationList(vec![Value::from(drawing)]))
 }

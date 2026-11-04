@@ -5,16 +5,17 @@ use crate::ids::{self, LayerId};
 use crate::json::{self, Map, Value};
 use crate::model::Model;
 use crate::object;
+use crate::wire::{ActionInput, Operation, OperationList, Operations};
 use crate::{image_asset, svg_asset};
 use std::collections::HashSet;
 
 /// `Actions.Build`: produces the requested operations from the current model.
-pub type Build<'a> = dyn FnMut(&mut Model) -> Result<Vec<Value>> + 'a;
+pub type Build<'a> = dyn FnMut(&mut Model) -> Result<OperationList> + 'a;
 
 /// `Actions.drawing(input, layer)`: object operation with defaults, validated.
-pub fn drawing(input: &Map, layer: &LayerId) -> Result<Map> {
+pub fn drawing(input: &ActionInput, layer: &LayerId) -> Result<Operation> {
     let layer: &str = layer;
-    let mut input = input.clone();
+    let mut input = input.0.clone();
     if input.get("shape").and_then(Value::as_str) == Some("svg") {
         let size = svg_asset::validate(json::string(&input, "svg")?)?;
         json::put_if_absent(&mut input, "w", json::double(size.width));
@@ -38,12 +39,13 @@ pub fn drawing(input: &Map, layer: &LayerId) -> Result<Map> {
     json::put_if_absent(&mut o, "y", Value::from(0));
     json::put_if_absent(&mut o, "w", Value::from(160));
     json::put_if_absent(&mut o, "h", Value::from(80));
+    let o = Operation(o);
     Model::validate(&o)?;
     Ok(o)
 }
 
 /// `Actions.diagram(model, input)`: a new layer plus its nodes and connectors.
-pub fn diagram(model: &Model, input: &Map) -> Result<Vec<Value>> {
+pub fn diagram(model: &Model, input: &ActionInput) -> Result<OperationList> {
     let generated = String::from(ids::Uuid::random());
     let layer = json::string_or(input, "layer", &generated)?.ok_or_else(Error::null_pointer)?.to_string();
     require(!model.layers.contains_key(&layer), "Diagram layer already exists")?;
@@ -53,7 +55,7 @@ pub fn diagram(model: &Model, input: &Map) -> Result<Vec<Value>> {
     let objects = json::list_at(input, "objects")?;
     require(!objects.is_empty(), "Diagram needs objects")?;
     for v in objects {
-        let mut o = drawing(json::map(v)?, &LayerId::from(&layer))?;
+        let mut o = drawing(json::map(v)?.into(), &LayerId::from(&layer))?.0;
         o.insert("layer".into(), Value::String(layer.clone()));
         require(ids.insert(json::string(&o, "object")?.to_string()), "Duplicate object ID")?;
         result.push(o);
@@ -83,7 +85,7 @@ pub fn diagram(model: &Model, input: &Map) -> Result<Vec<Value>> {
 }
 
 /// `Actions.validateReferences(model, operations)`.
-pub fn validate_references(model: &Model, operations: &[Value]) -> Result<()> {
+pub fn validate_references(model: &Model, operations: &Operations) -> Result<()> {
     for v in operations {
         let op = json::map(v)?;
         let kind = json::string(op, "kind")?;
@@ -106,11 +108,11 @@ pub fn validate_references(model: &Model, operations: &[Value]) -> Result<()> {
 }
 
 /// `Actions.inverse(model, op)`: the operation that undoes `op`.
-pub fn inverse(model: &Model, op: &Map) -> Result<Value> {
+pub fn inverse(model: &Model, op: &Operation) -> Result<Operation> {
     let k = json::string(op, "kind")?;
     if k == "conflict-status" {
         let active = json::key_of(op.get("conflict")).and_then(|c| model.conflict_active.get(c)) != Some(&false);
-        return Ok(Value::Object(object! {"kind" => k, "conflict" => op.get("conflict").cloned().unwrap_or(Value::Null), "active" => active}));
+        return Ok(Operation(object! {"kind" => k, "conflict" => op.get("conflict").cloned().unwrap_or(Value::Null), "active" => active}));
     }
     let key = if k.starts_with("object") { "object" } else if k.starts_with("layer") { "layer" } else { "stroke" };
     let id = if op.contains_key(key) { json::string(op, key)?.to_string() } else { String::new() };
@@ -124,10 +126,10 @@ pub fn inverse(model: &Model, op: &Map) -> Result<Value> {
             _ => &model.strokes,
         };
         if let Some(old) = table.get(&id) {
-            return Ok(Value::Object((**old).clone()));
+            return Ok(Operation(Map::clone(old)));
         }
         let kind = if k == "stroke" { "active".to_string() } else { format!("{}-active", k) };
-        return Ok(Value::Object(object! {"kind" => kind, key => id, "active" => false}));
+        return Ok(Operation(object! {"kind" => kind, key => id, "active" => false}));
     }
     let active = match k {
         "active" => &model.active,
@@ -135,7 +137,7 @@ pub fn inverse(model: &Model, op: &Map) -> Result<Value> {
         _ => &model.layer_active,
     };
     let value = active.get(&id) != Some(&false);
-    Ok(Value::Object(object! {"kind" => k, key => id, "active" => value}))
+    Ok(Operation(object! {"kind" => k, key => id, "active" => value}))
 }
 
 /// Owned `Map.getOrDefault(key, default)`.

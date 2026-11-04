@@ -17,7 +17,7 @@ use crate::network::{NetworkSettingsForm, ServerAddr};
 use crate::ui::UiText;
 use crate::ui;
 use indexmap::IndexMap;
-use notemaker_cli::local_proxy::{UiActionName, UiError, UiSession, UiVerb};
+use notemaker_cli::local_proxy::{UiActionInput, UiActionName, UiError, UiReply, UiSession, UiVerb};
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::ids::{EntityId, LayerId};
 use notemaker_core::object;
@@ -235,7 +235,7 @@ impl UiActions {
                 require(kind == "object" || kind == "stroke", "Unknown entity kind")?;
                 refs.push(object! { "kind" => kind, "id" => id, "page" => app.page.get() as i64 });
             }
-            app.start_selection(refs)
+            app.start_selection(refs.into_iter().map(Value::Object).collect::<Vec<Value>>())
         }));
         UiActions::add(ac, de, "selection.clear", "{}", Box::new(|app, _| app.deselect()));
         UiActions::add(ac, de, "view.zoom", "{factor: positive number}", Box::new(|app, a| {
@@ -329,12 +329,12 @@ impl UiActions {
         let manufacturer = jsget!("android/os/Build", "MANUFACTURER", "Ljava/lang/String;")?.string().unwrap_or_else(|| "null".into());
         let model = jsget!("android/os/Build", "MODEL", "Ljava/lang/String;")?.string().unwrap_or_else(|| "null".into());
         let files_open = browser_showing(&app)?;
-        let files = if files_open { Value::Object(app.browser.get().unwrap().state()?) } else { Value::Null };
+        let files = if files_open { Value::from(&app.browser.get().unwrap().state()?) } else { Value::Null };
         let editor = app.editor();
         let canvas = app.canvas();
         let selected = app.selected.get();
         Ok(object! {
-            "gifPlayer" => app.animation_player().state()?,
+            "gifPlayer" => Value::from(&app.animation_player().state()?),
             "session" => app.app_session_id.get(),
             "deviceId" => app.device_id.get(),
             "deviceName" => format!("{manufacturer} {model}"),
@@ -380,10 +380,11 @@ impl UiActions {
         Ok(Value::Object(object! { "action" => action, "state" => self.state()? }))
     }
     /// `public Object request(String verb, String action, Map input) throws Exception`.
-    pub fn request_impl(&self, verb: &UiVerb, action: &UiActionName, input: Map) -> AppResult<Value> {
+    pub fn request_impl(&self, verb: &UiVerb, action: &UiActionName, input: UiActionInput) -> AppResult<UiReply> {
+        let input = input.0;
         let (verb, action): (&str, &str) = (verb, action);
         if ui::on_main_thread()? {
-            return self.task(verb, action, &input);
+            return self.task(verb, action, &input).map(UiReply);
         }
         let (sender, receiver) = mpsc::sync_channel::<AppResult<Value>>(1);
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -405,7 +406,7 @@ impl UiActions {
         });
         ui::post(&self.main, &pending)?;
         match receiver.recv_timeout(Duration::from_secs(30)) {
-            Ok(result) => result,
+            Ok(result) => result.map(UiReply),
             Err(_) => {
                 cancelled.store(true, Ordering::SeqCst);
                 Err(AppError::illegal_state("UI session did not respond within 30 seconds"))
@@ -415,7 +416,7 @@ impl UiActions {
 }
 
 impl UiSession for UiActions {
-    fn request(&self, verb: &UiVerb, action: &UiActionName, input: Map) -> Result<Value, UiError> {
+    fn request(&self, verb: &UiVerb, action: &UiActionName, input: UiActionInput) -> Result<UiReply, UiError> {
         self.request_impl(verb, action, input).map_err(|e| Box::new(e) as UiError)
     }
 }

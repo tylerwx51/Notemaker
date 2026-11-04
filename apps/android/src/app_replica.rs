@@ -6,10 +6,10 @@ use crate::field::Field;
 use crate::jx::{self, JThread, ThreadName};
 use crate::main_activity::MainActivity;
 use crate::network::ProxyAddr;
-use notemaker_cli::local_proxy::LocalProxy;
+use notemaker_cli::local_proxy::{CommandInput, CommandReply, ExecutedCommand, LocalProxy};
 use notemaker_cli::main::CommandArgs;
 use notemaker_core::ids::{ActorId, DocumentName};
-use notemaker_core::endpoint::{Disconnector, Endpoint};
+use notemaker_core::endpoint::{Disconnector, Endpoint, EndpointDescriptor};
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::net::{ApiPath, BearerToken, HttpStatus};
 use notemaker_core::store::{State, Store};
@@ -37,7 +37,7 @@ pub struct AppReplica {
     pub local: Arc<Store>,
     pub document: DocumentName,
     /// `final Map<String,Object> descriptor` (`null` for the embedded proxy).
-    pub descriptor: Option<Map>,
+    pub descriptor: Option<EndpointDescriptor>,
     pub descriptor_file: PathBuf,
     /// `volatile HttpURLConnection stream`: the open notification stream.
     pub stream: Field<Option<Disconnector>>,
@@ -57,7 +57,7 @@ impl AppReplica {
             None => files.join("proxy.json"),
             Some((_, key)) => files.join(format!("selected-proxy-{}.json", String::from(ids::Uuid::from_name(key)))),
         };
-        let descriptor = descriptor.map(|(d, _)| d);
+        let descriptor = descriptor.map(|(d, _)| EndpointDescriptor(d));
         if let Some(d) = &descriptor {
             std::fs::write(&descriptor_file, json::write_map(d).as_bytes())?;
         }
@@ -80,7 +80,7 @@ impl AppReplica {
     pub fn read(&self) -> AppResult<State> {
         if self.descriptor.is_some() {
             let v = self.command(CliArgs(&["snapshot"]), None)?;
-            return Ok(State::plain(json::map(&v)?.clone()));
+            return Ok(State::plain(json::map(&v)?.clone().into()));
         }
         let app = self.app();
         let trace = app.trace_cold_load.get();
@@ -110,13 +110,13 @@ impl AppReplica {
     }
 
     /// `Object command(List<String> args, Object input) throws Exception`.
-    pub fn command(&self, args: CliArgs, input: Option<&Value>) -> AppResult<Value> {
+    pub fn command(&self, args: CliArgs, input: Option<&CommandInput>) -> AppResult<CommandReply> {
         self.command_named(&self.document, args, input)
     }
 
     /// `Object command(String name, List<String> args, Object input) throws Exception`.
-    pub fn command_named(&self, name: &DocumentName, args: CliArgs, input: Option<&Value>) -> AppResult<Value> {
-        Ok(self.command_with(name, args, input, false)?.0)
+    pub fn command_named(&self, name: &DocumentName, args: CliArgs, input: Option<&CommandInput>) -> AppResult<CommandReply> {
+        Ok(self.command_with(name, args, input, false)?.reply)
     }
 
     /// `command(args, input)` for the `… snapshot` commands: the reply and its
@@ -124,24 +124,24 @@ impl AppReplica {
     /// `Store.Snapshot`-like [`State`] carrying its model (Java put that
     /// object in the reply), so `refreshShared` does not re-parse
     /// `effectiveModel`. `None` when the reply has no snapshot.
-    pub fn command_snapshot(&self, args: CliArgs, input: Option<&Value>) -> AppResult<SnapshotReply> {
-        let (result, captured) = self.command_with(&self.document, args, input, true)?;
-        let result = json::map(&result)?.clone();
+    pub fn command_snapshot(&self, args: CliArgs, input: Option<&CommandInput>) -> AppResult<SnapshotReply> {
+        let ExecutedCommand { reply, snapshot: captured } = self.command_with(&self.document, args, input, true)?;
+        let result = json::map(&reply)?.clone();
         let snapshot = match captured {
             Some(state) => Some(state),
             None => match result.get("snapshot") {
-                Some(Value::Object(s)) => Some(State::plain(s.clone())),
+                Some(Value::Object(s)) => Some(State::plain(s.clone().into())),
                 _ => None,
             },
         };
         Ok(SnapshotReply { result, snapshot })
     }
 
-    fn command_with(&self, name: &DocumentName, args: CliArgs, input: Option<&Value>, capture: bool) -> AppResult<(Value, Option<State>)> {
+    fn command_with(&self, name: &DocumentName, args: CliArgs, input: Option<&CommandInput>, capture: bool) -> AppResult<ExecutedCommand> {
         let args = args.0;
         let owned = CommandArgs(args.iter().map(|s| s.to_string()).collect());
         if let Some(descriptor) = &self.descriptor {
-            return Ok((LocalProxy::request(descriptor, name, &ActorId::from("human"), &owned, input)?, None));
+            return Ok(ExecutedCommand { reply: LocalProxy::request(descriptor, name, &ActorId::from("human"), &owned, input)?, snapshot: None });
         }
         let app = self.app();
         let trace = app.trace_cold_load.get() && args.len() == 1 && args[0] == "snapshot";
@@ -164,8 +164,8 @@ impl AppReplica {
         }
         started = if trace { jx::nano_time().0 } else { 0 };
         let args_value = Value::Array(owned.0.into_iter().map(Value::String).collect());
-        let body = object! {"document" => name.clone(), "actor" => "human", "args" => args_value, "input" => input.cloned().unwrap_or(Value::Null)};
-        let result = if capture { proxy.execute_with_snapshot(&body)? } else { (proxy.execute(&body)?, None) };
+        let body = notemaker_cli::local_proxy::CommandRequest(object! {"document" => name.clone(), "actor" => "human", "args" => args_value, "input" => input.map(|i| i.0.clone()).unwrap_or(Value::Null)});
+        let result = if capture { proxy.execute_with_snapshot(&body)? } else { ExecutedCommand { reply: proxy.execute(&body)?, snapshot: None } };
         if trace {
             jx::log::i(crate::jx::log::STARTUP, &format!("snapshot_execute_duration={}", notemaker_core::jfmt::double((jx::nano_time().0 - started) as f64 / 1e6)));
         }

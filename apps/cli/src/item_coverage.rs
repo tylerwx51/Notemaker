@@ -16,6 +16,7 @@ use notemaker_core::style::{
     ArgbColor, ArgbPixels, FontFamily, FontSize, PathEnd, RectShape, ShapePaint, StrokeWidth,
     TextAlignment, TextContent, TextStyle,
 };
+use notemaker_core::wire::EntityContent;
 use notemaker_core::{json, Map, Result};
 use resvg::tiny_skia;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -54,7 +55,7 @@ impl Coverage for Shared {
 }
 
 impl CoverageFactory for Factory {
-    fn create(&self, local_content: &Map) -> Result<Box<dyn Coverage>> {
+    fn create(&self, local_content: &EntityContent) -> Result<Box<dyn Coverage>> {
         Ok(Box::new(Shared(create(local_content)?)))
     }
 }
@@ -66,7 +67,7 @@ struct TilePainter {
 
 impl Painter for TilePainter {
     fn paint(&self, tile: CoverageTile) -> Result<ArgbPixels> {
-        Png::coverage_tile(&Model::new(), &self.item, tile)
+        Png::coverage_tile(&Model::new(), (&self.item).into(), tile)
     }
 }
 
@@ -93,7 +94,7 @@ fn cache() -> &'static Mutex<IndexMap<String, Arc<dyn Coverage>>> {
 
 /// `ItemCoverage.create(item)`: cached (LRU, 10000 entries, keyed by the item
 /// without identity/placement fields) coverage, shared between callers.
-pub fn create(item: &Map) -> Result<Arc<dyn Coverage>> {
+pub fn create(item: &EntityContent) -> Result<Arc<dyn Coverage>> {
     let mut cache = cache().lock().unwrap_or_else(|e| e.into_inner());
     let mut key = item.clone();
     for k in IGNORED {
@@ -136,7 +137,7 @@ pub fn create(item: &Map) -> Result<Arc<dyn Coverage>> {
     let result: Arc<dyn Coverage> = if c.raster {
         Arc::new(Tiles::new(
             c.bounds(),
-            Box::new(TilePainter { item: item.clone() }),
+            Box::new(TilePainter { item: item.clone().into() }),
         ))
     } else {
         Arc::new(c)

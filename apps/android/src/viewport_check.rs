@@ -16,7 +16,7 @@ use crate::jx::{self, Obj};
 use crate::main_activity::MainActivity;
 use crate::performance::{drain_writes, open_file_output, write_file_output};
 use crate::stroke_crossings::{bitmap_canvas, recycle};
-use crate::tile_ink_cache::{self, TileInkCache};
+use crate::tile_ink_cache::{self, TileCacheMetrics, TileInkCache};
 use crate::ui::round_f32;
 use notemaker_cli::canvas::RectF;
 use notemaker_core::json::{self, Map, Value};
@@ -28,10 +28,10 @@ use std::sync::Arc;
 pub struct Frame {
     /// `final Bitmap image`.
     pub image: Obj,
-    pub metrics: Map,
+    pub metrics: TileCacheMetrics,
 }
 impl Frame {
-    fn new(image: Obj, metrics: Map) -> Frame {
+    fn new(image: Obj, metrics: TileCacheMetrics) -> Frame {
         Frame { image, metrics }
     }
 }
@@ -69,7 +69,7 @@ fn refresh<S: crate::main_activity::SharedState + Sync + ?Sized>(test: &Arc<Inte
     test.run_on_main_sync(|| app.refresh_shared(state).map_err(|e| AppError::runtime_cause(&e)))?
 }
 fn put_object(app: &MainActivity, input: Map) -> AppResult<()> {
-    app.replica().command(crate::app_replica::CliArgs(&["object", "put", "-"]), Some(&Value::Object(input)))?;
+    app.replica().command(crate::app_replica::CliArgs(&["object", "put", "-"]), Some((&Value::Object(input)).into()))?;
     Ok(())
 }
 
@@ -125,17 +125,12 @@ fn pixel_differences(x: &[i32], y: &[i32]) -> Vec<i32> {
     out
 }
 /// `private static Map<String,Object> metrics(Integration test, MainActivity app)`.
-fn metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
+fn metrics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<TileCacheMetrics> {
     Ok(test.run_on_main_sync(|| app.canvas().tile_cache_metrics())?)
 }
 /// `private static boolean hasItem(Map<String,Object> metrics, String id)`.
-fn has_item(metrics: &Map, id: &str) -> bool {
-    let ids = json::list(metrics.get("lastRenderedItemIds").unwrap_or(&Value::Null)).unwrap_or_else(|e| panic!("{}", AppError::from(e)));
-    ids.iter().any(|value| value.as_str() == Some(id))
-}
-/// `private static long n(Map<String,Object> m, String key)`.
-fn n(m: &Map, key: &str) -> i64 {
-    crate::performance::long_metric(m, key)
+fn has_item(metrics: &TileCacheMetrics, id: &str) -> bool {
+    metrics.rendered_item_ids.iter().any(|value| value == id)
 }
 /// `private static void saveDebug(MainActivity app, String name, Bitmap bitmap)`:
 /// failures are wrapped in a `RuntimeException`.
@@ -190,7 +185,7 @@ fn points(scale: f32, zoom: f32, ox: f32, oy: f32, screen: &[[f32; 2]]) -> Vec<V
 /// `private static void addStroke(MainActivity app, String id, String brush, int color, double width, List<Object> pts) throws Exception`.
 fn add_stroke(app: &Arc<MainActivity>, id: &str, brush: &str, color: i32, width: f64, pts: Vec<Value>) -> AppResult<()> {
     let input = object! {"stroke" => id, "layer" => "base", "page" => 0, "color" => color, "width" => json::double(width), "brush" => brush, "material" => 65, "points" => pts};
-    app.replica().command(crate::app_replica::CliArgs(&["stroke", "put", "-"]), Some(&Value::Object(input)))?;
+    app.replica().command(crate::app_replica::CliArgs(&["stroke", "put", "-"]), Some((&Value::Object(input)).into()))?;
     Ok(())
 }
 /// `private static void compare(Integration test, MainActivity app, String where)`.
@@ -212,7 +207,7 @@ fn compare(test: &Arc<Integration>, app: &Arc<MainActivity>, where_: &str) -> Ap
         save_text(
             app,
             "viewport-compare-debug.txt",
-            &format!("where={} warmReferenceDiff={} coldReferenceDiff={} coldMetrics={} warmMetrics={}", where_, int_array_string(&diff), int_array_string(&cold_diff), json::write_map(&cold.metrics), json::write_map(&warm)),
+            &format!("where={} warmReferenceDiff={} coldReferenceDiff={} coldMetrics={} warmMetrics={}", where_, int_array_string(&diff), int_array_string(&cold_diff), json::write(&Value::from(&cold.metrics)), json::write(&Value::from(&warm))),
         )?;
         recycle(&cold.image)?;
     }
@@ -302,7 +297,7 @@ fn seam_compare(test: &Arc<Integration>, app: &Arc<MainActivity>, zoom: f32, ox:
                 worst,
                 f(scale * zoom),
                 tier.0,
-                json::write_map(&warm)
+                json::write(&Value::from(&warm))
             ),
         )?;
     }
@@ -413,7 +408,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
             let rendered = first_frame.image.clone();
             let first_draw = first_frame.metrics;
             phase(&format!("initial draw {} zoom={}", type_, f(zoom)));
-            require(n(&first_draw, "itemRenders") > 0, "Viewport draw did not execute any geometry rendering; the cull check would be vacuous")?;
+            require(first_draw.item_renders > 0, "Viewport draw did not execute any geometry rendering; the cull check would be vacuous")?;
             if type_ == "infinite" {
                 test.run_on_main_sync(|| app.canvas().use_ink_cache.set(false))?;
                 let uncullled = snapshot(test, app)?;
@@ -453,7 +448,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
                                 TileInkCache::tile_size(tier).0,
                                 reference_hits,
                                 cached_hits,
-                                json::write_map(&warm)
+                                json::write(&Value::from(&warm))
                             ),
                         )?;
                     }
@@ -501,32 +496,32 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
             compare(test, app, &format!("{} zoom={}", type_, f(zoom)))?;
             phase(&format!("uncull reference passed {} zoom={}", type_, f(zoom)));
             let first = metrics(test, app)?;
-            require(n(&first, "culledItems") > 0, "No fully offscreen items were culled")?;
-            let items_before = n(&first, "itemRenders");
+            require(first.culled_items > 0, "No fully offscreen items were culled")?;
+            let items_before = first.item_renders;
             compare(test, app, &format!("repeat {} zoom={}", type_, f(zoom)))?;
             let second = metrics(test, app)?;
-            require(n(&second, "itemRenders") == items_before, "Repeated identical draw rerendered tile geometry")?;
-            require(n(&second, "currentBytes") <= n(&second, "maxBytes"), "Tile cache exceeded its configured memory bound")?;
-            require(n(&second, "peakBytes") <= n(&second, "maxBytes"), "Tile cache peak exceeded its configured memory bound")?;
+            require(second.item_renders == items_before, "Repeated identical draw rerendered tile geometry")?;
+            require(second.current_bytes <= tile_ink_cache::MAX_BYTES, "Tile cache exceeded its configured memory bound")?;
+            require(second.peak_bytes <= tile_ink_cache::MAX_BYTES, "Tile cache peak exceeded its configured memory bound")?;
             phase(&format!("reuse passed {} zoom={}", type_, f(zoom)));
             // A document-space object at the top edge exercises geometry clipping
             // through the same viewport cache; then edits must invalidate its tile.
-            let before_edit = n(&metrics(test, app)?, "tileRenders");
+            let before_edit = metrics(test, app)?.tile_renders;
             put_object(app, object! {"object" => "edge-object", "layer" => "base", "page" => 0, "shape" => "rect", "x" => 100, "y" => 100, "w" => 160, "h" => 90, "fill" => 0x804000ffu32 as i32, "color" => COLOR_BLACK, "width" => 3})?;
             let with_object = app.replica().read()?;
             refresh(test, app, &with_object)?;
             test.wait_for_idle_sync()?;
             compare(test, app, &format!("object insertion {} zoom={}", type_, f(zoom)))?;
             phase(&format!("object insertion passed {} zoom={}", type_, f(zoom)));
-            require(n(&metrics(test, app)?, "tileRenders") > before_edit, "Object edit did not invalidate and rerender affected viewport tiles")?;
-            let stable_items = n(&metrics(test, app)?, "itemRenders");
+            require(metrics(test, app)?.tile_renders > before_edit, "Object edit did not invalidate and rerender affected viewport tiles")?;
+            let stable_items = metrics(test, app)?.item_renders;
             compare(test, app, &format!("stable object cache {} zoom={}", type_, f(zoom)))?;
-            require(n(&metrics(test, app)?, "itemRenders") == stable_items, "Stable object was rendered repeatedly")?;
+            require(metrics(test, app)?.item_renders == stable_items, "Stable object was rendered repeatedly")?;
             phase(&format!("stable object passed {} zoom={}", type_, f(zoom)));
             let before_erase = snapshot(test, app)?;
             app.replica().command(
                 crate::app_replica::CliArgs(&["erase", "-"]),
-                Some(&Value::Object(object! {"layer" => "base", "page" => 0, "mode" => "partial", "radius" => 28, "points" => vec![Value::from(vec![json::double(seam_x as f64), json::double(seam_y as f64)])]})),
+                Some((&Value::Object(object! {"layer" => "base", "page" => 0, "mode" => "partial", "radius" => 28, "points" => vec![Value::from(vec![json::double(seam_x as f64), json::double(seam_y as f64)])]})).into()),
             )?;
             let masked = app.replica().read()?;
             refresh(test, app, &masked)?;
@@ -555,8 +550,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
                 })?;
                 recycle(&snapshot(test, app)?)?;
                 let returned = metrics(test, app)?;
-                require(n(&returned, "reusedTiles") > n(&away, "reusedTiles"), "Returning to the original pan did not reuse resident tiles")?;
-                require(n(&returned, "tileRenders") == n(&away, "tileRenders"), "Returning to the original pan rerendered resident tiles")?;
+                require(returned.reused_tiles > away.reused_tiles, "Returning to the original pan did not reuse resident tiles")?;
+                require(returned.tile_renders == away.tile_renders, "Returning to the original pan rerendered resident tiles")?;
             }
         }
     }
@@ -571,13 +566,13 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     refresh(test, app, &connected)?;
     test.wait_for_idle_sync()?;
     compare(test, app, "attached arrow initial")?;
-    let before_move = n(&metrics(test, app)?, "tileRenders");
+    let before_move = metrics(test, app)?.tile_renders;
     put_object(app, object! {"object" => "node-b", "layer" => "base", "page" => 0, "shape" => "rect", "x" => 900, "y" => 450, "w" => 100, "h" => 100, "fill" => 0x804000ffu32 as i32, "color" => COLOR_BLACK, "width" => 3})?;
     let moved = app.replica().read()?;
     refresh(test, app, &moved)?;
     test.wait_for_idle_sync()?;
     compare(test, app, "attached arrow endpoint moved")?;
-    require(n(&metrics(test, app)?, "tileRenders") > before_move, "Moving an attached node did not rerender tiles containing its arrow")?;
+    require(metrics(test, app)?.tile_renders > before_move, "Moving an attached node did not rerender tiles containing its arrow")?;
     phase("attached arrow passed");
 
     reset_document(test, app, "infinite", 1.0, 0.0, 0.0)?;
@@ -598,14 +593,14 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     let populated = capture_cold(test, app)?;
     recycle(&populated.image)?;
     let tier_one = populated.metrics;
-    let original_scale_renders = n(&tier_one, "tileRenders");
+    let original_scale_renders = tier_one.tile_renders;
     require(has_item(&tier_one, "zoom-stroke"), "Zoom fixture did not populate a tile with visible geometry")?;
     let next_zoom = 5f32;
     test.run_on_main_sync(|| app.canvas().zoom.set(next_zoom))?;
     recycle(&snapshot(test, app)?)?;
     let tier_two = metrics(test, app)?;
-    require(n(&tier_two, "densityTier") > n(&tier_one, "densityTier"), "Zoom fixture did not cross a populated raster-density tier")?;
-    require(n(&tier_two, "tileRenders") > original_scale_renders, "Zoom density change did not rerasterize populated tiles")?;
+    require(tier_two.density_tier > tier_one.density_tier, "Zoom fixture did not cross a populated raster-density tier")?;
+    require(tier_two.tile_renders > original_scale_renders, "Zoom density change did not rerasterize populated tiles")?;
     compare(test, app, "intermediate zoom tier")?;
     phase("zoom tier passed");
     // Exercise many viewport shifts to force LRU eviction while remaining
@@ -617,8 +612,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     refresh(test, app, &cache_fill)?;
     test.wait_for_idle_sync()?;
     recycle(&snapshot(test, app)?)?;
-    require(n(&metrics(test, app)?, "densityTier") == 8, "High-zoom eviction fixture did not reach density tier 8")?;
-    let evictions_before = n(&metrics(test, app)?, "evictedTiles");
+    require(metrics(test, app)?.density_tier == 8, "High-zoom eviction fixture did not reach density tier 8")?;
+    let evictions_before = metrics(test, app)?.evicted_tiles;
     for i in 0..40 {
         let shift = i;
         test.run_on_main_sync(|| {
@@ -629,8 +624,8 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
         recycle(&snapshot(test, app)?)?;
     }
     let bounded = metrics(test, app)?;
-    require(n(&bounded, "currentBytes") <= n(&bounded, "maxBytes") && n(&bounded, "peakBytes") <= n(&bounded, "maxBytes"), "Panning grew tile cache beyond the memory budget")?;
-    require(n(&bounded, "evictedTiles") > evictions_before, "Populated high-density panning did not exercise bounded-cache eviction")?;
+    require(bounded.current_bytes <= tile_ink_cache::MAX_BYTES && bounded.peak_bytes <= tile_ink_cache::MAX_BYTES, "Panning grew tile cache beyond the memory budget")?;
+    require(bounded.evicted_tiles > evictions_before, "Populated high-density panning did not exercise bounded-cache eviction")?;
     phase("LRU passed");
 
     reset_document(test, app, "pages", 1.0, 0.0, 0.0)?;
@@ -653,10 +648,10 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     require(differences(&page_zero, &page_one)?[0] > 0, "Page fixture rendered identical pixels on both pages")?;
     recycle(&page_zero)?;
     recycle(&page_one)?;
-    let page_one_renders = n(&metrics(test, app)?, "tileRenders");
+    let page_one_renders = metrics(test, app)?.tile_renders;
     test.run_on_main_sync(|| app.page.set(0))?;
     recycle(&snapshot(test, app)?)?;
-    require(n(&metrics(test, app)?, "tileRenders") == page_one_renders, "Returning to page 0 repainted resident tiles")?;
+    require(metrics(test, app)?.tile_renders == page_one_renders, "Returning to page 0 repainted resident tiles")?;
     compare(test, app, "page 0 retained tile")?;
     put_object(app, object! {"object" => "page-box-1", "layer" => "base", "page" => 1, "shape" => "rect", "x" => 500, "y" => 330, "w" => 180, "h" => 120, "fill" => 0xff0055aau32 as i32, "color" => COLOR_BLACK, "width" => 3})?;
     let changed_page = app.replica().read()?;
@@ -669,7 +664,7 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
         .map_err(|e| AppError::runtime_cause(&e))
     })??;
     recycle(&snapshot(test, app)?)?;
-    require(n(&metrics(test, app)?, "tileRenders") > page_one_renders, "Edited page reused stale tiles")?;
+    require(metrics(test, app)?.tile_renders > page_one_renders, "Edited page reused stale tiles")?;
     compare(test, app, "page 1 after edit")?;
     phase("page cache passed");
     Ok(())

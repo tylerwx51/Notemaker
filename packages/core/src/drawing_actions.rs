@@ -16,6 +16,7 @@ use crate::model::{self, Model};
 use crate::object;
 use crate::region_fill;
 use crate::render;
+use crate::wire::{ActionInput, EntityContent, EntityRefs, OperationList};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -33,13 +34,13 @@ fn opt(v: &Map, k: &str, fallback: f64) -> Result<f64> {
     if v.contains_key(k) { json::number(v, k) } else { Ok(fallback) }
 }
 
-fn checked(result: Vec<Value>) -> Result<Vec<Value>> {
+fn checked(result: Vec<Value>) -> Result<OperationList> {
     require(!result.is_empty(), "No matching editable content")?;
     require(result.len() <= 200, "Operation exceeds 200 actions; select less content")?;
     for op in &result {
-        Model::validate(json::map(op)?)?;
+        Model::validate(op.try_into()?)?;
     }
-    Ok(result)
+    Ok(OperationList(result))
 }
 
 fn layer_or_base(input: &Map) -> Result<LayerId> {
@@ -47,7 +48,7 @@ fn layer_or_base(input: &Map) -> Result<LayerId> {
 }
 
 /// `copySelection(model, entities)`: clipboard snapshot; detached connectors keep their geometry.
-pub fn copy_selection(model: &Model, entities: &[Value]) -> Result<Vec<Value>> {
+pub fn copy_selection(model: &Model, entities: &EntityRefs) -> Result<OperationList> {
     require(!entities.is_empty() && entities.len() <= 100, "Clipboard needs 1–100 entities")?;
     let mut nodes: HashSet<String> = HashSet::new();
     for value in entities {
@@ -81,11 +82,11 @@ pub fn copy_selection(model: &Model, entities: &[Value]) -> Result<Vec<Value>> {
         }
         out.push(Value::Object(next));
     }
-    Ok(out)
+    Ok(OperationList(out))
 }
 
 /// `paste(model, input)`: fresh IDs, offset by (`dx`, `dy`) (default 24).
-pub fn paste(model: &Model, input: &Map) -> Result<Vec<Value>> {
+pub fn paste(model: &Model, input: &ActionInput) -> Result<OperationList> {
     let entities = json::list_at(input, "entities")?;
     require(!entities.is_empty() && entities.len() <= 100, "Clipboard needs 1–100 entities")?;
     let dx = opt(input, "dx", 24.0)?;
@@ -98,7 +99,7 @@ pub fn paste(model: &Model, input: &Map) -> Result<Vec<Value>> {
         let source = json::map(value)?;
         let kind = json::string(source, "kind")?;
         require(kind == "object" || kind == "stroke", "Clipboard supports objects and strokes")?;
-        Model::validate(source)?;
+        Model::validate(source.into())?;
         let key = format!("{}:{}", kind, json::string(source, kind)?);
         require(!ids.contains_key(&key), "Duplicate clipboard entity")?;
         ids.insert(key, String::from(ids::Uuid::random()));
@@ -142,7 +143,7 @@ pub fn paste(model: &Model, input: &Map) -> Result<Vec<Value>> {
 }
 
 /// `duplicateLayer(m, id)`: a copy of the layer and its active content.
-pub fn duplicate_layer(m: &Model, id: &LayerId) -> Result<Vec<Value>> {
+pub fn duplicate_layer(m: &Model, id: &LayerId) -> Result<OperationList> {
     let id: &str = id;
     require(m.layers.contains_key(id), "Unknown layer")?;
     let target = String::from(ids::Uuid::random());
@@ -185,7 +186,7 @@ pub fn duplicate_layer(m: &Model, id: &LayerId) -> Result<Vec<Value>> {
 }
 
 /// `mergeLayer(m, source, target)`: move content to `target` and hide `source`.
-pub fn merge_layer(m: &Model, source: &LayerId, target: &LayerId) -> Result<Vec<Value>> {
+pub fn merge_layer(m: &Model, source: &LayerId, target: &LayerId) -> Result<OperationList> {
     let (source, target): (&str, &str) = (source, target);
     require(source != target && source != "base", "Select a non-base source and a different target")?;
     require(m.layers.contains_key(source) && m.layers.contains_key(target), "Unknown layer")?;
@@ -205,10 +206,10 @@ pub fn merge_layer(m: &Model, source: &LayerId, target: &LayerId) -> Result<Vec<
 }
 
 /// `reorderLayer(m, id, index)`: renumber every layer's `order`.
-pub fn reorder_layer(m: &Model, id: &LayerId, index: LayerPosition) -> Result<Vec<Value>> {
+pub fn reorder_layer(m: &Model, id: &LayerId, index: LayerPosition) -> Result<OperationList> {
     let (id, index) = (&**id, index.0);
     require(m.layers.contains_key(id) && index >= 0 && (index as usize) < m.layers.len(), "Invalid layer position")?;
-    let mut layers: Vec<&Map> = m.layers.values().map(|l| &**l).collect();
+    let mut layers: Vec<&Map> = m.layers.values().map(|l| &***l).collect();
     let mut indices: HashMap<String, i32> = HashMap::new();
     for (i, l) in layers.iter().enumerate() {
         indices.insert(json::string(l, "layer")?.to_string(), i as i32);
@@ -234,16 +235,16 @@ pub fn reorder_layer(m: &Model, id: &LayerId, index: LayerPosition) -> Result<Ve
 }
 
 /// `image(m, bytes, placement)`: embedded PNG/JPEG object.
-pub fn image(_m: &Model, bytes: &[u8], placement: &Map) -> Result<Vec<Value>> {
+pub fn image(_m: &Model, bytes: &[u8], placement: &ActionInput) -> Result<OperationList> {
     let mut o = placement.clone();
     o.insert("shape".into(), Value::String("image".into()));
     o.insert("image".into(), Value::String(image_asset::from_bytes(bytes)?));
     let layer = layer_or_base(&o)?;
-    checked(vec![Value::Object(actions::drawing(&o, &layer)?)])
+    checked(vec![Value::from(actions::drawing(&o, &layer)?)])
 }
 
 /// `template(m, input)`: page template SVG, or an infinite-canvas guide object.
-pub fn template(m: &Model, input: &Map) -> Result<Vec<Value>> {
+pub fn template(m: &Model, input: &ActionInput) -> Result<OperationList> {
     let kind = json::string(input, "template")?;
     require(matches!(kind, "blank" | "ruled" | "grid" | "dots" | "planner"), "Unknown template")?;
     let w = opt(input, "w", 1000.0)?;
@@ -285,7 +286,7 @@ pub fn template(m: &Model, input: &Map) -> Result<Vec<Value>> {
             json::put_if_absent(&mut guide, "object", Value::String(format!("{}-background", layer)));
         }
         let guide_layer = layer_or_base(&guide)?;
-        result.push(Value::Object(actions::drawing(&guide, &guide_layer)?));
+        result.push(Value::from(actions::drawing((&guide).into(), &guide_layer)?));
         return checked(result);
     }
     let color = match input.get("color") {
@@ -359,9 +360,9 @@ pub fn template(m: &Model, input: &Map) -> Result<Vec<Value>> {
         json::put_if_absent(&mut o, "object", Value::String(format!("{}-background", layer)));
     }
     let object_layer = layer_or_base(&o)?;
-    let drawing = actions::drawing(&o, &object_layer)?;
+    let drawing = actions::drawing((&o).into(), &object_layer)?;
     let drawing_id = drawing.get("object").cloned().unwrap_or(Value::Null);
-    result.push(Value::Object(drawing));
+    result.push(Value::from(drawing));
     if json::key_of(Some(&drawing_id)).and_then(|k| m.object_active.get(k)) == Some(&false) {
         result.push(Value::Object(object! {"kind" => "object-active", "object" => drawing_id, "active" => true}));
     }
@@ -369,11 +370,11 @@ pub fn template(m: &Model, input: &Map) -> Result<Vec<Value>> {
 }
 
 /// `fill(m, input)`: region fill at (x, y), native object fill, or a closed stroke fill.
-pub fn fill(m: &Model, input: &Map) -> Result<Vec<Value>> {
+pub fn fill(m: &Model, input: &ActionInput) -> Result<OperationList> {
     if input.contains_key("x") && input.contains_key("y") {
         return region_fill::create(m, input);
     }
-    model::color(input, "color")?;
+    model::input_color(input)?;
     let color = json::as_int(input.get("color"))?;
     let layer = layer_or_base(input)?;
     if input.contains_key("object") {
@@ -424,16 +425,16 @@ pub fn fill(m: &Model, input: &Map) -> Result<Vec<Value>> {
         f(((color as u32) >> 24) as f64 / 255.0)
     );
     let mut filled = actions::drawing(
-        &object! {
+        &ActionInput(object! {
             "shape" => "svg", "svg" => svg, "x" => json::double(b[0] - pad), "y" => json::double(b[1] - pad),
             "w" => json::double(w), "h" => json::double(h), "page" => s.get("page").cloned().unwrap_or(Value::Null),
-        },
+        }),
         &LayerId::from(json::string(&s, "layer")?),
     )?;
     if s.contains_key("erasures") {
-        filled = DrawItem::from_map(m, filled)?.erase(&DrawItem::erasures(&s)?)?;
+        filled = DrawItem::from_map(m, EntityContent(filled.0))?.erase(&DrawItem::erasures(&s)?)?;
     }
-    checked(vec![Value::Object(filled)])
+    checked(vec![Value::from(filled)])
 }
 
 fn point(p: &Value) -> Result<[f64; 3]> {
@@ -459,7 +460,7 @@ fn bounds(pts: &[Value]) -> Result<[f64; 4]> {
 }
 
 /// `erase(m, input, factory)`: hide, partially mask, or clear a page.
-pub fn erase(m: &Model, input: &Map, factory: &dyn CoverageFactory) -> Result<Vec<Value>> {
+pub fn erase(m: &Model, input: &ActionInput, factory: &dyn CoverageFactory) -> Result<OperationList> {
     let mode = json::string_or(input, "mode", "stroke")?.ok_or_else(Error::null_pointer)?.to_string();
     require(matches!(mode.as_str(), "stroke" | "item" | "partial" | "area" | "page"), "Unknown eraser mode")?;
     let editor = LayerEditor::for_erase(m, &layer_or_base(input)?, layer_editor::page(input)?)?;
@@ -486,18 +487,18 @@ pub fn erase(m: &Model, input: &Map, factory: &dyn CoverageFactory) -> Result<Ve
     }
     let mut out = Vec::new();
     for (item, touching) in hits {
-        out.push(Value::Object(if mode == "partial" {
-            item.erase(&touching)?
+        out.push(if mode == "partial" {
+            Value::from(item.erase(&touching)?)
         } else {
             let kind = if item.kind == "stroke" { "active" } else { "object-active" };
-            object! {"kind" => kind, item.kind.as_str() => item.id.clone(), "active" => false}
-        }));
+            Value::Object(object! {"kind" => kind, item.kind.as_str() => item.id.clone(), "active" => false})
+        });
     }
     checked(out)
 }
 
 /// `eraseRegions(input)`: exact swept capsules for feedback and durable erasing.
-pub fn erase_regions(input: &Map) -> Result<Erasures> {
+pub fn erase_regions(input: &ActionInput) -> Result<Erasures> {
     let radius = opt(input, "radius", 12.0)?;
     require(radius.is_finite() && (1.0..=10000.0).contains(&radius), "Invalid eraser radius")?;
     let mut regions = Erasures::default();

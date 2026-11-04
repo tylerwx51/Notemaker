@@ -59,8 +59,9 @@ use notemaker_core::draw_item::DrawItem;
 use notemaker_core::layer_editor::LayerEditor;
 use notemaker_core::net::{BearerToken, Port};
 use notemaker_core::model::{Entity, Model};
-use notemaker_core::collaboration::SelectionTransform;
+use notemaker_core::collaboration::{SelectionTransform, TransformSpec};
 use notemaker_core::store::{self, State, Store};
+use notemaker_core::wire::{EntityRef, EntityRefList, ReplicaState};
 use notemaker_core::{actions, drawing_actions, geometry, gif_asset, ids, image_asset, jfmt, jmath, json, object, render, svg_asset, timing};
 use notemaker_core::json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -335,11 +336,11 @@ impl ErasePreview {
         let mut paths = Vec::new();
         let mut hidden = HashSet::new();
         if same_str(input, "mode", "partial") {
-            for region in drawing_actions::erase_regions(input)?.iter() {
+            for region in drawing_actions::erase_regions(input.into())?.iter() {
                 paths.push(android_canvas::path_to_java(&item_coverage::path(region, notemaker_core::style::PathEnd::Closed))?);
             }
         } else {
-            for raw in drawing_actions::erase(model, input, &item_coverage::FACTORY)? {
+            for raw in drawing_actions::erase(model, input.into(), &item_coverage::FACTORY)? {
                 let op = json::map(&raw)?;
                 let kind = if same_str(op, "kind", "active") { "stroke" } else { "object" };
                 hidden.insert(format!("{}:{}", kind, json::java_string(op.get(kind))));
@@ -354,20 +355,20 @@ impl ErasePreview {
 /// `Store.model(state)` took that model instead of parsing `effectiveModel`;
 /// [`State`] from `AppReplica::read` plays that role here.
 pub trait SharedState {
-    fn map(&self) -> &Map;
+    fn map(&self) -> &ReplicaState;
     /// `Store.model(state)`.
     fn shared_model(&self) -> AppResult<Model>;
 }
 impl SharedState for Map {
-    fn map(&self) -> &Map {
-        self
+    fn map(&self) -> &ReplicaState {
+        self.into()
     }
     fn shared_model(&self) -> AppResult<Model> {
-        Ok(store::model_of_map(self)?)
+        Ok(store::model_of_map(self.into())?)
     }
 }
 impl SharedState for State {
-    fn map(&self) -> &Map {
+    fn map(&self) -> &ReplicaState {
         self
     }
     fn shared_model(&self) -> AppResult<Model> {
@@ -1105,7 +1106,7 @@ impl MainActivity {
                     let initial = target.read()?;
                     if json::as_int(initial.get("eventCount"))? == 0 && json::as_int(initial.get("pendingCount"))? == 0 {
                         let input = Value::Object(object! {"kind" => "document", "type" => target_type.clone()});
-                        target.command(crate::app_replica::CliArgs(&["append", "-"]), Some(&input))?;
+                        target.command(crate::app_replica::CliArgs(&["append", "-"]), Some((&input).into()))?;
                     }
                     app.refresh_from(&target)
                 })();
@@ -1136,7 +1137,7 @@ impl MainActivity {
         let args = owned(args);
         let app = self.clone();
         replica_service_writes().execute(move || {
-            let result = target.command(crate::app_replica::CliArgs(&argv(&args)), input.as_ref()).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&argv(&args)), input.as_ref().map(Into::into)).and_then(|_| target.read());
             match result {
                 Ok(snapshot) => app.run_on_ui_thread(move |app| {
                     if !local_settings {
@@ -1307,12 +1308,12 @@ impl MainActivity {
         if before.object_active != new_active {
             return false;
         }
-        let Ok(expected) = actions::drawing(preview, &ids::LayerId::from("base")) else { return false };
-        let mut visible: Map = (*committed).clone();
+        let Ok(expected) = actions::drawing(preview.into(), &ids::LayerId::from("base")) else { return false };
+        let mut visible: Map = ((*committed).clone()).into();
         for key in ["id", "actor", "seq", "at", "action", "session", "bases", "visibility"] {
             visible.shift_remove(key);
         }
-        json::equivalent(&Value::Object(expected), &Value::Object(visible))
+        json::equivalent(&Value::Object(expected.into()), &Value::Object(visible))
     }
     /// `void persistObject(JSONObject object)`.
     pub fn persist_object(self: &Arc<Self>, object: &JSONObject) -> AppResult<()> {
@@ -1325,7 +1326,7 @@ impl MainActivity {
             self.saving_add(1);
             if !self.model.with(|m| m.objects.contains_key(&preview_id)) {
                 self.pending_object_previews.with_mut(|p| {
-                    p.insert(preview_id.clone(), Arc::new(preview.clone()));
+                    p.insert(preview_id.clone(), (Arc::new(preview.clone())).into());
                 });
                 if let Some(c) = self.canvas.get() {
                     c.invalidate()?;
@@ -1337,7 +1338,7 @@ impl MainActivity {
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<Option<State>> {
                 let input = Value::Object(preview);
-                Ok(target.command_snapshot(crate::app_replica::CliArgs(&["object", "put", "snapshot", "-"]), Some(&input))?.snapshot)
+                Ok(target.command_snapshot(crate::app_replica::CliArgs(&["object", "put", "snapshot", "-"]), Some((&input).into()))?.snapshot)
             })();
             match result {
                 Ok(snapshot) => {
@@ -1361,7 +1362,7 @@ impl MainActivity {
                         if let Some(snapshot) = &snapshot {
                             app.refresh_or_record(snapshot);
                         }
-                        let retain_pixels = displayed && !target.remote() && app.save_error.with(Option::is_none) && app.same_painted_object(&before, displayed_preview.as_deref(), &preview_id);
+                        let retain_pixels = displayed && !target.remote() && app.save_error.with(Option::is_none) && app.same_painted_object(&before, displayed_preview.as_deref().map(|o| &o.0), &preview_id);
                         app.save();
                         if retain_pixels {
                             app.coalesced_object_frames.with_mut(|n| *n += 1);
@@ -1526,7 +1527,7 @@ impl MainActivity {
     fn entity(&self, prefix: &str, key: &str, value: &Entity, previous: &IndexMap<String, JSONObject>) -> JSONObject {
         let old = self.rendered_entities.with_mut(|r| r.insert(format!("{prefix}{key}"), value.clone()));
         match previous.get(key) {
-            Some(existing) if old.as_ref().is_some_and(|old| Arc::ptr_eq(old, value) || **value == **old) => existing.clone(),
+            Some(existing) if old.as_ref().is_some_and(|old| old.ptr_eq(value) || **value == **old) => existing.clone(),
             _ => json_object(value),
         }
     }
@@ -1573,7 +1574,7 @@ impl MainActivity {
             self.store.set(Some(replica.local.clone()));
             Self::startup_mark(trace, "replica_created", epoch);
             let state = if replica.remote() {
-                State::plain(object! {"effectiveModel" => Model::new().json(), "revision" => -1, "cursor" => 0, "eventCount" => 0, "pendingCount" => 0})
+                State::plain(notemaker_core::wire::ReplicaState(object! {"effectiveModel" => Model::new().json(), "revision" => -1, "cursor" => 0, "eventCount" => 0, "pendingCount" => 0}))
             } else {
                 replica.read()?
             };
@@ -1616,7 +1617,7 @@ impl MainActivity {
             }
             return Ok(());
         }
-        self.model.with_mut(|m| Arc::make_mut(m).apply(action))?;
+        self.model.with_mut(|m| Arc::make_mut(m).apply(action.into()))?;
         self.model_generation.with_mut(|g| *g += 1);
         if kind == "document" && !self.document_seen.get() {
             self.type_.set(o.opt_string_or("type", "fixed"));
@@ -1841,12 +1842,12 @@ impl MainActivity {
                     let erased = entry.starts_with("erase:");
                     let stroke = if erased { entry[6..].to_string() } else { entry.clone() };
                     let input = Value::Object(object! {"kind" => "active", "stroke" => stroke, "active" => if erased { !forward } else { forward }});
-                    target.command_snapshot(crate::app_replica::CliArgs(&["append", "snapshot", "-"]), Some(&input))?.snapshot
+                    target.command_snapshot(crate::app_replica::CliArgs(&["append", "snapshot", "-"]), Some((&input).into()))?.snapshot
                 };
                 // Java: map(result.get("snapshot")) rejected a missing snapshot.
                 match snapshot {
                     Some(s) => Ok(s),
-                    None => Ok(State::plain(into_map(Value::Null)?)),
+                    None => Ok(State::plain((into_map(Value::Null)?).into())),
                 }
             })();
             match result {
@@ -2128,7 +2129,7 @@ impl MainActivity {
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<State> {
                 for args in &commands {
-                    target.command(crate::app_replica::CliArgs(&argv(args)), input.as_ref())?;
+                    target.command(crate::app_replica::CliArgs(&argv(args)), input.as_ref().map(Into::into))?;
                 }
                 target.read()
             })();
@@ -2232,7 +2233,8 @@ impl MainActivity {
         });
     }
     /// `void startSelection(List<Map<String,Object>> entities)`.
-    pub fn start_selection(self: &Arc<Self>, entities: Vec<Map>) -> AppResult<()> {
+    pub fn start_selection(self: &Arc<Self>, entities: impl Into<EntityRefList>) -> AppResult<()> {
+        let entities: Vec<Map> = entities.into().0.into_iter().map(|r| EntityRef::try_from(r).map(|r| r.0)).collect::<Result<_, _>>()?;
         if entities.is_empty() {
             return Ok(());
         }
@@ -2256,7 +2258,7 @@ impl MainActivity {
         let app = self.clone();
         replica_service_writes().execute(move || {
             let input = Value::Object(input);
-            let result = target.command(crate::app_replica::CliArgs(&["selection", "select", "-"]), Some(&input)).and_then(into_map);
+            let result = target.command(crate::app_replica::CliArgs(&["selection", "select", "-"]), Some((&input).into())).and_then(|reply| into_map(reply.0));
             match result {
                 Ok(result) => app.run_on_ui_thread(move |app| {
                     let acquired = json::java_string(result.get("session"));
@@ -2304,7 +2306,7 @@ impl MainActivity {
         let hits = LayerEditor::select_in(&self.model(), &ids::LayerId::from(&selected), ids::PageNumber(self.page.get()), region, hits, &item_coverage::FACTORY)?;
         let mut refs = Vec::new();
         for hit in hits {
-            refs.push(into_map(hit)?);
+            refs.push(Value::Object(into_map(hit)?));
         }
         self.start_selection(refs)
     }
@@ -2353,7 +2355,7 @@ impl MainActivity {
         self.select_region(Some(&p), false)
     }
     /// `Map<String,Object> selectedEntityAt(float x, float y)` (`null` → `None`).
-    pub fn selected_entity_at(&self, at: DocPointF) -> AppResult<Option<Map>> {
+    pub fn selected_entity_at(&self, at: DocPointF) -> AppResult<Option<EntityRef>> {
         let canvas = self.canvas.get().ok_or_else(npe)?;
         let radius = Self::hit_radius(&canvas);
         let at = geometry::DocPoint::from(at);
@@ -2379,7 +2381,7 @@ impl MainActivity {
             }
             let hit = DrawItem::new(&model, source.clone()).and_then(|item| item.intersects(&region, &item_coverage::FACTORY));
             match hit {
-                Ok(true) => return Ok(Some(r)),
+                Ok(true) => return Ok(Some(EntityRef(r))),
                 Ok(false) => {}
                 Err(stale) if AppError::from(stale.clone()).is("java.lang.IllegalArgumentException") => {}
                 Err(e) => return Err(e.into()),
@@ -2421,7 +2423,7 @@ impl MainActivity {
                         return Ok(());
                     }
                     let request = Value::Object(object! {"layer" => app.selected.get(), "page" => app.page.get(), "entities" => Value::Array(remaining.into_iter().map(Value::Object).collect())});
-                    let result = into_map(target.command(crate::app_replica::CliArgs(&["selection", "select", "-"]), Some(&request))?)?;
+                    let result = into_map((target.command(crate::app_replica::CliArgs(&["selection", "select", "-"]), Some((&request).into()))?).into())?;
                     let acquired = json::java_string(result.get("session"));
                     let target = target.clone();
                     app.run_on_ui_thread(move |app| {
@@ -2557,16 +2559,16 @@ impl MainActivity {
     /// `void previewSelection(double scale, double dx, double dy)`.
     pub fn preview_selection(self: &Arc<Self>, transform: SelectionTransform) -> AppResult<()> {
         let SelectionTransform { scale, dx, dy } = transform;
-        self.preview_transform(&object! {"scale" => json::double(scale), "dx" => json::double(dx), "dy" => json::double(dy)})
+        self.preview_transform(&TransformSpec(object! {"scale" => json::double(scale), "dx" => json::double(dx), "dy" => json::double(dy)}))
     }
     /// `void previewTransform(Map<String,Object> specification)`.
-    pub fn preview_transform(self: &Arc<Self>, specification: &Map) -> AppResult<()> {
+    pub fn preview_transform(self: &Arc<Self>, specification: &TransformSpec) -> AppResult<()> {
         let Some(session) = self.selection_session.get() else { return Ok(()) };
         if self.selected_entities.with(Vec::is_empty) || self.transform_commit_queued.get() {
             return Ok(());
         }
         let entities = self.selected_entities.with(|s| Value::Array(s.iter().cloned().map(Value::Object).collect()));
-        self.pending_transform.set(Some(object! {"session" => session, "entities" => entities, "transform" => specification.clone()}));
+        self.pending_transform.set(Some(object! {"session" => session, "entities" => entities, "transform" => specification.0.clone()}));
         self.update()?;
         if !self.preview_in_flight.get() && self.preview_dispatch_task.with(Option::is_none) {
             let weak = Arc::downgrade(self);
@@ -2592,7 +2594,7 @@ impl MainActivity {
         let app = self.clone();
         replica_service_writes().execute(move || {
             let input = Value::Object(sent.clone());
-            let result = target.command(crate::app_replica::CliArgs(&["transform", "preview", "-"]), Some(&input)).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&["transform", "preview", "-"]), Some((&input).into())).and_then(|_| target.read());
             let again = move |app: &Arc<MainActivity>, sent: &Map| -> AppResult<()> {
                 if generation == app.selection_generation.get() && !app.transform_commit_queued.get() && app.pending_transform.with(|p| p.as_ref().is_some_and(|p| p != sent)) {
                     app.dispatch_latest_preview()?;
@@ -2653,8 +2655,8 @@ impl MainActivity {
         replica_service_writes().execute(move || {
             let input = Value::Object(transform);
             let result = (|| -> AppResult<State> {
-                target.command(crate::app_replica::CliArgs(&["transform", "preview", "-"]), Some(&input))?;
-                target.command(crate::app_replica::CliArgs(&["transform", "commit", "-"]), Some(&input))?;
+                target.command(crate::app_replica::CliArgs(&["transform", "preview", "-"]), Some((&input).into()))?;
+                target.command(crate::app_replica::CliArgs(&["transform", "commit", "-"]), Some((&input).into()))?;
                 target.read()
             })();
             match result {
@@ -2791,7 +2793,7 @@ impl MainActivity {
         self.update()?;
         let app = self.clone();
         replica_service_writes().execute(move || {
-            let result = target.command(crate::app_replica::CliArgs(&["selection", "paste", "-"]), Some(&input)).and_then(|_| target.read());
+            let result = target.command(crate::app_replica::CliArgs(&["selection", "paste", "-"]), Some((&input).into())).and_then(|_| target.read());
             match result {
                 Ok(snapshot) => app.run_on_ui_thread(move |app| {
                     app.saving_add(-1);
@@ -2831,7 +2833,7 @@ impl MainActivity {
         let app = self.clone();
         replica_service_writes().execute(move || {
             let result = (|| -> AppResult<(Map, State)> {
-                let result = into_map(target.command(crate::app_replica::CliArgs(&["selection", &command, &session]), None)?)?;
+                let result = into_map((target.command(crate::app_replica::CliArgs(&["selection", &command, &session]), None)?).into())?;
                 let clipboard = object! {"entities" => list_or(&result, "entities")?, "copiedAt" => jx::current_time_millis().0};
                 let snapshot = target.read()?;
                 Ok((clipboard, snapshot))
@@ -2979,7 +2981,7 @@ impl MainActivity {
                     })));
                 }
                 let input = Value::Object(input);
-                let erased = target.command(crate::app_replica::CliArgs(&["erase", "-"]), Some(&input));
+                let erased = target.command(crate::app_replica::CliArgs(&["erase", "-"]), Some((&input).into()));
                 timing::set_observer(None);
                 erased?;
                 trace_put(&trace, "command_done");
@@ -3563,7 +3565,7 @@ impl CanvasView {
     /// `void drawStroke(Canvas c, JSONObject stroke)`.
     pub fn draw_stroke(&self, c: &Obj, stroke: &JSONObject) -> AppResult<()> {
         let map = parse_map(&stroke.to_string())?;
-        draw_with_png(c, |png| render::draw_stroke(&map, png))
+        draw_with_png(c, |png| render::draw_stroke((&map).into(), png))
     }
     /// `void drawInfiniteTemplate(Canvas c, Map<String,Object> guide)`.
     fn draw_infinite_template(&self, c: &Obj, guide: &Map) -> AppResult<()> {
@@ -3626,12 +3628,12 @@ impl CanvasView {
         Ok(())
     }
     /// `Map<String,Object> tileCacheMetrics()`.
-    pub fn tile_cache_metrics(&self) -> Map {
+    pub fn tile_cache_metrics(&self) -> tile_ink_cache::TileCacheMetrics {
         let (mut m, clears, resident) = self.tile_ink.with(|t| (t.metrics(), t.cache_clears(), t.resident_page_count()));
-        m.insert("densityTier".into(), Value::from(self.raster_tier.get().0));
-        m.insert("reusedTileRepaints".into(), Value::from(tile_ink_cache::REUSED_TILE_REPAINTS.load(Ordering::SeqCst)));
-        m.insert("cacheClears".into(), Value::from(clears.0));
-        m.insert("residentPages".into(), Value::from(resident.0));
+        m.density_tier = self.raster_tier.get().0 as i64;
+        m.reused_tile_repaints = tile_ink_cache::REUSED_TILE_REPAINTS.load(Ordering::SeqCst);
+        m.cache_clears = clears.0;
+        m.resident_pages = resident.0 as i64;
         m
     }
     /// `void transform(Canvas c)`.
@@ -3667,7 +3669,7 @@ impl CanvasView {
         app.active.with(|active| -> AppResult<()> {
             for (key, stroke) in &model.strokes {
                 if current.as_deref() != Some(key.as_str()) && same_str(stroke, "layer", layer) && json::as_int(stroke.get("page"))? == page && active.get(key) != Some(&false) && !self.pending_erase("stroke", key, layer) {
-                    let cached = self.stroke_tile_items.with(|m| m.get(key).filter(|c| Arc::ptr_eq(&c.value, stroke)).cloned());
+                    let cached = self.stroke_tile_items.with(|m| m.get(key).filter(|c| c.value.ptr_eq(stroke)).cloned());
                     let cached = match cached {
                         Some(c) => c,
                         None => {
@@ -3686,7 +3688,7 @@ impl CanvasView {
         // as committed ink. Switching to saved state must not change pixels.
         if layer == app.selected.get() && self.points.with(Option::is_some) {
             if let Some(current) = &current {
-                visible.0.push(Arc::new(tile_ink_cache::Item::with_picture(tile_ink_cache::TileItemId::from(current), Arc::new(self.stroke_value()), tile_ink_cache::PictureCache::Transient)?));
+                visible.0.push(Arc::new(tile_ink_cache::Item::with_picture(tile_ink_cache::TileItemId::from(current), (Arc::new(self.stroke_value())).into(), tile_ink_cache::PictureCache::Transient)?));
             }
         }
         let player = app.animation_player();
@@ -3694,7 +3696,7 @@ impl CanvasView {
             if !same_str(o, "shape", "template") && !player.loaded(&ids::EntityId::from(key)) && same_str(o, "layer", layer) && json::as_int(o.get("page"))? == page && !is_false_in(&model.object_active, key) && !self.pending_erase("object", key, layer) {
                 let cached = self.object_tile_items.with(|m| m.get(key).cloned());
                 let linked = o.contains_key("from") || o.contains_key("to");
-                let same_source = self.object_tile_sources.with(|m| m.get(key).is_some_and(|s| Arc::ptr_eq(s, o)));
+                let same_source = self.object_tile_sources.with(|m| m.get(key).is_some_and(|s| s.ptr_eq(o)));
                 let cached = match cached {
                     Some(cached) if same_source => {
                         if linked {
@@ -3873,7 +3875,7 @@ impl CanvasView {
                     if current.as_deref() != Some(key.as_str()) && *layer == s.opt_string("layer") && s.opt_int("page") == page && active.get(key) != Some(&false) && !self.pending_erase("stroke", key, layer) && !(previewing && self.previewed("stroke", key)) {
                         if let (true, Some(pv)) = (previewing, &preview_viewport) {
                             let item = parse_map(&s.to_string())?;
-                            if !RectF::intersects(pv, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(key), Arc::new(item))?.bounds) {
+                            if !RectF::intersects(pv, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(key), (Arc::new(item)).into())?.bounds) {
                                 continue;
                             }
                         }
@@ -3984,7 +3986,7 @@ impl CanvasView {
                 let preview = parse_map(&preview.to_string())?;
                 jcall!(c, "android/graphics/Canvas", "save", "()I")?;
                 self.transform(c)?;
-                draw_with_png(c, |png| render::draw_object(&model, &preview, png))?;
+                draw_with_png(c, |png| render::draw_object(&model, (&preview).into(), png))?;
                 jcall!(c, "android/graphics/Canvas", "restore", "()V")?;
             }
         }
@@ -4206,7 +4208,7 @@ impl CanvasView {
                     } else if kind == "stroke" {
                         if let Some(s) = app.strokes.with(|s| s.get(&id).cloned()) {
                             let item = parse_map(&s.to_string())?;
-                            if RectF::intersects(&source_viewport, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(&id), Arc::new(item))?.bounds) {
+                            if RectF::intersects(&source_viewport, &tile_ink_cache::Item::new(tile_ink_cache::TileItemId::from(&id), (Arc::new(item)).into())?.bounds) {
                                 self.draw_stroke(c, &s)?;
                             }
                         }

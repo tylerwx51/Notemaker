@@ -43,7 +43,7 @@ fn render(paths: &[Vec<[f64; 2]>], brush: &str, color: i32) -> AppResult<Obj> {
         let points: Vec<Value> = path.iter().map(|p| Value::from(vec![Value::from(p[0]), Value::from(p[1]), Value::from(1)])).collect();
         let stroke = object! {"width" => 12, "brush" => brush, "material" => 50, "color" => color, "points" => points};
         let mut surface = AndroidCanvas::new(canvas.clone());
-        render::draw_stroke(&stroke, &mut Png::new(&mut surface))?;
+        render::draw_stroke((&stroke).into(), &mut Png::new(&mut surface))?;
     }
     Ok(image)
 }

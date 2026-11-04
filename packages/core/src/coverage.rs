@@ -3,7 +3,7 @@
 use crate::error::{require, Result};
 use crate::geometry::{Bounds, DocRect, Polygon};
 use crate::jmath::{self, floor_div};
-use crate::json::Map;
+use crate::wire::EntityContent;
 use crate::style::ArgbPixels;
 use indexmap::IndexMap;
 use std::sync::{Arc, Mutex};
@@ -17,7 +17,7 @@ pub trait Coverage: Send + Sync {
 /// `Coverage.Factory`. `DrawItem` caches coverage per factory identity
 /// (the address of the `&dyn CoverageFactory`), like Java's `!=` check.
 pub trait CoverageFactory {
-    fn create(&self, local_content: &Map) -> Result<Box<dyn Coverage>>;
+    fn create(&self, local_content: &EntityContent) -> Result<Box<dyn Coverage>>;
 }
 
 /// A square tile of coverage pixels: `size`×`size` document units with its

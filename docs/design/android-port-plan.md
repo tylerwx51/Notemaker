@@ -77,7 +77,7 @@ version and features as the CLI. The `resvg` dependency only names the
 | Android object (`View`, `Bitmap`, `Canvas`, `Paint`, `Intent`, `Bundle`, `Handler`, …) | `jx::Obj` (`Option<Obj>` when nullable) |
 | `org.json.JSONObject/JSONArray` | `org_json::JSONObject/JSONArray` (reference semantics) |
 | `Map<String,Object>` (JSON data, results, `state()`, metrics) | `notemaker_core::json::Map` |
-| `Map<String,Object>` that is a model item (identity matters: `IdentityHashMap`, `==` shortcuts, `TileInkCache.Item.value`, `renderedEntities`, `pendingObjectPreviews`) | `notemaker_core::model::Entity` (`Arc<Map>`); identity = `Arc::ptr_eq` / `Arc::as_ptr` |
+| `Map<String,Object>` that is a model item (identity matters: `IdentityHashMap`, `==` shortcuts, `TileInkCache.Item.value`, `renderedEntities`, `pendingObjectPreviews`) | `notemaker_core::model::Entity` (a newtype over `Arc<EntityContent>`); identity = `Entity::ptr_eq` / `Arc::as_ptr(&entity.0)` |
 | `List<Object>` | `Vec<Value>`; `Object` input → `Option<Value>` / `&Value` |
 | `LinkedHashMap` / `LinkedHashSet` | `IndexMap` / `IndexSet` (use `shift_remove`) |
 | `float`, `int`, `long`, `double` | `f32`, `i32`, `i64`, `f64` |

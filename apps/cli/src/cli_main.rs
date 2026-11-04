@@ -3,7 +3,9 @@
 
 use crate::item_coverage::FACTORY;
 use crate::jutil;
-use crate::local_proxy::{LeaseUpdate, LocalProxy};
+use crate::local_proxy::{CommandReply, LeaseUpdate, LocalProxy};
+use notemaker_core::endpoint::EndpointDescriptor;
+use notemaker_core::store::EditorPreferences;
 use crate::png::Png;
 use crate::raster::PixelSize;
 use notemaker_core::clock::EpochMillis;
@@ -20,7 +22,8 @@ use notemaker_core::model::Model;
 use notemaker_core::net::Port;
 use notemaker_core::render::{self, HiddenLayers};
 use notemaker_core::shape_catalog;
-use notemaker_core::store::{self, HistoryDirection, State, Store};
+use notemaker_core::store::{self, HistoryDirection, State, Store, WithState};
+use notemaker_core::wire::OperationList;
 use notemaker_core::{
     actions, gif_asset, ids, image_asset, jfmt, json, object, Error, ErrorKind, Map, Result, Value,
 };
@@ -220,6 +223,11 @@ fn input(path: &str) -> Result<Value> {
     json::parse(&read_input(path)?)
 }
 
+/// A command's JSON object result.
+fn obj(m: impl Into<Map>) -> Result<Option<Value>> {
+    Ok(Some(Value::Object(m.into())))
+}
+
 fn map_of(value: Value) -> Result<Map> {
     match value {
         Value::Object(m) => Ok(m),
@@ -307,7 +315,7 @@ fn asset_bytes(path: &str, limit: usize) -> Result<Vec<u8>> {
 /// Package-visible `Main.snapshot(state)`: materialized model plus local
 /// editor metadata.
 fn snapshot(s: &State) -> Result<Map> {
-    Ok(snapshot_state(s)?.into_map())
+    Ok((snapshot_state(s)?.into_map()).into())
 }
 
 /// `Main.snapshot` as Java built it: a `Store.Snapshot` that also carries the
@@ -332,9 +340,9 @@ fn snapshot_state_with(s: &State, model_json: bool) -> Result<State> {
     let mut snapshot = State::snapshot(&model);
     let out: &mut Map = &mut snapshot;
     if model_json {
-        out.insert("effectiveModel".into(), Value::Object(model.json()));
+        out.insert("effectiveModel".into(), Value::Object(model.json().into()));
     }
-    out.insert("conflicts".into(), Value::Array(model.visible_conflicts()));
+    out.insert("conflicts".into(), Value::Array(model.visible_conflicts().into()));
     out.insert(
         "revision".into(),
         s.get("revision").cloned().unwrap_or(Value::Null),
@@ -368,7 +376,11 @@ fn page_of(entity: &Map) -> Result<i32> {
 }
 
 /// `Main.run(args)`: `Ok(None)` is Java's `null` result (help, `serve`).
-pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
+pub fn run(args: &CommandArgs) -> Result<Option<CommandReply>> {
+    run_command(args).map(|result| result.map(CommandReply))
+}
+
+fn run_command(args: &CommandArgs) -> Result<Option<Value>> {
     let mut a: Vec<String> = args.to_vec();
     if a.is_empty() || a.iter().any(|x| x == "--help") || (a.len() == 1 && a[0] == "help") {
         let mut out = std::io::stdout().lock();
@@ -409,7 +421,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
     let mut remote_model: Option<Model> = None;
     if let Some(proxy) = proxy {
         let bytes = std::fs::read(&proxy).map_err(|e| io_error(&proxy, e))?;
-        let descriptor = map_of(json::parse(&String::from_utf8_lossy(&bytes))?)?;
+        let descriptor = EndpointDescriptor(map_of(json::parse(&String::from_utf8_lossy(&bytes))?)?);
         let mut value: Option<Value> = None;
         let cmd = a[0].clone();
         if cmd == "svg" {
@@ -458,21 +470,21 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             a[last] = "-".into();
         }
         if cmd == "export" {
-            remote_model = Some(Model::from_json(&map_of(LocalProxy::request(
+            remote_model = Some(Model::from_json((&map_of(LocalProxy::request(
                 &descriptor,
                 &document_name,
                 &actor_id,
                 &CommandArgs(vec!["inspect".to_string()]),
                 None,
-            )?)?)?);
+            )?.0)?).into())?);
         } else {
             return Ok(Some(LocalProxy::request(
                 &descriptor,
                 &document_name,
                 &actor_id,
                 &CommandArgs(a),
-                value.as_ref(),
-            )?));
+                value.as_ref().map(Into::into),
+            )?.0));
         }
     }
     let command = a.remove(0);
@@ -497,7 +509,6 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
         || (command == "shape" && a == ["list"]);
     require(read_only || in_proxy(), "Writes and synchronization require --proxy-file (or NOTEMAKER_PROXY_FILE); start the selected proxy with serve")?;
     let store = || store.as_ref().ok_or_else(Error::null_pointer);
-    let obj = |m: Map| Ok(Some(Value::Object(m)));
     match command.as_str() {
         "serve" => {
             require(a.len() <= 2, "serve [PORT [SERVER_URL]]")?;
@@ -585,7 +596,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
                 a[0].clone()
             };
             let mut op = object! {"kind" => "document", "type" => type_.clone()};
-            Model::validate(&op)?;
+            Model::validate((&op).into())?;
             store()?.edit(&mut |s| {
                 require(
                     json::list_at(s, "events")?.is_empty()
@@ -612,7 +623,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             if !with_snapshot {
                 arity(&a, 1)?;
             }
-            let s = store()?.append(&map_of(input(&a[a.len() - 1])?)?, &actor_id)?;
+            let s = store()?.append(&(map_of(input(&a[a.len() - 1])?)?).into(), &actor_id)?;
             let pending = json::list_at(&s, "pending")?;
             let last = pending.last().ok_or_else(|| {
                 Error::new(
@@ -629,8 +640,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
         }
         "settings" => {
             arity(&a, 1)?;
-            let preferences = map_of(input(&a[0])?)?;
-            Store::validate_settings(&preferences)?;
+            let preferences = Map::from(&EditorPreferences::try_from(&map_of(input(&a[0])?)?)?);
             store()?.edit(&mut |s| {
                 for (k, v) in &preferences {
                     s.insert(k.clone(), v.clone());
@@ -662,7 +672,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             }
             let direction = if command == "redo" { HistoryDirection::Redo } else { HistoryDirection::Undo };
             if with_snapshot {
-                let (mut result, state) = store()?.history_with_state(&actor_id, direction)?;
+                let WithState { mut result, state } = store()?.history_with_state(&actor_id, direction)?;
                 result.insert("snapshot".into(), Value::Object(snapshot(&state)?));
                 obj(result)
             } else {
@@ -673,19 +683,19 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             arity(&a, 2)?;
             require(a[0] == "add", "diagram add FILE|-")?;
             let diagram = map_of(input(&a[1])?)?;
-            obj(store()?.commit(&actor_id, &mut |m| actions::diagram(m, &diagram))?)
+            obj(store()?.commit(&actor_id, &mut |m| actions::diagram(m, (&diagram).into()))?)
         }
         "svg" => {
             let mut raw = svg_input(&a)?;
             raw.insert("shape".into(), Value::from("svg"));
-            let drawing = actions::drawing(&raw, &LayerId::base())?;
+            let drawing = actions::drawing((&raw).into(), &LayerId::base())?;
             obj(store()?.commit(&actor_id, &mut |m| {
                 require(
                     !json::key_of(drawing.get("object"))
                         .is_some_and(|id| m.objects.contains_key(id)),
                     "Object ID already exists; use object update",
                 )?;
-                Ok(vec![Value::Object(drawing.clone())])
+                Ok((vec![Value::Object(drawing.clone().into())]).into())
             })?)
         }
         "shape" => {
@@ -717,13 +727,13 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             if a[0] == "preview" {
                 return obj(object! {"preview" => true, "session" => session});
             }
-            LocalProxy::assert_session(store()?, &actor_id, &session, &entities)?;
+            LocalProxy::assert_session(store()?, &actor_id, &session, (&entities).into())?;
             obj(store()?.commit_selected(
                 &actor_id,
                 &session,
-                &entities,
-                &mut |m| collaboration::transform(m, &entities, &transform),
-                &entities,
+                (&entities).into(),
+                &mut |m| collaboration::transform(m, (&entities).into(), (&transform).into()),
+                (&entities).into(),
             )?)
         }
         "conflicts" => {
@@ -743,7 +753,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             arity(&a, 1)?;
             let request = map_of(input(&a[0])?)?;
             obj(store()?.commit(&actor_id, &mut |m| {
-                drawing_actions::erase(m, &request, &FACTORY)
+                drawing_actions::erase(m, (&request).into(), &FACTORY)
             })?)
         }
         "fill" => {
@@ -757,7 +767,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             } else if request.contains_key("stroke") {
                 dependencies.push(Value::Object(object! {"kind" => "stroke", "id" => request.get("stroke").cloned().unwrap_or(Value::Null), "page" => page_value}));
             } else {
-                let page = layer_editor::page(&request)?;
+                let page = layer_editor::page((&request).into())?;
                 let layer = json::java_string(Some(json::get_or_default(
                     &request,
                     "layer",
@@ -787,15 +797,15 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
             }
             obj(store()?.commit_with_dependencies(
                 &actor_id,
-                &mut |m| drawing_actions::fill(m, &request),
-                &dependencies,
+                &mut |m| drawing_actions::fill(m, (&request).into()),
+                (&dependencies).into(),
             )?)
         }
         "template" => {
             arity(&a, 2)?;
             require(a[0] == "add", "template add FILE|-")?;
             let request = map_of(input(&a[1])?)?;
-            obj(store()?.commit(&actor_id, &mut |m| drawing_actions::template(m, &request))?)
+            obj(store()?.commit(&actor_id, &mut |m| drawing_actions::template(m, (&request).into()))?)
         }
         "image" | "gif" => {
             let gif = command == "gif";
@@ -803,7 +813,7 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
                 arity(&a, 2)?;
                 let placement = map_of(input(&a[1])?)?;
                 return obj(store()?.commit(&actor_id, &mut |_| {
-                    Ok(vec![Value::Object(actions::drawing(&placement, &LayerId::base())?)])
+                    Ok(vec![Value::from(actions::drawing((&placement).into(), &LayerId::base())?)].into())
                 })?);
             }
             require(
@@ -825,18 +835,18 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
                     )?)?),
                 );
                 return obj(store()?.commit(&actor_id, &mut |_| {
-                    Ok(vec![Value::Object(actions::drawing(&placement, &LayerId::base())?)])
+                    Ok(vec![Value::from(actions::drawing((&placement).into(), &LayerId::base())?)].into())
                 })?);
             }
             let bytes = image_bytes(&a[1])?;
             obj(store()?.commit(&actor_id, &mut |m| {
-                drawing_actions::image(m, &bytes, &placement)
+                drawing_actions::image(m, &bytes, (&placement).into())
             })?)
         }
         "apply" => {
             arity(&a, 1)?;
             let ops = list_of(input(&a[0])?)?;
-            obj(store()?.commit(&actor_id, &mut |_| Ok(ops.clone()))?)
+            obj(store()?.commit(&actor_id, &mut |_| Ok(ops.clone().into()))?)
         }
         "selection" => selection(store()?, &actor_id, &mut a),
         "layer" | "object" | "stroke" => entity_command(store()?, &actor_id, &command, &mut a),
@@ -905,18 +915,17 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
     }
 }
 
-fn deactivate(entities: &[Value]) -> Result<Vec<Value>> {
+fn deactivate(entities: &[Value]) -> Result<OperationList> {
     let mut generated = Vec::new();
     for value in entities {
         let e = json::map(value)?;
         let kind = json::string(e, "kind")?;
         generated.push(Value::Object(object! {"kind" => if kind == "object" { "object-active" } else { "active" }, kind => json::string(e, "id")?, "active" => false}));
     }
-    Ok(generated)
+    Ok(OperationList(generated))
 }
 
 fn selection(store: &Store, actor: &ActorId, a: &mut Vec<String>) -> Result<Option<Value>> {
-    let obj = |m: Map| Ok(Some(Value::Object(m)));
     require(
         !a.is_empty(),
         "selection select|heartbeat|deselect|disconnect|duplicate|delete|copy|cut|paste",
@@ -934,9 +943,9 @@ fn selection(store: &Store, actor: &ActorId, a: &mut Vec<String>) -> Result<Opti
                     .ok_or_else(|| Error::class_cast("layer is not a String"))?
                     .to_string(),
             };
-            let editor = LayerEditor::new(&m, &LayerId::from(&layer), layer_editor::page(&request)?)?;
+            let editor = LayerEditor::new(&m, &LayerId::from(&layer), layer_editor::page((&request).into())?)?;
             let region = match request.get("region") {
-                Some(r) => Some(Polygon::from_json(r)?),
+                Some(r) => Some(Polygon::try_from(r)?),
                 None => None,
             };
             let hits = if request.get("topmost") == Some(&Value::Bool(true)) {
@@ -949,7 +958,7 @@ fn selection(store: &Store, actor: &ActorId, a: &mut Vec<String>) -> Result<Opti
         "select" => {
             arity(a, 1)?;
             let selection = map_of(input(&a[0])?)?;
-            obj(LocalProxy::select(store, actor, &selection)?)
+            obj(LocalProxy::select(store, actor, (&selection).into())?)
         }
         "paste" => {
             arity(a, 1)?;
@@ -970,7 +979,7 @@ fn selection(store: &Store, actor: &ActorId, a: &mut Vec<String>) -> Result<Opti
                 .clone();
                 request.insert("entities".into(), Value::Array(entities));
             }
-            obj(store.commit(actor, &mut |m| drawing_actions::paste(m, &request))?)
+            obj(store.commit(actor, &mut |m| drawing_actions::paste(m, (&request).into()))?)
         }
         "disconnect" => {
             arity(a, 0)?;
@@ -985,7 +994,7 @@ fn selection(store: &Store, actor: &ActorId, a: &mut Vec<String>) -> Result<Opti
             let snapshots = drawing_actions::copy_selection(&model, &entities)?;
             let copied_at = EpochMillis::now();
             store.edit(&mut |s| {
-                s.insert("clipboard".into(), Value::Object(object! {"copiedAt" => copied_at, "entities" => json::copy(&Value::Array(snapshots.clone()))}));
+                s.insert("clipboard".into(), Value::Object(object! {"copiedAt" => copied_at, "entities" => json::copy(&Value::Array(snapshots.clone().into()))}));
                 Ok(())
             })?;
             let mut cut_result = None;
@@ -1086,9 +1095,9 @@ fn selection(store: &Store, actor: &ActorId, a: &mut Vec<String>) -> Result<Opti
                             }
                             n.insert("points".into(), Value::Array(points));
                         }
-                        generated.push(Value::Object(n));
+                        generated.push(Value::Object(n.into()));
                     }
-                    Ok(generated)
+                    Ok(generated.into())
                 },
                 &entities,
             )?;
@@ -1112,7 +1121,6 @@ fn entity_command(
     kind: &str,
     a: &mut Vec<String>,
 ) -> Result<Option<Value>> {
-    let obj = |m: Map| Ok(Some(Value::Object(m)));
     require(!a.is_empty(), "Missing subcommand")?;
     let sub = a.remove(0);
     if kind == "layer" && sub == "duplicate" {
@@ -1133,7 +1141,7 @@ fn entity_command(
         return obj(store.commit_with_dependencies(
             actor,
             &mut |m| drawing_actions::duplicate_layer(m, &LayerId::from(&id)),
-            &dependencies,
+            (&dependencies).into(),
         )?);
     }
     if kind == "layer" && sub == "merge" {
@@ -1185,9 +1193,9 @@ fn entity_command(
             } else {
                 format!("{}-active", kind)
             };
-            Ok(vec![Value::Object(
+            Ok(OperationList(vec![Value::Object(
                 object! {"kind" => action_kind, kind => id.clone(), "active" => sub == "show"},
-            )])
+            )]))
         })?);
     }
     if sub == "update" {
@@ -1222,11 +1230,11 @@ fn entity_command(
             let editor = LayerEditor::with_filter(
                 m,
                 &LayerId::from(&layer),
-                layer_editor::page(&scope)?,
+                layer_editor::page((&scope).into())?,
                 ItemFilter::IncludeInactive,
             )?;
             let mut o = json::map(&json::copy(&Value::Object(
-                (*editor.resolve(&EntityKind::object(), &EntityId::from(&id))?.content).clone(),
+                ((*editor.resolve(&EntityKind::object(), &EntityId::from(&id))?.content).clone()).into(),
             )))?
             .clone();
             require(
@@ -1237,7 +1245,7 @@ fn entity_command(
             for (k, v) in &patch {
                 o.insert(k.clone(), v.clone());
             }
-            Ok(vec![Value::Object(o)])
+            Ok((vec![Value::Object(o)]).into())
         })?);
     }
     require(sub == "put", "Unknown subcommand")?;
@@ -1248,13 +1256,13 @@ fn entity_command(
     arity(a, 1)?;
     let raw = map_of(input(&a[0])?)?;
     let mut o = if kind == "object" {
-        actions::drawing(&raw, &LayerId::base())?
+        actions::drawing((&raw).into(), &LayerId::base())?
     } else {
-        json::map(&json::copy(&Value::Object(raw)))?.clone()
+        (json::map(&json::copy(&Value::Object(raw)))?.clone()).into()
     };
     o.insert("kind".into(), Value::from(kind));
     o.shift_remove("id");
-    let mut build = |m: &mut Model| -> Result<Vec<Value>> {
+    let mut build = |m: &mut Model| -> Result<OperationList> {
         if kind != "layer" {
             let exists = json::key_of(o.get(kind)).is_some_and(|id| {
                 if kind == "object" {
@@ -1273,10 +1281,10 @@ fn entity_command(
                 .resolve(&EntityKind::from(kind), &EntityId::from(json::string(&o, kind)?))?;
             }
         }
-        Ok(vec![Value::Object(o.clone())])
+        Ok(OperationList(vec![Value::from(o.clone())]))
     };
     if with_snapshot {
-        let (mut result, state) = store.commit_with_state(actor, &mut build)?;
+        let WithState { mut result, state } = store.commit_with_state(actor, &mut build)?;
         result.insert("snapshot".into(), Value::Object(snapshot(&state)?));
         obj(result)
     } else {

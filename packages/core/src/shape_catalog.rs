@@ -40,9 +40,14 @@ pub fn known(id: &ShapeId) -> bool {
     IDS.contains(&id.as_ref())
 }
 
+crate::json_value_newtype! {
+    /// `ShapeCatalog.json()`: `[{id,name},...]`.
+    pub struct ShapeCatalogJson;
+}
+
 /// `ShapeCatalog.json()`: `[{id,name},...]`.
-pub fn json() -> Value {
-    Value::Array(IDS.iter().map(|id| Value::Object(object! {"id" => *id, "name" => &*name(&ShapeId::from(*id)).unwrap()})).collect())
+pub fn json() -> ShapeCatalogJson {
+    ShapeCatalogJson(Value::Array(IDS.iter().map(|id| Value::Object(object! {"id" => *id, "name" => &*name(&ShapeId::from(*id)).unwrap()})).collect()))
 }
 
 /// `ShapeCatalog.name(id)`.

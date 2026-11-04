@@ -12,13 +12,13 @@ use crate::ids;
 use crate::jmath;
 use crate::json::{self, jlen, Map, Value};
 use crate::object;
+use crate::wire::{ActionInput, ConflictList, ModelJson, Operation, ReplicaState};
 use crate::{gif_asset, image_asset, shape_catalog, svg_asset};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-/// An immutable entity snapshot (layer, stroke or object operation).
-pub type Entity = Arc<Map>;
+pub use crate::wire::Entity;
 
 /// A copy-on-write model index. Java's `new Model(other)` copied each map's
 /// spine of shared references; a clone here shares the whole map until one
@@ -92,11 +92,22 @@ where
     }
 }
 
+/// `layerItems(layer, page)`: one layer page's strokes then objects.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayerItems(pub Vec<Entity>);
+
+impl std::ops::Deref for LayerItems {
+    type Target = [Entity];
+    fn deref(&self) -> &[Entity] {
+        &self.0
+    }
+}
+
 #[derive(Default)]
 struct ItemIndex {
     item_index: Option<HashMap<String, IndexMap<String, Entity>>>,
     item_order: HashMap<String, i32>,
-    ordered_items: HashMap<String, Arc<Vec<Entity>>>,
+    ordered_items: HashMap<String, Arc<LayerItems>>,
 }
 
 /// `Model`.
@@ -171,7 +182,7 @@ impl Model {
         let mut layers = IndexMap::new();
         layers.insert(
             "base".to_string(),
-            Arc::new(object! {"kind" => "layer", "layer" => "base", "name" => "Layer 1", "force" => false}),
+            Entity::from(object! {"kind" => "layer", "layer" => "base", "name" => "Layer 1", "force" => false}),
         );
         Model {
             type_: "fixed".to_string(),
@@ -203,7 +214,7 @@ impl Model {
     }
 
     /// `layerItems(layer, page)`: strokes first, then objects, each in first-seen order.
-    pub fn layer_items(&self, layer: &LayerId, page: PageNumber) -> Arc<Vec<Entity>> {
+    pub fn layer_items(&self, layer: &LayerId, page: PageNumber) -> Arc<LayerItems> {
         let (layer, page) = (&**layer, page.0);
         let mut idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
         if idx.item_index.is_none() {
@@ -227,14 +238,14 @@ impl Model {
             (if kind == "stroke" { 0 } else { 1 }, *order.get(&key).unwrap_or(&0))
         };
         ordered.sort_by_key(|o| rank(o));
-        let cached = Arc::new(ordered);
+        let cached = Arc::new(LayerItems(ordered));
         idx.ordered_items.insert(scope, cached.clone());
         cached
     }
 
     fn put_item(&mut self, o: Map, kind: &str) -> Result<()> {
         let id = json::string(&o, kind)?.to_string();
-        let o = Arc::new(o);
+        let o = Entity::from(o);
         let table = if kind == "stroke" { &mut self.strokes } else { &mut self.objects };
         let old = table.insert(id.clone(), o.clone());
         let idx = self.index.get_mut().unwrap_or_else(|e| e.into_inner());
@@ -255,14 +266,14 @@ impl Model {
     }
 
     /// `Model.fromJson(value)`: rebuild from `json()` output.
-    pub fn from_json(value: &Map) -> Result<Model> {
+    pub fn from_json(value: &ModelJson) -> Result<Model> {
         let mut model = Model::new();
         model.type_ = json::string(value, "type")?.to_string();
         model.document_seen = true;
         model.layers.clear();
         for key in ["layers", "strokes", "objects"] {
             for op in json::list(value.get(key).unwrap_or(&Value::Null))? {
-                model.apply(json::map(op)?)?;
+                model.apply(json::map(op)?.into())?;
             }
         }
         for (k, v) in json::map_at(value, "strokeActive")? {
@@ -291,19 +302,19 @@ impl Model {
     }
 
     /// `new Model(Map state)`: replay `events` then `pending`.
-    pub fn from_state(state: &Map) -> Result<Model> {
+    pub fn from_state(state: &ReplicaState) -> Result<Model> {
         let mut model = Model::new();
         for v in json::list(state.get("events").unwrap_or(&Value::Null))? {
-            model.apply(json::map(v)?)?;
+            model.apply(json::map(v)?.into())?;
         }
         for v in json::list(state.get("pending").unwrap_or(&Value::Null))? {
-            model.apply(json::map(v)?)?;
+            model.apply(json::map(v)?.into())?;
         }
         Ok(model)
     }
 
     /// `apply(op)`: apply one operation or batch, tracking versions and conflicts.
-    pub fn apply(&mut self, op: &Map) -> Result<()> {
+    pub fn apply(&mut self, op: &Operation) -> Result<()> {
         if self.deleted {
             return Ok(());
         }
@@ -311,7 +322,7 @@ impl Model {
         let actions: Vec<&Map> = if op.get("kind").and_then(Value::as_str) == Some("batch") {
             json::list(op.get("actions").unwrap_or(&Value::Null))?.iter().map(json::map).collect::<Result<_>>()?
         } else {
-            vec![op]
+            vec![&op.0]
         };
         let empty = Value::Object(Map::new());
         let bases = json::map(get_or_default(op, "bases", &empty))?;
@@ -361,7 +372,7 @@ impl Model {
                     };
                     if let Some(side) = side {
                         let mut updated = conflict.clone();
-                        updated.insert(side.to_string(), Value::Object((**next).clone()));
+                        updated.insert(side.to_string(), Value::Object(Map::clone(next)));
                         updated.insert(format!("{}Active", side), Value::Bool(next_active));
                         updated.insert(format!("{}Version", side), Value::String(operation.clone()));
                         updated.insert(format!("{}Actor", side), actor_value.clone());
@@ -386,8 +397,8 @@ impl Model {
                                 "kind" => &key[..colon],
                                 "entity" => &key[colon + 1..],
                                 "page" => get_or_default(next, "page", &zero).clone(),
-                                "local" => Value::Object((**previous).clone()),
-                                "remote" => Value::Object((**next).clone()),
+                                "local" => Value::Object(Map::clone(previous)),
+                                "remote" => Value::Object(Map::clone(next)),
                                 "localActive" => before_active[key],
                                 "remoteActive" => next_active,
                                 "localVersion" => prior.clone(),
@@ -419,13 +430,13 @@ impl Model {
     }
 
     /// `Model.withBases(batch, model)`: record base versions and visibility.
-    pub fn with_bases(batch: &mut Map, model: &Model) -> Result<()> {
+    pub fn with_bases(batch: &mut Operation, model: &Model) -> Result<()> {
         let mut bases = Map::new();
         let mut visibility = Map::new();
         let actions: Vec<&Map> = if batch.get("kind").and_then(Value::as_str) == Some("batch") {
             json::list(batch.get("actions").unwrap_or(&Value::Null))?.iter().map(json::map).collect::<Result<_>>()?
         } else {
-            vec![&*batch]
+            vec![&batch.0]
         };
         for op in actions {
             if let Some(key) = entity_key(op)? {
@@ -445,7 +456,7 @@ impl Model {
     }
 
     /// `visibleConflicts()`.
-    pub fn visible_conflicts(&self) -> Vec<Value> {
+    pub fn visible_conflicts(&self) -> ConflictList {
         self.conflicts
             .iter()
             .filter(|(k, _)| self.conflict_active.get(*k) != Some(&false))
@@ -485,7 +496,7 @@ impl Model {
             }
             "layer" => {
                 let k = json::string(op, "layer")?.to_string();
-                self.layers.insert(k, Arc::new(op.clone()));
+                self.layers.insert(k, Entity::from(op.clone()));
             }
             "stroke" => self.put_item(op.clone(), "stroke")?,
             "object" => self.put_item(op.clone(), "object")?,
@@ -512,7 +523,7 @@ impl Model {
     }
 
     /// `json()`.
-    pub fn json(&self) -> Map {
+    pub fn json(&self) -> ModelJson {
         let bools = |m: &IndexMap<String, bool>| -> Value {
             Value::Object(m.iter().map(|(k, v)| (k.clone(), Value::Bool(*v))).collect())
         };
@@ -520,7 +531,7 @@ impl Model {
             Value::Object(m.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect())
         };
         let entities = |m: &IndexMap<String, Entity>| -> Value {
-            Value::Array(m.values().map(|e| Value::Object((**e).clone())).collect())
+            Value::Array(m.values().map(|e| Value::Object(Map::clone(e))).collect())
         };
         object! {
             "type" => self.type_.clone(),
@@ -533,12 +544,13 @@ impl Model {
             "layerActive" => bools(&self.layer_active),
             "versions" => strings(&self.versions),
             "versionActors" => strings(&self.version_actors),
-            "conflicts" => Value::Array(self.visible_conflicts()),
+            "conflicts" => Value::from(self.visible_conflicts()),
         }
+        .into()
     }
 
     /// `Model.validate(o)`: structural validation of one operation.
-    pub fn validate(o: &Map) -> Result<()> {
+    pub fn validate(o: &Operation) -> Result<()> {
         let kind = json::string(o, "kind")?;
         for key in ["actor", "session"] {
             if o.contains_key(key) {
@@ -567,7 +579,7 @@ impl Model {
                     let op = json::map(a)?;
                     let k = op.get("kind").and_then(Value::as_str);
                     require(k != Some("batch") && k != Some("document-delete"), "Nested batch or document deletion")?;
-                    Model::validate(op)?;
+                    Model::validate(op.into())?;
                 }
             }
             "document-delete" => {}
@@ -709,7 +721,7 @@ fn entity_key(op: &Map) -> Result<Option<String>> {
 }
 
 /// `Model.drawing(o)`: shared stroke/object fields.
-pub fn drawing(o: &Map) -> Result<()> {
+fn drawing(o: &Map) -> Result<()> {
     id(o, "layer")?;
     range(o, "page", 0.0, 10000.0)?;
     require(json::number(o, "page")? == jmath::rint(json::number(o, "page")?), "Page must be an integer")?;
@@ -720,33 +732,38 @@ pub fn drawing(o: &Map) -> Result<()> {
         require(masks.len() <= 2000, "Too many erasure regions")?;
         let mut count = 0usize;
         for mask in masks {
-            count += crate::geometry::Polygon::from_json(mask)?.len();
+            count += crate::geometry::Polygon::try_from(mask)?.len();
             require(count <= 64000, "Erasure mask too complex")?;
         }
     }
     Ok(())
 }
 
+/// `Model.color(input, "color")`: an action input's signed ARGB `color`.
+pub fn input_color(input: &ActionInput) -> Result<()> {
+    color(input, "color")
+}
+
 /// `Model.color(o, k)`: signed ARGB integer.
-pub fn color(o: &Map, k: &str) -> Result<()> {
+fn color(o: &Map, k: &str) -> Result<()> {
     range(o, k, i32::MIN as f64, i32::MAX as f64)?;
     require(json::number(o, k)? == jmath::rint(json::number(o, k)?), "Color must be signed ARGB integer")
 }
 
 /// `Model.range(o, k, lo, hi)`.
-pub fn range(o: &Map, k: &str, lo: f64, hi: f64) -> Result<()> {
+fn range(o: &Map, k: &str, lo: f64, hi: f64) -> Result<()> {
     let v = json::number(o, k)?;
     require_with(v >= lo && v <= hi, || format!("Out of range: {}", k))
 }
 
 /// `Model.id(o, k)`: 1–200 character string.
-pub fn id(o: &Map, k: &str) -> Result<()> {
+fn id(o: &Map, k: &str) -> Result<()> {
     let s = json::string(o, k)?;
     require_with(!s.is_empty() && jlen(s) <= 200, || format!("Invalid {}", k))
 }
 
 /// `Model.bool(o, k)`.
-pub fn bool_(o: &Map, k: &str) -> Result<()> {
+fn bool_(o: &Map, k: &str) -> Result<()> {
     require_with(matches!(o.get(k), Some(Value::Bool(_))), || format!("Expected boolean: {}", k))
 }
 

@@ -73,18 +73,17 @@ fn run() -> Result<()> {
                 stroke.insert(
                     "erasures".into(),
                     Value::Array(vec![
-                        DocRect { x: -45.0, y: -25.0, width: 30.0, height: 110.0 }.polygon().to_json(),
-                        Polygon::capsule(
+                        Value::from(&DocRect { x: -45.0, y: -25.0, width: 30.0, height: 110.0 }.polygon()),
+                        Value::from(&Polygon::capsule(
                             Segment { start: DocPoint { x: -40.0, y: -50.0 }, end: DocPoint { x: 30.0, y: 0.0 } },
                             Radius(9.0),
-                        )
-                        .to_json(),
+                        )),
                     ]),
                 );
             }
             let mut model = Model::new();
-            model.apply(&stroke)?;
-            let item = DrawItem::from_map(&model, stroke.clone())?;
+            model.apply((&stroke).into())?;
+            let item = DrawItem::from_map(&model, stroke.clone().into())?;
             for _ in 0..300 {
                 let x = random.next_double() * 130.0;
                 let y = random.next_double() * 130.0;
@@ -106,16 +105,16 @@ fn run() -> Result<()> {
         if shape == "svg" {
             input.insert("svg".into(), Value::from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"60\" height=\"40\"><circle cx=\"30\" cy=\"20\" r=\"18\" fill=\"none\" stroke=\"black\" stroke-width=\"4\"/></svg>"));
         }
-        let mut o = actions::drawing(&input, &LayerId::base())?;
+        let mut o = actions::drawing((&input).into(), &LayerId::base())?;
         o.insert("rotation".into(), Value::from(33));
         o.insert("flipX".into(), Value::from(true));
         o.insert(
             "erasures".into(),
-            Value::Array(vec![DocRect { x: 0.3, y: -1.0, width: 0.2, height: 3.0 }.polygon().to_json()]),
+            Value::Array(vec![Value::from(&DocRect { x: 0.3, y: -1.0, width: 0.2, height: 3.0 }.polygon())]),
         );
         let mut model = Model::new();
         model.apply(&o)?;
-        let item = DrawItem::from_map(&model, o.clone())?;
+        let item = DrawItem::from_map(&model, notemaker_core::wire::EntityContent(o.0.clone()))?;
         for _ in 0..300 {
             let x = random.next_double() * 130.0;
             let y = random.next_double() * 130.0;

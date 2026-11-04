@@ -5,7 +5,7 @@
 //! compares the cache with a fresh read of the files.
 
 use notemaker_core::ids::{ActorId, DocumentName};
-use notemaker_core::store::{self, HistoryDirection, State, Store};
+use notemaker_core::store::{self, EditorPreferences, HistoryDirection, State, Store};
 use notemaker_core::{json, object, Model, Value};
 use std::path::PathBuf;
 
@@ -44,20 +44,20 @@ fn assert_replays(dir: &PathBuf, document: &str, cached: &State) {
 fn action_edits_match_full_path_while_state_is_shared() {
     let dir = directory("shared");
     let store = Store::writer(&dir, &DocumentName::from("shared")).unwrap();
-    store.append(&object! {"kind" => "document", "type" => "fixed"}, &ActorId::from("alice")).unwrap();
+    store.append(&object! {"kind" => "document", "type" => "fixed"}.into(), &ActorId::from("alice")).unwrap();
     // Held reads share the cached map, so each edit has to unshare it first;
     // history entry identities must survive that.
     let mut held: Vec<State> = Vec::new();
     for i in 0..12 {
         held.push(store.read().unwrap());
-        store.append_with_settings(&stroke(&format!("s{i}"), 20 + i), &ActorId::from("alice"), Some(&object! {"undo" => Value::Array((0..=i).map(|n| Value::from(format!("s{n}"))).collect())})).unwrap();
-        store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok(rect(&format!("o{i}"), i as i64 * 50))).unwrap();
+        store.append_with_settings((&stroke(&format!("s{i}"), 20 + i)).into(), &ActorId::from("alice"), Some(&EditorPreferences::try_from(&object! {"undo" => Value::Array((0..=i).map(|n| Value::from(format!("s{n}"))).collect())}).unwrap())).unwrap();
+        store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok((rect(&format!("o{i}"), i as i64 * 50)).into())).unwrap();
         if i % 3 == 2 {
             store.history(&ActorId::from("alice"), HistoryDirection::Undo).unwrap();
             store.history(&ActorId::from("alice"), HistoryDirection::Redo).unwrap();
             store.history(&ActorId::from("alice"), HistoryDirection::Undo).unwrap();
         }
-        store.commit(&ActorId::from("bob"), &mut |_m: &mut Model| Ok(rect(&format!("b{i}"), 600))).unwrap();
+        store.commit(&ActorId::from("bob"), &mut |_m: &mut Model| Ok((rect(&format!("b{i}"), 600)).into())).unwrap();
         if held.len() > 3 {
             held.remove(0);
         }
@@ -68,7 +68,7 @@ fn action_edits_match_full_path_while_state_is_shared() {
         Ok(())
     })
     .unwrap();
-    store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok(rect("after-full", 5))).unwrap();
+    store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok((rect("after-full", 5)).into())).unwrap();
     let state = store.read().unwrap();
     let model = store::model(&state).unwrap();
     assert_eq!(model.strokes.len(), 12);
@@ -82,18 +82,18 @@ fn action_edits_match_full_path_while_state_is_shared() {
 fn rejected_action_edits_keep_the_cache() {
     let dir = directory("rejected");
     let store = Store::writer(&dir, &DocumentName::from("rejected")).unwrap();
-    store.append(&object! {"kind" => "document", "type" => "fixed"}, &ActorId::from("alice")).unwrap();
-    store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok(rect("a", 10))).unwrap();
+    store.append(&object! {"kind" => "document", "type" => "fixed"}.into(), &ActorId::from("alice")).unwrap();
+    store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok((rect("a", 10)).into())).unwrap();
     let before = json::write_map(&store.read().unwrap());
     // No redo, a build failure and an invalid action leave the replica as it was.
     assert!(store.history(&ActorId::from("alice"), HistoryDirection::Redo).is_err());
     assert!(store.history(&ActorId::from("carol"), HistoryDirection::Undo).is_err());
     assert!(store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Err(notemaker_core::Error::illegal_argument("no"))).is_err());
-    assert!(store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok(Vec::new())).is_err());
+    assert!(store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok(Vec::new().into())).is_err());
     assert_eq!(before, json::write_map(&store.read().unwrap()));
     store.history(&ActorId::from("alice"), HistoryDirection::Undo).unwrap();
     store.history(&ActorId::from("alice"), HistoryDirection::Redo).unwrap();
-    store.append(&stroke("late", 5), &ActorId::from("alice")).unwrap();
+    store.append((&stroke("late", 5)).into(), &ActorId::from("alice")).unwrap();
     let state = store.read().unwrap();
     assert_eq!(json::list_at(&state, "pending").unwrap().len(), 5);
     assert_replays(&dir, "rejected", &state);

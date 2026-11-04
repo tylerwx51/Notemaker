@@ -562,7 +562,7 @@ impl AgentUi {
                             ("effort", JV::from(selected_item(&effort)?)),
                         ]);
                         let worker = me.clone();
-                        me.request(Box::new(move || worker.http(ChatPath::Create, Some(&config))), Box::new(|me, result| me.conversation(&result)));
+                        me.request(Box::new(move || worker.http(ChatPath::Create, Some((&config).into()))), Box::new(|me, result| me.conversation(&result)));
                         Ok(())
                     }),
                 )?;
@@ -664,7 +664,7 @@ impl AgentUi {
         let me = self.clone();
         self.request(
             Box::new(move || {
-                let result = me.http(path.clone(), Some(&message)).and_then(|result| {
+                let result = me.http(path.clone(), Some((&message).into())).and_then(|result| {
                     let editor = ui::edit(&me.context())?;
                     ui::remove_pref(&editor, &ui::PrefKey::from(&key))?;
                     ui::remove_pref(&editor, &ui::PrefKey::from(&draft))?;

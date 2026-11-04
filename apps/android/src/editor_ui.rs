@@ -2113,19 +2113,19 @@ impl EditorUi {
             &box_,
             "Preview rotate clockwise",
             any,
-            self.act(|_, app| app.preview_transform(&notemaker_core::object! {"scale" => 1, "dx" => 0, "dy" => 0, "rotation" => 15})),
+            self.act(|_, app| app.preview_transform(&notemaker_core::collaboration::TransformSpec(notemaker_core::object! {"scale" => 1, "dx" => 0, "dy" => 0, "rotation" => 15}))),
         )?;
         self.menu_action(
             &box_,
             "Preview flip horizontal",
             any,
-            self.act(|_, app| app.preview_transform(&notemaker_core::object! {"scale" => 1, "dx" => 0, "dy" => 0, "flipX" => true})),
+            self.act(|_, app| app.preview_transform(&notemaker_core::collaboration::TransformSpec(notemaker_core::object! {"scale" => 1, "dx" => 0, "dy" => 0, "flipX" => true}))),
         )?;
         self.menu_action(
             &box_,
             "Preview flip vertical",
             any,
-            self.act(|_, app| app.preview_transform(&notemaker_core::object! {"scale" => 1, "dx" => 0, "dy" => 0, "flipY" => true})),
+            self.act(|_, app| app.preview_transform(&notemaker_core::collaboration::TransformSpec(notemaker_core::object! {"scale" => 1, "dx" => 0, "dy" => 0, "flipY" => true}))),
         )?;
         self.menu_action(&box_, "Preview move right", any, self.act(|_, app| app.preview_selection(notemaker_core::collaboration::SelectionTransform { scale: 1.0, dx: 24.0, dy: 0.0 })))?;
         self.menu_action(&box_, "Preview move down", any, self.act(|_, app| app.preview_selection(notemaker_core::collaboration::SelectionTransform { scale: 1.0, dx: 0.0, dy: 24.0 })))?;
@@ -2257,7 +2257,7 @@ impl EditorUi {
                 for item in editor.items() {
                     let owner = self.lease_actor(&item.kind, &item.id);
                     let label = if item.kind == "stroke" { "Ink stroke" } else { &*shape_catalog::name(&notemaker_core::ids::ShapeId::from(json::java_string(item.content.get("shape"))))? };
-                    entities.push(item.ref_());
+                    entities.push(item.ref_().into());
                     labels.push(format!(
                         "{} · {}{}",
                         label,
@@ -2319,7 +2319,7 @@ impl EditorUi {
             if chosen.is_empty() {
                 app.selecting.set(false);
             } else {
-                app.start_selection(chosen)?;
+                app.start_selection(chosen.into_iter().map(Value::Object).collect::<Vec<Value>>())?;
             }
             Ok(())
         });
@@ -2829,10 +2829,10 @@ impl LayerPreview {
                 && json::as_int(stroke.get("page"))? == page
                 && !app.active.with(|a| a.get(key) == Some(&false))
             {
-                let mut preview: Map = (**stroke).clone();
+                let mut preview: Map = ((**stroke).clone()).into();
                 let width = jmath::max(json::as_double(stroke.get("width"))?, min_width as f64);
                 preview.insert("width".into(), json::double(width));
-                settled.insert(key.clone(), Arc::new(preview));
+                settled.insert(key.clone(), (Arc::new(preview)).into());
             }
         }
         let dp16 = owner.dp(16.0)? as f32;
@@ -2949,7 +2949,7 @@ impl StrokeSample {
         stroke.insert("points".into(), Value::Array(points));
         canvas_save(c)?;
         clip_rect(c, left - owner.dp(2.0)? as f32, owner.dp(3.0)? as f32, right + owner.dp(2.0)? as f32, h - owner.dp(3.0)? as f32)?;
-        render::draw_stroke(&stroke, &mut Png::new(&mut AndroidCanvas::new(c.clone())))?;
+        render::draw_stroke((&stroke).into(), &mut Png::new(&mut AndroidCanvas::new(c.clone())))?;
         canvas_restore(c)?;
         Ok(())
     }
@@ -3047,7 +3047,7 @@ impl ConflictPreview {
                 draw_path(canvas, &path, paint)?;
                 set_style(paint, Style::Fill)?;
             } else {
-                render::draw_object(&owner.app().model(), value, &mut Png::new(&mut AndroidCanvas::new(canvas.clone())))?;
+                render::draw_object(&owner.app().model(), value.into(), &mut Png::new(&mut AndroidCanvas::new(canvas.clone())))?;
             }
             canvas_restore(canvas)
         };

@@ -3,6 +3,7 @@
 
 use crate::error::{require, Result};
 use crate::json::{self, Map, Value};
+use crate::wire::ReplicaState;
 use std::collections::HashMap;
 
 const FORMAT: &str = "stroke-prefix-v1";
@@ -10,7 +11,7 @@ const FORMAT_KEY: &str = "checkpointPointFormat";
 const COUNTS_KEY: &str = "checkpointPointPrefixes";
 
 /// `encode(state)`: replace repeated point prefixes in `events`/`pending`.
-pub fn encode(state: &mut Map) -> Result<()> {
+pub fn encode(state: &mut ReplicaState) -> Result<()> {
     let mut encoder = Encoder { prior: HashMap::new(), counts: Vec::new(), compressed: false };
     let events = encoder.operations(json::list_at(state, "events")?)?;
     let pending = encoder.operations(json::list_at(state, "pending")?)?;
@@ -25,7 +26,7 @@ pub fn encode(state: &mut Map) -> Result<()> {
 }
 
 /// `decode(state)`: expand prefix references written by [`encode`].
-pub fn decode(state: &mut Map) -> Result<()> {
+pub fn decode(state: &mut ReplicaState) -> Result<()> {
     let format = state.shift_remove(FORMAT_KEY);
     let format = match format {
         None | Some(Value::Null) => {

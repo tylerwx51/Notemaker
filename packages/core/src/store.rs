@@ -15,6 +15,8 @@ use crate::model::Model;
 use crate::net::ApiPath;
 use crate::object;
 use crate::timing::{mark, TimingPhase};
+use crate::wire::{ConflictList, EntityRefs, Operation, OperationList, Operations, ReplicaState};
+use crate::{json_object_newtype, json_value_newtype};
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -41,44 +43,190 @@ pub struct State {
     /// ArrayList<>(list)` copies only references), so reads and edit
     /// snapshots stay cheap as a document grows. Clones share the map until
     /// one side mutates it (`DerefMut` → `Arc::make_mut`).
-    pub map: Arc<Map>,
+    pub map: Arc<ReplicaState>,
     model: Option<Model>,
     kind: StateKind,
 }
 
 impl State {
     /// A state sharing `map` until either side mutates it.
-    pub(crate) fn shared(map: Arc<Map>, model: Option<Model>, kind: StateKind) -> State {
+    pub(crate) fn shared(map: Arc<ReplicaState>, model: Option<Model>, kind: StateKind) -> State {
         State { map, model, kind }
     }
     /// A plain JSON state map.
-    pub fn plain(map: Map) -> State {
+    pub fn plain(map: ReplicaState) -> State {
         State { map: Arc::new(map), model: None, kind: StateKind::Plain }
     }
     /// `new Store.Snapshot(model)`: empty map retaining a copy of `model`.
     pub fn snapshot(model: &Model) -> State {
-        State { map: Arc::new(Map::new()), model: Some(model.clone()), kind: StateKind::Snapshot }
+        State { map: Arc::new(ReplicaState::default()), model: Some(model.clone()), kind: StateKind::Snapshot }
     }
     pub fn kind(&self) -> StateKind {
         self.kind
     }
-    /// The JSON map without the in-process materialization.
-    pub fn into_map(self) -> Map {
+    /// The JSON state without the in-process materialization.
+    pub fn into_map(self) -> ReplicaState {
         Arc::try_unwrap(self.map).unwrap_or_else(|shared| (*shared).clone())
     }
 }
 
 impl Deref for State {
-    type Target = Map;
-    fn deref(&self) -> &Map {
+    type Target = ReplicaState;
+    fn deref(&self) -> &ReplicaState {
         &self.map
     }
 }
 
 impl DerefMut for State {
-    fn deref_mut(&mut self) -> &mut Map {
+    fn deref_mut(&mut self) -> &mut ReplicaState {
         Arc::make_mut(&mut self.map)
     }
+}
+
+/// One local editor preference that `settings` and `appendWithSettings`
+/// save into the replica state under the preference's key.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditorPreference {
+    /// `hidden`: ids of the layers hidden in this editor.
+    Hidden(Vec<String>),
+    /// `undo`: the editor's undo stack of operation ids.
+    Undo(Vec<String>),
+    /// `redo`: the editor's redo stack of operation ids.
+    Redo(Vec<String>),
+    /// `selected`: the selected layer.
+    Selected(crate::ids::LayerId),
+    /// `page`: the current page, an integer in 0–10000 kept as written.
+    Page(serde_json::Number),
+    /// `clipboard`: `{"copiedAt", "entities": [≤ 100 stroke/object operations]}`.
+    Clipboard(Map),
+}
+
+impl EditorPreference {
+    fn key(&self) -> &'static str {
+        match self {
+            EditorPreference::Hidden(_) => "hidden",
+            EditorPreference::Undo(_) => "undo",
+            EditorPreference::Redo(_) => "redo",
+            EditorPreference::Selected(_) => "selected",
+            EditorPreference::Page(_) => "page",
+            EditorPreference::Clipboard(_) => "clipboard",
+        }
+    }
+}
+
+impl From<&EditorPreference> for Value {
+    fn from(value: &EditorPreference) -> Value {
+        let strings = |list: &[String]| Value::Array(list.iter().cloned().map(Value::String).collect());
+        match value {
+            EditorPreference::Hidden(list) | EditorPreference::Undo(list) | EditorPreference::Redo(list) => strings(list),
+            EditorPreference::Selected(layer) => Value::from(layer),
+            EditorPreference::Page(page) => Value::Number(page.clone()),
+            EditorPreference::Clipboard(clipboard) => Value::Object(clipboard.clone()),
+        }
+    }
+}
+
+/// `Store.validateSettings(preferences)`'s input: local editor preferences
+/// in the order they are saved. Parse a JSON map with `TryFrom`, which
+/// applies Java's validation and error messages.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EditorPreferences(pub Vec<EditorPreference>);
+
+impl TryFrom<&Map> for EditorPreferences {
+    type Error = Error;
+    /// `Store.validateSettings(preferences)`.
+    fn try_from(preferences: &Map) -> Result<EditorPreferences> {
+        let strings = |key: &str| -> Result<Vec<String>> {
+            json::list(&preferences[key])?
+                .iter()
+                .map(|value| value.as_str().map(str::to_string).ok_or_else(|| Error::illegal_argument("Expected preference strings")))
+                .collect()
+        };
+        let mut out = Vec::new();
+        for key in preferences.keys() {
+            out.push(match key.as_str() {
+                "hidden" => EditorPreference::Hidden(strings(key)?),
+                "undo" => EditorPreference::Undo(strings(key)?),
+                "redo" => EditorPreference::Redo(strings(key)?),
+                "selected" => EditorPreference::Selected(json::string(preferences, key)?.into()),
+                "page" => {
+                    let n = json::number(preferences, key)?;
+                    require((0.0..=10000.0).contains(&n) && n == crate::jmath::rint(n), "Invalid page")?;
+                    match &preferences[key] {
+                        Value::Number(page) => EditorPreference::Page(page.clone()),
+                        _ => return Err(Error::illegal_argument("Invalid page")),
+                    }
+                }
+                "clipboard" => {
+                    let clipboard = json::map(&preferences[key])?;
+                    let entities = json::list_at(clipboard, "entities")?;
+                    require(entities.len() <= 100, "Clipboard exceeds 100 entities")?;
+                    for entity in entities {
+                        Model::validate(entity.try_into()?)?;
+                    }
+                    EditorPreference::Clipboard(clipboard.clone())
+                }
+                _ => return Err(Error::illegal_argument("Unknown local preference")),
+            });
+        }
+        Ok(EditorPreferences(out))
+    }
+}
+
+impl From<&EditorPreferences> for Map {
+    fn from(value: &EditorPreferences) -> Map {
+        value.0.iter().map(|p| (p.key().to_string(), Value::from(p))).collect()
+    }
+}
+
+json_object_newtype! {
+    /// `commit(…)`: `{"operation": batch id, "actions": [the committed operations]}`.
+    pub struct CommitResult;
+}
+
+json_object_newtype! {
+    /// `history(…)`: `{"operation": batch id}` of the undo or redo batch.
+    pub struct HistoryResult;
+}
+
+json_object_newtype! {
+    /// `deleteDocument(…)`: `{"document", "deleted": true, "operation"?}`.
+    pub struct DeleteResult;
+}
+
+json_object_newtype! {
+    /// `accept(…)`: `{"accepted": [operation ids]}`.
+    pub struct AcceptResult;
+}
+
+json_object_newtype! {
+    /// `replica(…)`: one page of committed `events` and `provisional`
+    /// operations with their cursors and the server's `rootId`.
+    pub struct ReplicaPage;
+}
+
+json_object_newtype! {
+    /// `sync(…)`: `{"uploaded", "downloaded", "pending", "cursor", "previews"}`.
+    pub struct SyncResult;
+}
+
+json_object_newtype! {
+    /// The upstream's `/api/info` reply (`id`, `rootId`, …).
+    pub struct ServerInfo;
+}
+
+json_value_newtype! {
+    /// The server database identity a replica follows (`serverId`/`rootId`):
+    /// a string, or `null` when unknown.
+    pub struct ReplicaRootId;
+}
+
+/// A store edit's JSON result with the durable post-edit state (Java put
+/// the state under `result["state"]`).
+#[derive(Clone, Debug)]
+pub struct WithState<R> {
+    pub result: R,
+    pub state: State,
 }
 
 /// Which history stack [`Store::history`] takes the last action from.
@@ -107,20 +255,20 @@ pub fn model(state: &State) -> Result<Model> {
         }
     }
     if state.contains_key("effectiveModel") {
-        return Model::from_json(json::map_at(state, "effectiveModel")?);
+        return Model::from_json(json::map_at(state, "effectiveModel")?.into());
     }
     if state.kind == StateKind::Journal {
         if let Some(m) = &state.model {
             return Ok(m.clone());
         }
     }
-    Model::from_state(state)
+    Model::from_state(&state.map)
 }
 
-/// `Store.model(map)` for a plain JSON map.
-pub fn model_of_map(state: &Map) -> Result<Model> {
+/// `Store.model(map)` for a plain JSON state.
+pub fn model_of_map(state: &ReplicaState) -> Result<Model> {
     if state.contains_key("effectiveModel") {
-        return Model::from_json(json::map_at(state, "effectiveModel")?);
+        return Model::from_json(json::map_at(state, "effectiveModel")?.into());
     }
     Model::from_state(state)
 }
@@ -265,7 +413,7 @@ impl Store {
     }
 
     /// `checkpoint()`: save the materialized replica as a durable base.
-    pub fn checkpoint(&self) -> Result<Map> {
+    pub fn checkpoint(&self) -> Result<journal::CheckpointResult> {
         let _sync = self.coordination.lock.lock();
         require(self.writable, "Checkpoint requires the selected proxy")?;
         journal::checkpoint(&self.file, &self.document)
@@ -324,52 +472,21 @@ impl Store {
     }
 
     /// `append(operation, actor)`.
-    pub fn append(&self, operation: &Map, actor: &ActorId) -> Result<State> {
+    pub fn append(&self, operation: &Operation, actor: &ActorId) -> Result<State> {
         self.append_with_settings(operation, actor, None)
     }
 
-    /// `Store.validateSettings(preferences)`.
-    pub fn validate_settings(preferences: &Map) -> Result<()> {
-        for key in preferences.keys() {
-            require(matches!(key.as_str(), "hidden" | "undo" | "redo" | "selected" | "page" | "clipboard"), "Unknown local preference")?;
-            if matches!(key.as_str(), "hidden" | "undo" | "redo") {
-                for value in json::list(&preferences[key])? {
-                    require(value.is_string(), "Expected preference strings")?;
-                }
-            }
-            if key == "selected" {
-                json::string(preferences, key)?;
-            }
-            if key == "page" {
-                let n = json::number(preferences, key)?;
-                require((0.0..=10000.0).contains(&n) && n == crate::jmath::rint(n), "Invalid page")?;
-            }
-            if key == "clipboard" {
-                let clipboard = json::map(&preferences[key])?;
-                let entities = json::list_at(clipboard, "entities")?;
-                require(entities.len() <= 100, "Clipboard exceeds 100 entities")?;
-                for entity in entities {
-                    Model::validate(json::map(entity)?)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// `appendWithSettings(operation, actor, preferences)`.
-    pub fn append_with_settings(&self, operation: &Map, actor: &ActorId, preferences: Option<&Map>) -> Result<State> {
+    pub fn append_with_settings(&self, operation: &Operation, actor: &ActorId, preferences: Option<&EditorPreferences>) -> Result<State> {
         let actor: &str = actor;
         require(!actor.is_empty() && jlen(actor) <= 200, "Invalid actor")?;
         Model::validate(operation)?;
-        if let Some(p) = preferences {
-            Store::validate_settings(p)?;
-        }
         require(json::write_map(operation).len() <= 3000000, "Action exceeds 3 MB")?;
         self.edit_appending(&mut |state: &mut State| {
             // Lease checks leave the document model unchanged; reuse this snapshot for version bases.
             let current = model(state)?;
             require(!current.deleted, "Document is deleted")?;
-            collaboration::require_unlocked(state, &ActorId::from(actor), &[Value::Object(operation.clone())], EpochMillis::now())?;
+            collaboration::require_unlocked(state, &ActorId::from(actor), [Value::Object(operation.0.clone())].as_slice().into(), EpochMillis::now())?;
             let mut op = operation.clone();
             op.insert("id".into(), Value::String(String::from(ids::Uuid::random())));
             op.insert("actor".into(), Value::String(actor.to_string()));
@@ -378,10 +495,10 @@ impl Store {
             if let Some(session) = session {
                 op.insert("session".into(), session);
             }
-            json::list_at_mut(state, "pending")?.push(Value::Object(op));
+            json::list_at_mut(state, "pending")?.push(Value::from(op));
             if let Some(p) = preferences {
-                for (k, v) in p {
-                    state.insert(k.clone(), v.clone());
+                for (k, v) in Map::from(p) {
+                    state.insert(k, v);
                 }
             }
             Ok(())
@@ -389,7 +506,7 @@ impl Store {
     }
 
     /// `deleteDocument(actor)`: permanent, idempotent lifecycle action.
-    pub fn delete_document(&self, actor: &ActorId) -> Result<Map> {
+    pub fn delete_document(&self, actor: &ActorId) -> Result<DeleteResult> {
         let actor: &str = actor;
         require(!actor.is_empty() && jlen(actor) <= 200, "Invalid actor")?;
         let mut result = object! {"document" => self.document.clone(), "deleted" => true};
@@ -404,31 +521,31 @@ impl Store {
             result.insert("operation".into(), Value::String(id));
             Ok(())
         })?;
-        Ok(result)
+        Ok(result.into())
     }
 
     /// `commit(actor, build)`.
-    pub fn commit(&self, actor: &ActorId, build: &mut Build<'_>) -> Result<Map> {
-        self.commit_full(actor.as_ref(), build, &[], None, &[]).map(|(r, _)| r)
+    pub fn commit(&self, actor: &ActorId, build: &mut Build<'_>) -> Result<CommitResult> {
+        self.commit_full(actor.as_ref(), build, Default::default(), None, Default::default()).map(|w| w.result)
     }
 
     /// `commitWithState(actor, build)`: the result plus the durable post-edit
     /// state (Java put it under `result["state"]`).
-    pub fn commit_with_state(&self, actor: &ActorId, build: &mut Build<'_>) -> Result<(Map, State)> {
-        self.commit_full(actor.as_ref(), build, &[], None, &[])
+    pub fn commit_with_state(&self, actor: &ActorId, build: &mut Build<'_>) -> Result<WithState<CommitResult>> {
+        self.commit_full(actor.as_ref(), build, Default::default(), None, Default::default())
     }
 
     /// `commit(actor, build, dependencies)`.
-    pub fn commit_with_dependencies(&self, actor: &ActorId, build: &mut Build<'_>, dependencies: &[Value]) -> Result<Map> {
-        self.commit_full(actor.as_ref(), build, dependencies, None, &[]).map(|(r, _)| r)
+    pub fn commit_with_dependencies(&self, actor: &ActorId, build: &mut Build<'_>, dependencies: &EntityRefs) -> Result<CommitResult> {
+        self.commit_full(actor.as_ref(), build, dependencies, None, Default::default()).map(|w| w.result)
     }
 
     /// `commitSelected(actor, session, entities, build, dependencies)`.
-    pub fn commit_selected(&self, actor: &ActorId, session: &SessionId, entities: &[Value], build: &mut Build<'_>, dependencies: &[Value]) -> Result<Map> {
-        self.commit_full(actor.as_ref(), build, dependencies, Some(session.as_ref()), entities).map(|(r, _)| r)
+    pub fn commit_selected(&self, actor: &ActorId, session: &SessionId, entities: &EntityRefs, build: &mut Build<'_>, dependencies: &EntityRefs) -> Result<CommitResult> {
+        self.commit_full(actor.as_ref(), build, dependencies, Some(session.as_ref()), entities).map(|w| w.result)
     }
 
-    fn commit_full(&self, actor: &str, build: &mut Build<'_>, dependencies: &[Value], required_session: Option<&str>, selected: &[Value]) -> Result<(Map, State)> {
+    fn commit_full(&self, actor: &str, build: &mut Build<'_>, dependencies: &EntityRefs, required_session: Option<&str>, selected: &EntityRefs) -> Result<WithState<CommitResult>> {
         require(!actor.is_empty() && jlen(actor) <= 200, "Invalid actor")?;
         let mut result = Map::new();
         let after = self.edit_appending(&mut |state: &mut State| {
@@ -439,7 +556,7 @@ impl Store {
             }
             let baseline = model.clone();
             mark(TimingPhase("geometry_begin"));
-            let requested = build(&mut model)?;
+            let requested = build(&mut model)?.0;
             let mut ops: Vec<Value> = Vec::new();
             mark(TimingPhase("geometry_done"));
             for value in requested {
@@ -478,16 +595,19 @@ impl Store {
                 let op = json::map(v)?;
                 let kind = op.get("kind").and_then(Value::as_str);
                 require(!matches!(kind, Some("batch") | Some("document") | Some("document-delete")), "Use document create; nested batches are not allowed")?;
+                let op: &Operation = op.into();
                 Model::validate(op)?;
-                inverse.insert(0, actions::inverse(&model, op)?);
+                inverse.insert(0, Value::from(actions::inverse(&model, op)?));
                 model.apply(op)?;
             }
             mark(TimingPhase("inverse_done"));
-            collaboration::require_unlocked(state, &ActorId::from(actor), &ops, EpochMillis::now())?;
-            collaboration::require_unlocked(state, &ActorId::from(actor), dependencies, EpochMillis::now())?;
-            actions::validate_references(&model, &ops)?;
+            collaboration::require_unlocked(state, &ActorId::from(actor), (&ops).into(), EpochMillis::now())?;
+            // Java passed the dependency references to `requireUnlocked`,
+            // whose `affected` reads `{kind, id, page}` like an operation.
+            collaboration::require_unlocked(state, &ActorId::from(actor), (&dependencies.0).into(), EpochMillis::now())?;
+            actions::validate_references(&model, (&ops).into())?;
             mark(TimingPhase("locks_done"));
-            let mut batch = object! {"kind" => "batch", "id" => String::from(ids::Uuid::random()), "actor" => actor, "actions" => Value::Array(ops.clone())};
+            let mut batch = Operation(object! {"kind" => "batch", "id" => String::from(ids::Uuid::random()), "actor" => actor, "actions" => Value::Array(ops.clone())});
             Model::with_bases(&mut batch, &baseline)?;
             if let Some(session) = active_session(state, actor)? {
                 batch.insert("session".into(), session);
@@ -496,7 +616,7 @@ impl Store {
             require(json::write_list(&inverse).len() <= 3000000, "Undo snapshot exceeds 3 MB; split this action")?;
             mark(TimingPhase("limits_done"));
             let batch_id = batch.get("id").cloned().unwrap_or(Value::Null);
-            json::list_at_mut(state, "pending")?.push(Value::Object(batch));
+            json::list_at_mut(state, "pending")?.push(Value::from(batch));
             let history = history_of(state, actor)?;
             json::list_at_mut(history, "undo")?.push(Value::Object(object! {"forward" => Value::Array(ops.clone()), "inverse" => Value::Array(inverse)}));
             history.insert("redo".into(), Value::Array(Vec::new()));
@@ -504,16 +624,16 @@ impl Store {
             result.insert("actions".into(), Value::Array(ops));
             Ok(())
         })?;
-        Ok((result, after))
+        Ok(WithState { result: result.into(), state: after })
     }
 
     /// `history(actor, redo)`: undo or redo the actor's last action.
-    pub fn history(&self, actor: &ActorId, direction: HistoryDirection) -> Result<Map> {
-        self.history_with_state(actor, direction).map(|(r, _)| r)
+    pub fn history(&self, actor: &ActorId, direction: HistoryDirection) -> Result<HistoryResult> {
+        self.history_with_state(actor, direction).map(|w| w.result)
     }
 
     /// `history(actor, redo, true)`: the result plus the post-edit state.
-    pub fn history_with_state(&self, actor: &ActorId, direction: HistoryDirection) -> Result<(Map, State)> {
+    pub fn history_with_state(&self, actor: &ActorId, direction: HistoryDirection) -> Result<WithState<HistoryResult>> {
         let (actor, redo) = (actor.as_ref(), direction == HistoryDirection::Redo);
         let mut result = Map::new();
         let (from_key, to_key, part) = if redo { ("redo", "undo", "forward") } else { ("undo", "redo", "inverse") };
@@ -529,28 +649,28 @@ impl Store {
             };
             let entry_map = json::map(&entry)?;
             let actions = json::list(entry_map.get(part).unwrap_or(&Value::Null))?.clone();
-            collaboration::require_unlocked(state, &ActorId::from(actor), &actions, EpochMillis::now())?;
+            collaboration::require_unlocked(state, &ActorId::from(actor), (&actions).into(), EpochMillis::now())?;
             {
                 let h = history_of(state, actor)?;
                 json::list_at_mut(h, from_key)?.pop();
                 json::list_at_mut(h, to_key)?.push(entry.clone());
             }
             let id = String::from(ids::Uuid::random());
-            let mut batch = object! {"kind" => "batch", "id" => id.clone(), "actor" => actor, "actions" => entry_map.get(part).cloned().unwrap_or(Value::Null)};
+            let mut batch = Operation(object! {"kind" => "batch", "id" => id.clone(), "actor" => actor, "actions" => entry_map.get(part).cloned().unwrap_or(Value::Null)});
             Model::with_bases(&mut batch, &current)?;
             if let Some(session) = active_session(state, actor)? {
                 batch.insert("session".into(), session);
             }
-            json::list_at_mut(state, "pending")?.push(Value::Object(batch));
+            json::list_at_mut(state, "pending")?.push(Value::from(batch));
             result.insert("operation".into(), Value::String(id));
             Ok(())
         })?;
-        Ok((result, after))
+        Ok(WithState { result: result.into(), state: after })
     }
 
     /// `accept(operations, root)`: immutable ingress log for downstream replicas.
-    pub fn accept(&self, operations: &[Value], root: Option<&Value>) -> Result<Map> {
-        let root = root.filter(|r| !r.is_null());
+    pub fn accept(&self, operations: &Operations, root: Option<&ReplicaRootId>) -> Result<AcceptResult> {
+        let root = root.map(|r| &r.0).filter(|r| !r.is_null());
         let before = self.read()?;
         let mut known = index(&before)?;
         let mut fresh: Vec<Value> = Vec::new();
@@ -560,7 +680,7 @@ impl Store {
             "Server database differs from this replica",
         )?;
         for value in operations {
-            let op = json::map(value)?;
+            let op: &Operation = value.try_into()?;
             Model::validate(op)?;
             let id = json::string(op, "id")?;
             require(!id.is_empty() && jlen(id) <= 200, "Invalid operation ID")?;
@@ -579,7 +699,7 @@ impl Store {
                     "Server database differs from this replica",
                 )?;
                 for op in &fresh {
-                    collaboration::require_incoming_unlocked(state, json::map(op)?, EpochMillis::now())?;
+                    collaboration::require_incoming_unlocked(state, op.try_into()?, EpochMillis::now())?;
                 }
                 if let Some(root) = root {
                     state.insert("serverId".into(), root.clone());
@@ -598,11 +718,11 @@ impl Store {
             })?;
         }
         let accepted: Vec<Value> = operations.iter().map(|op| op.as_object().and_then(|m| m.get("id")).cloned().unwrap_or(Value::Null)).collect();
-        Ok(object! {"accepted" => Value::Array(accepted)})
+        Ok(object! {"accepted" => Value::Array(accepted)}.into())
     }
 
     /// `Store.page(values, start)`: at most 100 values / ~3 MB.
-    pub fn page(values: &[Value], start: ReplicaCursor) -> Result<Vec<Value>> {
+    pub fn page(values: &Operations, start: ReplicaCursor) -> Result<OperationList> {
         let start = start.0;
         require(start >= 0 && start as usize <= values.len(), "Invalid replica cursor")?;
         let mut out = Vec::new();
@@ -618,29 +738,30 @@ impl Store {
             bytes = bytes.wrapping_add(size);
             i += 1;
         }
-        Ok(out)
+        Ok(OperationList(out))
     }
 
     /// `replica(after, pendingAfter)`: committed and provisional pages.
-    pub fn replica(&self, after: ReplicaCursor, pending_after: ReplicaCursor) -> Result<Map> {
+    pub fn replica(&self, after: ReplicaCursor, pending_after: ReplicaCursor) -> Result<ReplicaPage> {
         let (after, pending_after) = (after.0, pending_after.0);
         let state = self.read()?;
         let events = json::list_at(&state, "events")?;
         let empty = Value::Array(Vec::new());
         let ingress = json::list(json::get_or_default(&state, "relay", &empty))?;
-        let committed = Store::page(events, ReplicaCursor(after))?;
-        let provisional = Store::page(ingress, ReplicaCursor(pending_after))?;
+        let committed = Store::page(events.into(), ReplicaCursor(after))?;
+        let provisional = Store::page(ingress.into(), ReplicaCursor(pending_after))?;
         let after_next = after + committed.len() as i32;
         let pending_next = pending_after + provisional.len() as i32;
         Ok(object! {
-            "events" => Value::Array(committed),
+            "events" => Value::from(committed),
             "after" => after_next,
             "more" => (after_next as i64) < events.len() as i64,
-            "provisional" => Value::Array(provisional),
+            "provisional" => Value::from(provisional),
             "pendingAfter" => pending_next,
             "pendingMore" => (pending_next as i64) < ingress.len() as i64,
             "rootId" => state.get("serverId").cloned().unwrap_or(Value::Null),
-        })
+        }
+        .into())
     }
 
     /// `needsUpload(peer)`.
@@ -661,7 +782,7 @@ impl Store {
     }
 
     /// `sync(upstream, info, upload, gate)`: called only by the proxy's single sync worker.
-    pub fn sync(&self, upstream: &Endpoint, info: &Map, mode: SyncMode, gate: &mut UploadGate<'_>) -> Result<Map> {
+    pub fn sync(&self, upstream: &Endpoint, info: &ServerInfo, mode: SyncMode, gate: &mut UploadGate<'_>) -> Result<SyncResult> {
         let upload = mode == SyncMode::Upload;
         let peer = json::string(info, "id")?.to_string();
         let root = info.get("rootId").filter(|r| !r.is_null()).cloned();
@@ -702,7 +823,7 @@ impl Store {
             gate()?;
             let root_id = root.clone().unwrap_or_else(|| initial.get("serverId").cloned().unwrap_or(Value::Null));
             let body = Value::Object(object! {"document" => self.document.clone(), "operations" => Value::Array(batch.clone()), "rootId" => root_id});
-            let response = upstream.request(ApiPath::Events, Some(&body))?;
+            let response = upstream.request(ApiPath::Events, Some((&body).into()))?;
             let ack = json::list(response.get("accepted").unwrap_or(&Value::Null))?.clone();
             let submitted: Vec<Value> = batch.iter().map(|op| op.as_object().and_then(|m| m.get("id")).cloned().unwrap_or(Value::Null)).collect();
             require(ack.iter().all(|a| submitted.contains(a)), "Unexpected acknowledgement")?;
@@ -735,7 +856,7 @@ impl Store {
             let provisional = json::list(response.get("provisional").unwrap_or(&Value::Null))?.clone();
             require(json::as_int(response.get("after"))? == after + events.len() as i32, "Invalid commit cursor")?;
             for op in events.iter().chain(provisional.iter()) {
-                Model::validate(json::map(op)?)?;
+                Model::validate(op.try_into()?)?;
             }
             let next = json::as_int(response.get("pendingAfter"))?;
             require(next == pending_after + provisional.len() as i32, "Invalid relay cursor")?;
@@ -795,7 +916,7 @@ impl Store {
         let local_leases = json::get_or_default(&local_locks, "leases", &empty_map).clone();
         if !json::map(&local_leases)?.is_empty() {
             let body = Value::Object(object! {"document" => self.document.clone(), "leases" => local_leases, "remove" => Value::Array(Vec::new())});
-            upstream.request(ApiPath::LockUpdate, Some(&body))?;
+            upstream.request(ApiPath::LockUpdate, Some((&body).into()))?;
         }
         let locks = upstream.request(ApiPath::Locks { document: self.document.clone() }, None)?;
         if locks.contains_key("leases") {
@@ -814,18 +935,19 @@ impl Store {
             "pending" => pending,
             "cursor" => cursor,
             "previews" => json::get_or_default(&locks, "previews", &empty_map).clone(),
-        })
+        }
+        .into())
     }
 
     /// `conflicts()`.
-    pub fn conflicts(&self) -> Result<Vec<Value>> {
+    pub fn conflicts(&self) -> Result<ConflictList> {
         Ok(self.model()?.visible_conflicts())
     }
 
     /// `conflict(id, choice, actor)`: resolve with `local`, `remote` or `both`.
     /// Parse the choice with [`ConflictChoice::parse`] first, as Java
     /// validated it before anything else.
-    pub fn conflict(&self, id: &ConflictId, choice: ConflictChoice, actor: &ActorId) -> Result<Map> {
+    pub fn conflict(&self, id: &ConflictId, choice: ConflictChoice, actor: &ActorId) -> Result<CommitResult> {
         let id: &str = id;
         self.commit(actor, &mut |m: &mut Model| {
             let c = m.conflicts.get(id);
@@ -864,7 +986,7 @@ impl Store {
                 actions.push(Value::Object(object! {"kind" => active_kind, kind.as_str() => dup_id, "active" => c.get("remoteActive").cloned().unwrap_or(Value::Null)}));
             }
             actions.push(Value::Object(object! {"kind" => "conflict-status", "conflict" => id, "active" => false}));
-            Ok(actions)
+            Ok(OperationList(actions))
         })
     }
 }

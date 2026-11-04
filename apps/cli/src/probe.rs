@@ -79,7 +79,12 @@ pub fn timed<T>(phase: &ProbePhase, work: impl FnOnce() -> Result<T>) -> Result<
     Ok(result)
 }
 
+notemaker_core::json_value_newtype! {
+    /// One JSON line a probe binary prints.
+    pub struct ProbeRecord;
+}
+
 /// `System.out.println(write(value))` for the probe binaries.
-pub fn print(value: Value) {
-    println(value)
+pub fn print(value: impl Into<ProbeRecord>) {
+    println(value.into().0)
 }

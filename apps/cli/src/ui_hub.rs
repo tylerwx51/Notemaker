@@ -3,10 +3,35 @@
 
 use notemaker_core::clock::EpochMillis;
 use notemaker_core::error::require;
-use notemaker_core::{json, object, Error, Map, Result, Value};
+use notemaker_core::{json, json_object_newtype, object, Error, Map, Result, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+
+json_object_newtype! {
+    /// `list()`: `{sessions: [...sorted by session], scope: "root"}`.
+    pub struct UiSessionList;
+}
+
+json_object_newtype! {
+    /// A proxy's UI heartbeat: `{proxyId, sessions: [...], results?: [...]}`.
+    pub struct UiHeartbeat;
+}
+
+json_object_newtype! {
+    /// `heartbeat(…)`'s reply: `{commands, acknowledged, serverTime}`.
+    pub struct UiHeartbeatReply;
+}
+
+json_object_newtype! {
+    /// A relayed UI command: `{session, verb, action?, input?}`.
+    pub struct UiCommandRequest;
+}
+
+json_object_newtype! {
+    /// `command(…)`'s reply: `{result}`.
+    pub struct UiCommandReply;
+}
 
 /// `UiHub`. Java `synchronized` methods with `wait`/`notifyAll` become one
 /// `Mutex` plus a `Condvar`.
@@ -93,7 +118,7 @@ impl UiHub {
     }
 
     /// `list()`: `{sessions: [...sorted by session], scope: "root"}`.
-    pub fn list(&self) -> Map {
+    pub fn list(&self) -> UiSessionList {
         let mut state = self.lock();
         if state.expire(now_millis()) {
             self.changed.notify_all();
@@ -105,11 +130,11 @@ impl UiHub {
             .map(Value::Object)
             .collect();
         values.sort_by_key(|v| json::java_string(v.get("session")));
-        object! {"sessions" => values, "scope" => "root"}
+        object! {"sessions" => values, "scope" => "root"}.into()
     }
 
     /// `heartbeat(body)`: `{commands, acknowledged, serverTime}`.
-    pub fn heartbeat(&self, body: &Map) -> Result<Map> {
+    pub fn heartbeat(&self, body: &UiHeartbeat) -> Result<UiHeartbeatReply> {
         let mut state = self.lock();
         let proxy = id(body.get("proxyId"), "proxy ID")?.to_string();
         let reported = json::list(body.get("sessions").unwrap_or(&Value::Null))?.clone();
@@ -183,11 +208,11 @@ impl UiHub {
         if notify {
             self.changed.notify_all();
         }
-        Ok(object! {"commands" => commands, "acknowledged" => acknowledged, "serverTime" => now})
+        Ok(object! {"commands" => commands, "acknowledged" => acknowledged, "serverTime" => now}.into())
     }
 
     /// `command(body)`: blocks up to 32 s for the app's result; `{result}`.
-    pub fn command(&self, body: &Map) -> Result<Map> {
+    pub fn command(&self, body: &UiCommandRequest) -> Result<UiCommandReply> {
         let mut state = self.lock();
         let session = id(body.get("session"), "session ID")?.to_string();
         let verb = id(body.get("verb"), "UI verb")?.to_string();
@@ -252,7 +277,7 @@ impl UiHub {
         if let Some(error) = result.get("error") {
             return Err(Error::illegal_argument(json::java_string(Some(error))));
         }
-        Ok(object! {"result" => result.get("value").cloned().unwrap_or(Value::Null)})
+        Ok(object! {"result" => result.get("value").cloned().unwrap_or(Value::Null)}.into())
     }
 }
 

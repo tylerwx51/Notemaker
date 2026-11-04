@@ -27,7 +27,8 @@ out, where Java's maximum queue was 1.
 
 Keep the JSON model and file formats. Share state the way Java did:
 
-- **COW state.** `store::State.map` is an `Arc<Map>`. `DerefMut` uses
+- **COW state.** `store::State.map` is an `Arc<ReplicaState>` (an
+  `Arc<Map>` before ADR 0032 named the JSON). `DerefMut` uses
   `Arc::make_mut`, so a state is copied only when a holder mutates it.
   `Journal.state` holds the same `Arc`, so a read is an `Arc` clone.
 - **Overlay inside the journal.** Store's process-local `leases` and
