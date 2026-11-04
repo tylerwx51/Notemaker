@@ -17,6 +17,7 @@ use notemaker_core::ids::{
 };
 use notemaker_core::layer_editor::{self, HitMode, ItemFilter, LayerEditor};
 use notemaker_core::model::Model;
+use notemaker_core::net::Port;
 use notemaker_core::render::{self, HiddenLayers};
 use notemaker_core::shape_catalog;
 use notemaker_core::store::{self, HistoryDirection, State, Store};
@@ -501,9 +502,12 @@ pub fn run(args: &CommandArgs) -> Result<Option<Value>> {
         "serve" => {
             require(a.len() <= 2, "serve [PORT [SERVER_URL]]")?;
             let port = if a.is_empty() {
-                8766
+                Port::DEFAULT_PROXY
             } else {
-                jutil::parse_int(&a[0])?
+                // Java parsed an int and failed at bind with this message.
+                u16::try_from(jutil::parse_int(&a[0])?)
+                    .map(Port::from)
+                    .map_err(|_| Error::io("invalid port value"))?
             };
             let signals = block_shutdown_signals();
             let service = LocalProxy::new(&directory, port)?;

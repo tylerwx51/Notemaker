@@ -59,7 +59,7 @@ pub struct Error {
     /// `getMessage()`; `None` mirrors a Java exception with a null message.
     pub message: Option<String>,
     /// `Endpoint.HttpError.status` for [`ErrorKind::Http`].
-    pub status: Option<i32>,
+    pub status: Option<crate::net::HttpStatus>,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -80,7 +80,7 @@ impl Error {
     pub fn io(message: impl Into<String>) -> Error {
         Error::new(ErrorKind::Io, message)
     }
-    pub fn http(status: i32, message: impl Into<String>) -> Error {
+    pub fn http(status: crate::net::HttpStatus, message: impl Into<String>) -> Error {
         Error { kind: ErrorKind::Http, message: Some(message.into()), status: Some(status) }
     }
     pub fn class_cast(message: impl Into<String>) -> Error {

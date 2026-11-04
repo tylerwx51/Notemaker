@@ -226,7 +226,7 @@ pub fn stats(values: LatencySamples) -> Map {
 pub fn prewarm_graphics(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<()> {
     test.run_on_main_sync(|| -> AppResult<()> {
         app.document.set(format!("performance-warmup-{}", jx::current_time_millis().0));
-        app.host.set("http://127.0.0.1:1".into());
+        app.host.set(crate::network::ServerAddr::from("http://127.0.0.1:1"));
         app.load(&crate::main_activity::DocumentType::from("fixed"))?;
         app.configure_proxy()?;
         app.update()?;
@@ -339,13 +339,13 @@ pub fn run(test: &Arc<Integration>, app: &Arc<MainActivity>) -> AppResult<Map> {
     };
     test.run_on_main_sync(|| -> AppResult<()> {
         app.document.set(format!("performance-{}", jx::current_time_millis().0));
-        app.host.set("http://127.0.0.1:1".into());
+        app.host.set(crate::network::ServerAddr::from("http://127.0.0.1:1"));
         app.load(&crate::main_activity::DocumentType::from("fixed"))?;
         app.configure_proxy()?;
         app.update()?;
         let editor = crate::ui::edit(&app.this)?;
         crate::ui::put_string(&editor, &crate::ui::PrefKey::from("document"), &crate::ui::PrefText::from(&app.document.get()))?;
-        crate::ui::put_string(&editor, &crate::ui::PrefKey::from("host"), &crate::ui::PrefText::from(&app.host.get()))?;
+        crate::ui::put_string(&editor, &crate::ui::PrefKey::from("host"), &crate::ui::PrefText::from(app.host.get().to_string()))?;
         jcall!(editor, "android/content/SharedPreferences$Editor", "commit", "()Z")?;
         let canvas = app.canvas();
         {

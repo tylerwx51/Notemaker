@@ -24,6 +24,7 @@ use crate::tool_display::ToolDisplay;
 use crate::ui;
 use indexmap::IndexMap;
 use notemaker_core::endpoint::{Disconnector, HttpConnection};
+use notemaker_core::net::{BearerToken, ChatId, ChatPath, EndpointPath, HeaderName, HeaderValue, HttpUrl};
 use std::io::{BufRead, BufReader, Read};
 use std::sync::{Arc, Weak};
 
@@ -235,10 +236,9 @@ impl AgentUi {
         Ok(())
     }
     fn configure_proxy(&self, app: &Arc<MainActivity>) -> AppResult<()> {
-        let proxy_url = app.proxy_url.get();
-        if !proxy_url.is_empty() {
+        if let crate::network::ProxyAddr::Set(proxy_url) = app.proxy_url.get() {
             self.base.set(Some(strip_slashes(&proxy_url)));
-            self.proxy_token.set(Some(app.proxy_token.get()));
+            self.proxy_token.set(Some(app.proxy_token.get().to_string()));
         } else {
             crate::replica_service::ensure(&app.this)?;
             let descriptor = app.files_dir()?.join("proxy.json");
@@ -417,26 +417,27 @@ impl AgentUi {
     }
     /// `private JSONObject http(String url, JSONObject data) throws Exception`
     /// (`HttpURLConnection` → `notemaker_core::endpoint::HttpConnection`).
-    fn http(&self, url: &str, data: Option<&JSONObject>) -> AppResult<JSONObject> {
-        let mut c = HttpConnection::new(url)?;
+    fn http(&self, path: impl Into<EndpointPath>, data: Option<&JSONObject>) -> AppResult<JSONObject> {
+        let path = path.into();
+        let mut c = HttpConnection::new(&HttpUrl::from(s(&self.base.get())).join(&path))?;
         c.set_connect_timeout(5000);
         c.set_read_timeout(10000);
-        c.set_request_property("Authorization", &format!("Bearer {}", s(&self.proxy_token.get())));
+        c.set_request_property(HeaderName::Authorization, BearerToken::from(s(&self.proxy_token.get())).authorization());
+        c.set_request_method(path.method());
         let result = (|| -> AppResult<JSONObject> {
             if let Some(data) = data {
-                c.set_request_method("POST");
-                c.set_request_property("Content-Type", "application/json");
+                c.set_request_property(HeaderName::ContentType, HeaderValue::json());
                 c.write_body(data.to_string().into_bytes());
             }
             let code = c.response_code()?;
-            let source = if code < 400 { Some(c.input_stream()?) } else { c.error_stream()? };
+            let source = if code.is_error() { c.error_stream()? } else { Some(c.input_stream()?) };
             let Some(mut source) = source else {
                 return Err(AppError::io(format!("HTTP {code}")));
             };
             let mut bytes = Vec::new();
             source.read_to_end(&mut bytes)?;
             let result = JSONObject::parse(&String::from_utf8_lossy(&bytes))?;
-            if code >= 400 {
+            if code.is_error() {
                 return Err(AppError::io(result.opt_string_or("error", &format!("HTTP {code}"))));
             }
             Ok(result)
@@ -454,10 +455,10 @@ impl AgentUi {
         ui::add_view(&list_scroll, &list)?;
         ui::add_view_params(&body, &list_scroll, &ui::linear_params_weight(ui::LayoutSize { width: -1, height: 0 }, ui::LayoutWeight(1.0))?)?;
         ui::set_text(&self.status_view(), &ui::UiText::from(if recent { "Five most recent chats" } else { "Chat history" }))?;
-        let url = format!("{}/api/chats?limit={}&offset={}", s(&self.base.get()), if recent { 5 } else { 20 }, offset);
+        let path = ChatPath::List { limit: Some(if recent { 5 } else { 20 }), offset: Some(offset.into()) };
         let me = self.clone();
         self.request(
-            Box::new(move || me.http(&url, None)),
+            Box::new(move || me.http(path.clone(), None)),
             Box::new(move |me, result| {
                 let chats = result.get_json_array("chats")?;
                 if chats.length() == 0 {
@@ -502,10 +503,9 @@ impl AgentUi {
     pub fn new_chat(self: &Arc<Self>) -> AppResult<()> {
         self.clear("New chat")?;
         ui::set_text(&self.status_view(), &ui::UiText::from("Loading available agents…"))?;
-        let url = format!("{}/api/chats/options", s(&self.base.get()));
         let me = self.clone();
         self.request(
-            Box::new(move || me.http(&url, None)),
+            Box::new(move || me.http(ChatPath::Options, None)),
             Box::new(move |me, result| {
                 ui::set_text(&me.status_view(), &ui::UiText::from("Choose an agent for this conversation"))?;
                 let harnesses = result.get_json_array("harnesses")?;
@@ -561,9 +561,8 @@ impl AgentUi {
                             ("model", JV::from(selected.opt_string("model"))),
                             ("effort", JV::from(selected_item(&effort)?)),
                         ]);
-                        let target = format!("{}/api/chats", s(&me.base.get()));
                         let worker = me.clone();
-                        me.request(Box::new(move || worker.http(&target, Some(&config))), Box::new(|me, result| me.conversation(&result)));
+                        me.request(Box::new(move || worker.http(ChatPath::Create, Some(&config))), Box::new(|me, result| me.conversation(&result)));
                         Ok(())
                     }),
                 )?;
@@ -657,7 +656,7 @@ impl AgentUi {
         let message = self.pending.get().unwrap();
         let key = self.pending_key();
         let draft = self.draft_key();
-        let url = format!("{}/api/chats/{}/messages", s(&self.base.get()), s(&self.chat.get()));
+        let path = ChatPath::Messages { chat: ChatId::from(s(&self.chat.get())) };
         let token = self.generation.get();
         self.set_status("running", "Sending…")?;
         set_enabled(&self.send.get().expect("send"), false)?;
@@ -665,7 +664,7 @@ impl AgentUi {
         let me = self.clone();
         self.request(
             Box::new(move || {
-                let result = me.http(&url, Some(&message)).and_then(|result| {
+                let result = me.http(path.clone(), Some(&message)).and_then(|result| {
                     let editor = ui::edit(&me.context())?;
                     ui::remove_pref(&editor, &ui::PrefKey::from(&key))?;
                     ui::remove_pref(&editor, &ui::PrefKey::from(&draft))?;
@@ -696,10 +695,10 @@ impl AgentUi {
     }
     /// `private void stop()`.
     pub fn stop(self: &Arc<Self>) -> AppResult<()> {
-        let url = format!("{}/api/chats/{}/stop", s(&self.base.get()), s(&self.chat.get()));
+        let path = ChatPath::Stop { chat: ChatId::from(s(&self.chat.get())) };
         let me = self.clone();
         self.request(
-            Box::new(move || me.http(&url, Some(&JSONObject::new()))),
+            Box::new(move || me.http(path.clone(), Some(&JSONObject::new()))),
             Box::new(|me, result| {
                 ui::set_text(&me.status_view(), &ui::UiText::from(if result.opt_boolean("stopping") { "Stopping…" } else { "Finished" }))?;
                 Ok(())
@@ -710,8 +709,8 @@ impl AgentUi {
     /// One connection of the reader loop; `Ok` when the stream ended or the
     /// generation changed.
     fn read_stream(self: &Arc<Self>, token: i32, host: &str, identity: &str, after: &mut i64, connection: &mut Option<Disconnector>) -> AppResult<()> {
-        let mut c = HttpConnection::new(&format!("{host}/api/chats/{identity}/stream?after={after}"))?;
-        c.set_request_property("Authorization", &format!("Bearer {}", s(&self.proxy_token.get())));
+        let mut c = HttpConnection::new(&HttpUrl::from(host).join(ChatPath::Stream { chat: ChatId::from(identity), after: Some(*after) }))?;
+        c.set_request_property(HeaderName::Authorization, BearerToken::from(s(&self.proxy_token.get())).authorization());
         c.set_connect_timeout(5000);
         c.set_read_timeout(10000);
         *connection = Some(c.disconnector());

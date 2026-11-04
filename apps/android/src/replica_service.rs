@@ -12,6 +12,7 @@ use crate::components::ComponentEvent;
 use crate::jx::{self, JResult, Obj, Reply};
 use crate::monitor::Monitor;
 use notemaker_cli::local_proxy::LocalProxy;
+use notemaker_core::net::Port;
 use std::sync::{Arc, LazyLock};
 
 /// `static final ExecutorService writes` (thread `replica-writer`).
@@ -39,7 +40,7 @@ pub fn ensure(context: &Obj) -> AppResult<Arc<LocalProxy>> {
     let dir = crate::ui::files_dir(context)?;
     // 8766 as in Java. Isolated latency builds (tests/tablet_erase_latency.py)
     // compile with NOTEMAKER_REPLICA_PORT=0, replacing the Java source patch.
-    let port = option_env!("NOTEMAKER_REPLICA_PORT").and_then(|v| v.parse().ok()).unwrap_or(8766);
+    let port = option_env!("NOTEMAKER_REPLICA_PORT").and_then(|v| v.parse::<u16>().ok()).map(Port::from).unwrap_or(Port::DEFAULT_PROXY);
     let p = open_proxy(&dir, port)?;
     PROXY.set(Some(p.clone()));
     Ok(p)
@@ -55,7 +56,7 @@ const TAKEOVER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// can still be exiting, so its `fcntl` lock and listening socket have not been
 /// released yet. Java tried once and crashed with "Cannot read saved document"
 /// (ADR 0031). A genuine second owner still fails, after `TAKEOVER_WAIT`.
-fn open_proxy(dir: &std::path::Path, port: i32) -> AppResult<Arc<LocalProxy>> {
+fn open_proxy(dir: &std::path::Path, port: Port) -> AppResult<Arc<LocalProxy>> {
     let deadline = std::time::Instant::now() + TAKEOVER_WAIT;
     loop {
         match LocalProxy::new(dir, port) {

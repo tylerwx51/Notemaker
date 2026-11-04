@@ -159,8 +159,8 @@ fn save_text(app: &Arc<MainActivity>, name: &str, text: &str) -> AppResult<()> {
 fn reset_document(test: &Arc<Integration>, app: &Arc<MainActivity>, type_: &str, zoom: f32, ox: f32, oy: f32) -> AppResult<()> {
     test.run_on_main_sync(|| -> AppResult<()> {
         app.document.set(format!("viewport-{}", String::from(ids::Uuid::random())));
-        app.host.set(String::new());
-        app.proxy_url.set(String::new());
+        app.host.set(crate::network::ServerAddr::Unset);
+        app.proxy_url.set(crate::network::ProxyAddr::Unset);
         app.load(&crate::main_activity::DocumentType::from(type_))?;
         app.configure_proxy()?;
         let canvas = app.canvas();

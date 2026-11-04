@@ -12,6 +12,7 @@ pub use crate::java_port::url::url_encode;
 use crate::journal::{self, Edit, EditScope};
 use crate::json::{self, jlen, Map, Value};
 use crate::model::Model;
+use crate::net::ApiPath;
 use crate::object;
 use crate::timing::{mark, TimingPhase};
 use std::collections::{HashMap, HashSet};
@@ -701,7 +702,7 @@ impl Store {
             gate()?;
             let root_id = root.clone().unwrap_or_else(|| initial.get("serverId").cloned().unwrap_or(Value::Null));
             let body = Value::Object(object! {"document" => self.document.clone(), "operations" => Value::Array(batch.clone()), "rootId" => root_id});
-            let response = upstream.request("/api/events", Some(&body))?;
+            let response = upstream.request(ApiPath::Events, Some(&body))?;
             let ack = json::list(response.get("accepted").unwrap_or(&Value::Null))?.clone();
             let submitted: Vec<Value> = batch.iter().map(|op| op.as_object().and_then(|m| m.get("id")).cloned().unwrap_or(Value::Null)).collect();
             require(ack.iter().all(|a| submitted.contains(a)), "Unexpected acknowledgement")?;
@@ -723,10 +724,7 @@ impl Store {
             let after = json::list_at(&s, "events")?.len() as i32;
             let zero = Value::from(0);
             let pending_after = json::as_int(Some(json::get_or_default(&s, "relayCursor", &zero)))?;
-            let response = upstream.request(
-                &format!("/api/replica?document={}&after={}&pendingAfter={}", url_encode(&self.document), after, pending_after),
-                None,
-            )?;
+            let response = upstream.request(ApiPath::Replica { document: self.document.clone(), after, pending_after }, None)?;
             let identity = response.get("rootId").filter(|v| !v.is_null()).cloned();
             if let Some(identity) = &identity {
                 if s.contains_key("serverId") {
@@ -797,9 +795,9 @@ impl Store {
         let local_leases = json::get_or_default(&local_locks, "leases", &empty_map).clone();
         if !json::map(&local_leases)?.is_empty() {
             let body = Value::Object(object! {"document" => self.document.clone(), "leases" => local_leases, "remove" => Value::Array(Vec::new())});
-            upstream.request("/api/locks", Some(&body))?;
+            upstream.request(ApiPath::LockUpdate, Some(&body))?;
         }
-        let locks = upstream.request(&format!("/api/locks?document={}", url_encode(&self.document)), None)?;
+        let locks = upstream.request(ApiPath::Locks { document: self.document.clone() }, None)?;
         if locks.contains_key("leases") {
             let leases = json::map(&locks["leases"])?.clone();
             self.edit_transient(&mut |state: &mut State| {

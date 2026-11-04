@@ -176,7 +176,7 @@ class ChatChecks(unittest.TestCase):
             'Proxy routing check failed: Android sent a request directly to the upstream. All app network traffic must go through the proxy.')
         self.assertIn('replica_service::ensure(&app.this)', source)
         self.assertIn('app.proxy_url', source)
-        self.assertIn('"Authorization", &format!("Bearer {}"', source)
+        self.assertIn('HeaderName::Authorization, BearerToken::from(s(&self.proxy_token.get())).authorization()', source)
 
     def test_stop_and_concurrent_send(self):
         chat = self.create()

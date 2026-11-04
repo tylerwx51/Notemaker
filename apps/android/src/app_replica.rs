@@ -5,11 +5,13 @@ use crate::error::{AppError, AppResult};
 use crate::field::Field;
 use crate::jx::{self, JThread, ThreadName};
 use crate::main_activity::MainActivity;
+use crate::network::ProxyAddr;
 use notemaker_cli::local_proxy::LocalProxy;
 use notemaker_cli::main::CommandArgs;
 use notemaker_core::ids::{ActorId, DocumentName};
 use notemaker_core::endpoint::{Disconnector, Endpoint};
 use notemaker_core::json::{self, Map, Value};
+use notemaker_core::net::{ApiPath, BearerToken, HttpStatus};
 use notemaker_core::store::{State, Store};
 use notemaker_core::{ids, object, timing};
 use std::io::BufRead;
@@ -43,14 +45,19 @@ pub struct AppReplica {
 
 impl AppReplica {
     /// `AppReplica(MainActivity app, String document, String url, String token) throws Exception`.
-    pub fn new(app: &Arc<MainActivity>, document: &DocumentName, url: &str, token: &str) -> AppResult<Arc<AppReplica>> {
+    /// `ProxyAddr::Unset` selects the embedded proxy.
+    pub fn new(app: &Arc<MainActivity>, document: &DocumentName, proxy: &ProxyAddr, token: &BearerToken) -> AppResult<Arc<AppReplica>> {
         let files = app.files_dir()?;
         let local = Arc::new(Store::new(&files, document)?);
-        let descriptor = if url.is_empty() { None } else { Some(object! {"url" => url, "token" => token}) };
+        let descriptor = match proxy {
+            ProxyAddr::Unset => None,
+            ProxyAddr::Set(url) => Some((object! {"url" => &**url, "token" => token}, format!("{url}\n{}", &**token))),
+        };
         let descriptor_file = match &descriptor {
             None => files.join("proxy.json"),
-            Some(_) => files.join(format!("selected-proxy-{}.json", String::from(ids::Uuid::from_name(format!("{url}\n{token}"))))),
+            Some((_, key)) => files.join(format!("selected-proxy-{}.json", String::from(ids::Uuid::from_name(key)))),
         };
+        let descriptor = descriptor.map(|(d, _)| d);
         if let Some(d) = &descriptor {
             std::fs::write(&descriptor_file, json::write_map(d).as_bytes())?;
         }
@@ -169,11 +176,11 @@ impl AppReplica {
     /// proxy's `/api/stream` while this replica is current.
     pub fn listen(&self, changed: &dyn Fn()) -> AppResult<()> {
         let descriptor = self.descriptor.clone().ok_or_else(|| AppError::Core(notemaker_core::Error::null_pointer()))?;
-        let mut connection = Endpoint::new(descriptor).open("/api/stream")?;
+        let mut connection = Endpoint::new(descriptor).open(ApiPath::Stream)?;
         self.stream.set(Some(connection.disconnector()));
         connection.set_read_timeout(45000);
         let result = (|| -> AppResult<()> {
-            if connection.response_code()? != 200 {
+            if connection.response_code()? != HttpStatus::OK {
                 return Err(AppError::io("Cannot subscribe to selected proxy"));
             }
             let mut input = std::io::BufReader::new(connection.input_stream()?);

@@ -192,7 +192,7 @@ fn run(args: &[String]) -> Result<()> {
             &dir.join("render.png"),
         )
     })?;
-    let proxy = LocalProxy::new(&dir, 0)?;
+    let proxy = LocalProxy::new(&dir, notemaker_core::net::Port::EPHEMERAL)?;
     let outcome = (|| -> Result<()> {
         for _ in 0..3 {
             timed(&ProbePhase::from("proxy_erase"), || {

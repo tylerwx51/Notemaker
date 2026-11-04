@@ -43,7 +43,8 @@ use crate::editor_ui::EditorUi;
 use crate::error::{self, AppError, AppResult};
 use crate::field::Field;
 use crate::jx::{self, JResult, JThread, JavaError, Local, Obj, Reply, WeakObj};
-use crate::java_port::uri;
+use crate::java_port::integer::parse_int;
+use crate::network::{NetworkSettingsForm, ProxyAddr, ServerAddr};
 use crate::monitor::Monitor;
 use crate::org_json::{self, JSONArray, JSONObject, JV};
 use crate::replica_service;
@@ -56,6 +57,7 @@ use notemaker_cli::item_coverage;
 use notemaker_cli::png::{self, Png};
 use notemaker_core::draw_item::DrawItem;
 use notemaker_core::layer_editor::LayerEditor;
+use notemaker_core::net::{BearerToken, Port};
 use notemaker_core::model::{Entity, Model};
 use notemaker_core::collaboration::SelectionTransform;
 use notemaker_core::store::{self, State, Store};
@@ -112,30 +114,6 @@ fn fmax(a: f32, b: f32) -> f32 {
     } else {
         b
     }
-}
-/// `Integer.parseInt(s)` (ASCII digits, optional sign, no overflow).
-fn parse_java_int(s: &str) -> Option<i32> {
-    let (negative, digits) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let mut value: i64 = 0;
-    for b in digits.bytes() {
-        value = value * 10 + (b - b'0') as i64;
-        if value > i32::MAX as i64 + 1 {
-            return None;
-        }
-    }
-    let value = if negative { -value } else { value };
-    i32::try_from(value).ok()
-}
-/// Java `"/+$"` removal (`replaceAll("/+$", "")`) on an already trimmed string.
-fn strip_trailing_slashes(s: &str) -> &str {
-    s.trim_end_matches('/')
 }
 /// `Json.map(Json.parse(text))`.
 fn parse_map(text: &str) -> AppResult<Map> {
@@ -435,11 +413,11 @@ pub struct MainActivity {
     pub object_commit_ack: Field<Option<StringConsumer>>,
     pub before_object_commit_callback: Field<Option<Callback>>,
     pub object_refresh_deferred: Field<bool>,
-    pub proxy_url: Field<String>,
-    pub proxy_token: Field<String>,
+    pub proxy_url: Field<ProxyAddr>,
+    pub proxy_token: Field<BearerToken>,
     pub replica: Field<Option<Arc<AppReplica>>>,
     pub document: Field<String>,
-    pub host: Field<String>,
+    pub host: Field<ServerAddr>,
     /// Java field `type`.
     pub type_: Field<String>,
     pub selected: Field<String>,
@@ -588,11 +566,11 @@ impl MainActivity {
             object_commit_ack: Field::new(None),
             before_object_commit_callback: Field::new(None),
             object_refresh_deferred: Field::new(false),
-            proxy_url: Field::new(String::new()),
-            proxy_token: Field::new(String::new()),
+            proxy_url: Field::new(ProxyAddr::Unset),
+            proxy_token: Field::new(BearerToken::default()),
             replica: Field::new(None),
             document: Field::new("notes".into()),
-            host: Field::new(String::new()),
+            host: Field::new(ServerAddr::Unset),
             type_: Field::new("fixed".into()),
             selected: Field::new("base".into()),
             cursor: Field::new(0),
@@ -844,87 +822,6 @@ impl MainActivity {
             jx::log::i(crate::jx::log::STARTUP, &format!("{}={}", phase, jfmt::double((jx::nano_time().0 - started) as f64 / 1e6)));
         }
     }
-    /// `static String normalizeServerAddress(String value) throws Exception`
-    /// (`java.net.URI` parsing).
-    pub fn normalize_server_address(value: &str) -> AppResult<String> {
-        let mut address = strip_trailing_slashes(jfmt::java_trim(value)).to_string();
-        if address.is_empty() {
-            return Ok(String::new());
-        }
-        if !(address.starts_with("http://") || address.starts_with("https://")) {
-            address = format!("http://{address}");
-        }
-        let uri = uri::parse(&address).map_err(|_| AppError::java("java.net.URISyntaxException", format!("Invalid URI: {address}")))?;
-        if uri.host.is_none() || uri.port > 65535 || uri.port == 0 {
-            return Err(AppError::illegal_argument("invalid server address"));
-        }
-        if uri.port < 0 {
-            let authority = uri.authority.clone().unwrap_or_else(|| "null".into());
-            address = format!(
-                "{}://{}:8765{}{}{}",
-                uri.scheme.clone().unwrap_or_else(|| "null".into()),
-                authority,
-                uri.path.clone().unwrap_or_default(),
-                uri.query.as_ref().map(|q| format!("?{q}")).unwrap_or_default(),
-                uri.fragment.as_ref().map(|f| format!("#{f}")).unwrap_or_default()
-            );
-        }
-        Ok(strip_trailing_slashes(&address).to_string())
-    }
-    /// `static String serverAddressForSettings(String value)`.
-    pub fn server_address_for_settings(value: Option<&str>) -> String {
-        let Some(value) = value.filter(|v| !jfmt::java_trim(v).is_empty()) else { return String::new() };
-        if let Ok(uri) = uri::parse(value) {
-            if let Some(host) = uri.host {
-                return host;
-            }
-        }
-        value.to_string()
-    }
-    /// `static String serverPortForSettings(String value)`.
-    pub fn server_port_for_settings(value: Option<&str>) -> String {
-        let Some(value) = value.filter(|v| !jfmt::java_trim(v).is_empty()) else { return String::new() };
-        match uri::parse(value) {
-            Ok(uri) if uri.port > 0 && uri.port != 8765 => uri.port.to_string(),
-            _ => String::new(),
-        }
-    }
-    /// `static String composeServerAddress(String addressValue, String portValue, String currentHost) throws Exception`.
-    pub fn compose_server_address(address_value: &str, port_value: &str, current_host: Option<&str>) -> AppResult<String> {
-        let mut address = jfmt::java_trim(address_value);
-        if address.is_empty() {
-            if !jfmt::java_trim(port_value).is_empty() {
-                return Err(AppError::illegal_argument("Port requires a server address"));
-            }
-            return Ok(String::new());
-        }
-        let mut scheme = if current_host.is_some_and(|h| h.starts_with("https://")) { "https" } else { "http" };
-        if let Some(rest) = address.strip_prefix("https://") {
-            scheme = "https";
-            address = rest;
-        } else if let Some(rest) = address.strip_prefix("http://") {
-            scheme = "http";
-            address = rest;
-        }
-        let text = format!("http://{}", strip_trailing_slashes(address));
-        let parsed = uri::parse(&text).map_err(|_| AppError::java("java.net.URISyntaxException", format!("Invalid URI: {text}")))?;
-        if parsed.host.is_none() || parsed.user_info.is_some() || parsed.path.as_ref().is_some_and(|p| !p.is_empty()) || parsed.query.is_some() || parsed.fragment.is_some() {
-            return Err(AppError::illegal_argument("Enter only a host or IP address"));
-        }
-        let mut port = parsed.port;
-        let supplied_port = jfmt::java_trim(port_value);
-        if !supplied_port.is_empty() {
-            port = parse_java_int(supplied_port).ok_or_else(|| AppError::illegal_argument("Invalid port"))?;
-        }
-        if port < 0 {
-            port = 8765;
-        }
-        if !(1..=65535).contains(&port) {
-            return Err(AppError::illegal_argument("Port must be between 1 and 65535"));
-        }
-        Ok(format!("{}://{}:{}", scheme, parsed.host.unwrap_or_default(), port))
-    }
-
     // -----------------------------------------------------------------------
     // Lifecycle (UI thread)
 
@@ -959,15 +856,15 @@ impl MainActivity {
         if let Ok(Some(clipboard)) = clipboard {
             self.selection_clipboard.set(clipboard);
         }
-        let saved_host = ui::pref_string(&self.this, &ui::PrefKey::from("host"), Some(&ui::PrefText::from(&self.host.get())))?.map(String::from);
+        let saved_host = ui::pref_string(&self.this, &ui::PrefKey::from("host"), Some(&ui::PrefText::from(self.host.get().to_string())))?;
         let host = match saved_host {
-            Some(h) => Self::normalize_server_address(&h).unwrap_or_default(),
-            None => String::new(),
+            Some(h) => ServerAddr::normalize(&h).unwrap_or_default(),
+            None => ServerAddr::Unset,
         };
         self.host.set(host);
         self.document.set(ui::pref_string(&self.this, &ui::PrefKey::from("document"), Some(&ui::PrefText::from(&self.document.get())))?.map(String::from).unwrap_or_else(|| "null".into()));
-        self.proxy_url.set(ui::pref_string(&self.this, &ui::PrefKey::from("proxyUrl"), Some(&ui::PrefText::from("")))?.map(String::from).unwrap_or_default());
-        self.proxy_token.set(ui::pref_string(&self.this, &ui::PrefKey::from("proxyToken"), Some(&ui::PrefText::from("")))?.map(String::from).unwrap_or_default());
+        self.proxy_url.set(ui::pref_string(&self.this, &ui::PrefKey::from("proxyUrl"), Some(&ui::PrefText::from("")))?.map(|v| ProxyAddr::from(&*v)).unwrap_or_default());
+        self.proxy_token.set(ui::pref_string(&self.this, &ui::PrefKey::from("proxyToken"), Some(&ui::PrefText::from("")))?.map(|v| BearerToken::from(&*v)).unwrap_or_default());
         Self::startup_mark(startup_trace, "preferences_done", startup_started);
         self.load(&DocumentType::from("fixed"))?;
         self.trace_cold_load.set(false);
@@ -1198,7 +1095,7 @@ impl MainActivity {
             let class = jx::find_class("com/notemaker/ReplicaService")?;
             let intent = jnew!("android/content/Intent", "(Landroid/content/Context;Ljava/lang/Class;)V", &self.this, &class)?;
             jcall!(intent, "android/content/Intent", "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", "document", self.document.get())?;
-            jcall!(intent, "android/content/Intent", "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", "host", self.host.get())?;
+            jcall!(intent, "android/content/Intent", "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", "host", self.host.get().to_string())?;
             jcall!(self.this, "android/content/Context", "startService", "(Landroid/content/Intent;)Landroid/content/ComponentName;", &intent)?;
         } else {
             let app = self.clone();
@@ -1837,14 +1734,14 @@ impl MainActivity {
         Ok(())
     }
     /// `void saveNetworkSettings(String serverValue, String portValue, String proxyValue, String tokenValue)`.
-    pub fn save_network_settings(self: &Arc<Self>, server_value: &str, port_value: &str, proxy_value: &str, token_value: &str) -> AppResult<()> {
-        let next_host = match Self::compose_server_address(server_value, port_value, Some(&self.host.get())) {
+    pub fn save_network_settings(self: &Arc<Self>, form: &NetworkSettingsForm) -> AppResult<()> {
+        let next_host = match ServerAddr::compose(&form.server, &form.port, &self.host.get()) {
             Ok(h) => h,
-            Err(_) => return self.toast("Enter a server address and a port from 1 to 65535, or leave the port blank for 8765", TOAST_LENGTH_LONG),
+            Err(_) => return self.toast(&format!("Enter a server address and a port from 1 to 65535, or leave the port blank for {}", Port::DEFAULT_SERVER), TOAST_LENGTH_LONG),
         };
-        let next_proxy = strip_trailing_slashes(jfmt::java_trim(proxy_value)).to_string();
-        let next_token = jfmt::java_trim(token_value).to_string();
-        if !next_proxy.is_empty() && (!(next_proxy.starts_with("http://") || next_proxy.starts_with("https://")) || next_token.is_empty()) {
+        let next_proxy = ProxyAddr::from_input(&form.proxy);
+        let next_token = form.token();
+        if !next_proxy.accepts(&next_token) {
             return self.toast("Enter a proxy HTTP(S) URL and token, or leave both blank", TOAST_LENGTH_LONG);
         }
         let changed = self.host.get() != next_host || self.proxy_url.get() != next_proxy || self.proxy_token.get() != next_token;
@@ -1862,9 +1759,9 @@ impl MainActivity {
             self.load(&DocumentType::from(self.type_.get()))?;
         }
         let e = ui::edit(&self.this)?;
-        ui::put_string(&e, &ui::PrefKey::from("host"), &ui::PrefText::from(&self.host.get()))?;
-        ui::put_string(&e, &ui::PrefKey::from("proxyUrl"), &ui::PrefText::from(&self.proxy_url.get()))?;
-        ui::put_string(&e, &ui::PrefKey::from("proxyToken"), &ui::PrefText::from(&self.proxy_token.get()))?;
+        ui::put_string(&e, &ui::PrefKey::from("host"), &ui::PrefText::from(self.host.get().to_string()))?;
+        ui::put_string(&e, &ui::PrefKey::from("proxyUrl"), &ui::PrefText::from(self.proxy_url.get().to_string()))?;
+        ui::put_string(&e, &ui::PrefKey::from("proxyToken"), &ui::PrefText::from(&*self.proxy_token.get()))?;
         ui::apply(&e)?;
         self.configure_proxy()?;
         self.update()?;
@@ -1902,7 +1799,7 @@ impl MainActivity {
         let open = self.dialog_listener(move |app, _| {
             let result = (|| -> AppResult<()> {
                 let text = String::from(ui::text_of(&field_ref.get())?);
-                let value = parse_java_int(&text).ok_or_else(|| AppError::Core(notemaker_core::Error::number_format(format!("For input string: \"{text}\""))))?;
+                let value = parse_int(&text).ok_or_else(|| AppError::Core(notemaker_core::Error::number_format(format!("For input string: \"{text}\""))))?;
                 let next = 0.max(10000.min(value.wrapping_sub(1)));
                 app.deselect()?;
                 app.reset_drawing_gesture()?;
@@ -4837,132 +4734,14 @@ impl CanvasView {
 mod tests {
     use super::*;
 
-    /// (input, normalizeServerAddress, serverAddressForSettings, serverPortForSettings),
-    /// produced by the Java originals on OpenJDK 17.
-    const NORMALIZE: &[(&str, Result<&str, &str>, &str, &str)] = &[
-        ("", Ok(""), "", ""),
-        ("  ", Ok(""), "", ""),
-        ("host", Ok("http://host:8765"), "host", ""),
-        ("host/", Ok("http://host:8765"), "host/", ""),
-        ("host///", Ok("http://host:8765"), "host///", ""),
-        ("http://host", Ok("http://host:8765"), "host", ""),
-        ("https://host", Ok("https://host:8765"), "host", ""),
-        ("http://host:80", Ok("http://host:80"), "host", "80"),
-        ("http://host:0", Err("invalid server address"), "host", ""),
-        ("http://host:65535", Ok("http://host:65535"), "host", "65535"),
-        ("http://host:65536", Err("invalid server address"), "host", "65536"),
-        ("http://host:99999999999", Err("invalid server address"), "http://host:99999999999", ""),
-        ("http://host:", Ok("http://host::8765"), "host", ""),
-        ("10.0.0.2", Ok("http://10.0.0.2:8765"), "10.0.0.2", ""),
-        ("10.0.0.2:9000", Ok("http://10.0.0.2:9000"), "10.0.0.2:9000", ""),
-        ("192.168.50.129:8765/", Ok("http://192.168.50.129:8765"), "192.168.50.129:8765/", ""),
-        ("http://user@host", Ok("http://user@host:8765"), "host", ""),
-        ("http://user@host:1", Ok("http://user@host:1"), "host", "1"),
-        ("http://host/path", Ok("http://host:8765/path"), "host", ""),
-        ("http://host/path/?q=1#f", Ok("http://host:8765/path/?q=1#f"), "host", ""),
-        ("http://host?q", Ok("http://host:8765?q"), "host", ""),
-        ("http://host#frag", Ok("http://host:8765#frag"), "host", ""),
-        ("my_host", Err("invalid server address"), "my_host", ""),
-        ("my-host.example.com", Ok("http://my-host.example.com:8765"), "my-host.example.com", ""),
-        ("bad-.com", Err("invalid server address"), "bad-.com", ""),
-        ("1.2.3.400", Err("invalid server address"), "1.2.3.400", ""),
-        ("1.2.3.4.5", Err("invalid server address"), "1.2.3.4.5", ""),
-        ("[::1]", Ok("http://[::1]:8765"), "[::1]", ""),
-        ("[::1]:9000", Ok("http://[::1]:9000"), "[::1]:9000", ""),
-        ("http://[fe80::1%25eth0]:80", Ok("http://[fe80::1%25eth0]:80"), "[fe80::1%25eth0]", "80"),
-        ("[::1", Err("Expected closing bracket for IPv6 address at index 11: http://[::1"), "[::1", ""),
-        ("ho st", Err("Illegal character in authority at index 7: http://ho st"), "ho st", ""),
-        ("http://", Ok("http://http::8765"), "http://", ""),
-        ("https://", Ok("http://https::8765"), "https://", ""),
-        ("ftp://x", Ok("http://ftp::8765//x"), "x", ""),
-        ("HTTP://host", Ok("http://HTTP::8765//host"), "host", ""),
-        ("host:abc", Err("invalid server address"), "host:abc", ""),
-        ("-host", Err("invalid server address"), "-host", ""),
-        ("a.1b", Err("invalid server address"), "a.1b", ""),
-        ("a.b1", Ok("http://a.b1:8765"), "a.b1", ""),
-        ("%41", Err("invalid server address"), "%41", ""),
-        ("h%41st", Err("invalid server address"), "h%41st", ""),
-        ("x:y@z", Ok("http://x:y@z:8765"), "x:y@z", ""),
-        ("été.fr", Err("invalid server address"), "été.fr", ""),
-        ("http://host:8765", Ok("http://host:8765"), "host", ""),
-        ("http://h:08765", Ok("http://h:08765"), "h", ""),
-        ("http://[1:2:3:4:5:6:7:8]", Ok("http://[1:2:3:4:5:6:7:8]:8765"), "[1:2:3:4:5:6:7:8]", ""),
-        ("http://[1:2:3:4:5:6:7]", Err("IPv6 address too short at index 8: http://[1:2:3:4:5:6:7]"), "http://[1:2:3:4:5:6:7]", ""),
-        ("http://[::ffff:1.2.3.4]", Ok("http://[::ffff:1.2.3.4]:8765"), "[::ffff:1.2.3.4]", ""),
-        ("http://host:+80", Err("invalid server address"), "http://host:+80", ""),
-        ("http://host:-1", Err("invalid server address"), "http://host:-1", ""),
-    ];
-    /// (address, port, currentHost, composeServerAddress) from the Java original.
-    const COMPOSE: &[(&str, &str, Option<&str>, Result<&str, &str>)] = &[
-        ("host", "", None, Ok("http://host:8765")),
-        ("host", "", Some("https://x"), Ok("https://host:8765")),
-        ("https://host", "", None, Ok("https://host:8765")),
-        ("http://host:9000", "", None, Ok("http://host:9000")),
-        ("host", "9000", None, Ok("http://host:9000")),
-        ("host", "0", None, Err("Port must be between 1 and 65535")),
-        ("host", "-5", None, Ok("http://host:8765")),
-        ("host", "+80", None, Ok("http://host:80")),
-        ("host", "abc", None, Err("Invalid port")),
-        ("host", "70000", None, Err("Port must be between 1 and 65535")),
-        ("", "", None, Ok("")),
-        ("", "80", None, Err("Port requires a server address")),
-        ("host/", "", None, Ok("http://host:8765")),
-        ("host/x", "", None, Err("Enter only a host or IP address")),
-        ("user@host", "", None, Err("Enter only a host or IP address")),
-        ("host?q", "", None, Err("Enter only a host or IP address")),
-        ("host#f", "", None, Err("Enter only a host or IP address")),
-        ("[::1]", "", None, Ok("http://[::1]:8765")),
-        ("my_host", "", None, Err("Enter only a host or IP address")),
-        ("host:99999", "", None, Err("Port must be between 1 and 65535")),
-        (" host ", "  ", None, Ok("http://host:8765")),
-        ("1.2.3.4", "8080", Some("https://old:1"), Ok("https://1.2.3.4:8080")),
-        ("ho st", "", None, Err("Illegal character in authority at index 7: http://ho st")),
-    ];
-
-    #[test]
-    fn server_addresses_match_java() {
-        for (input, normalized, host, port) in NORMALIZE {
-            let actual = MainActivity::normalize_server_address(input);
-            match normalized {
-                Ok(expected) => assert_eq!(actual.as_deref().ok(), Some(*expected), "normalize {input:?}"),
-                Err(_) => assert!(actual.is_err(), "normalize {input:?} gave {actual:?}"),
-            }
-            assert_eq!(MainActivity::server_address_for_settings(Some(input)), *host, "host {input:?}");
-            assert_eq!(MainActivity::server_port_for_settings(Some(input)), *port, "port {input:?}");
-        }
-        assert_eq!(MainActivity::server_address_for_settings(None), "");
-        assert_eq!(MainActivity::server_port_for_settings(None), "");
-    }
-
-    #[test]
-    fn compose_matches_java() {
-        for (address, port, current, expected) in COMPOSE {
-            let actual = MainActivity::compose_server_address(address, port, *current);
-            match expected {
-                Ok(expected) => assert_eq!(actual.as_deref().ok(), Some(*expected), "compose {address:?} {port:?}"),
-                Err(message) if message.contains(" at index ") => assert!(actual.is_err(), "compose {address:?}"),
-                Err(message) => assert_eq!(actual.err().and_then(|e| e.message()).as_deref(), Some(*message), "compose {address:?} {port:?}"),
-            }
-        }
-    }
-
     #[test]
     fn java_number_helpers() {
-        assert_eq!(parse_java_int("+80"), Some(80));
-        assert_eq!(parse_java_int("-5"), Some(-5));
-        assert_eq!(parse_java_int("2147483647"), Some(i32::MAX));
-        assert_eq!(parse_java_int("-2147483648"), Some(i32::MIN));
-        assert_eq!(parse_java_int("2147483648"), None);
-        assert_eq!(parse_java_int(""), None);
-        assert_eq!(parse_java_int("-"), None);
-        assert_eq!(parse_java_int("1 "), None);
         assert!(fmin(f32::NAN, 1.0).is_nan());
         assert!(fmin(1.0, f32::NAN).is_nan());
         assert!(fmax(1.0, f32::NAN).is_nan());
         assert!(fmin(0.0, -0.0).is_sign_negative());
         assert!(fmax(-0.0, 0.0).is_sign_positive());
         assert_eq!(fmax(0.2, fmin(5.0, 7.5)), 5.0);
-        assert_eq!(strip_trailing_slashes("a//"), "a");
     }
 
     #[test]

@@ -6,6 +6,7 @@
 use notemaker_core::endpoint::{Endpoint, HttpConnection};
 use notemaker_core::error::ErrorKind;
 use notemaker_core::json;
+use notemaker_core::net::{ApiPath, ChatId, ChatPath, HttpStatus, HttpUrl};
 use notemaker_core::tls::TlsConfig;
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -100,6 +101,11 @@ fn trusted(ca: &Ca) -> TlsConfig {
     TlsConfig::with_roots_pem(ca.pem.as_bytes()).unwrap()
 }
 
+/// A GET target the test servers route on.
+fn chat(id: &str) -> ChatPath {
+    ChatPath::Get { chat: ChatId::from(id) }
+}
+
 fn json_reply(text: &str) -> Vec<u8> {
     format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", text.len(), text).into_bytes()
 }
@@ -110,13 +116,13 @@ fn https_get_post_and_framing() {
     let port = server(leaf(&ca, &["localhost", "127.0.0.1"]), |head, body| {
         let target = head.split(' ').nth(1).unwrap().to_string();
         match target.as_str() {
-            "/plain" => (json_reply("{\"a\":1}"), true),
-            "/chunked" => (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{\"b\"\r\n3;x=y\r\n:2}\r\n0\r\n\r\n".to_vec(), true),
+            "/api/chats/plain" => (json_reply("{\"a\":1}"), true),
+            "/api/chats/chunked" => (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{\"b\"\r\n3;x=y\r\n:2}\r\n0\r\n\r\n".to_vec(), true),
             // Read-to-close body ended without close_notify.
-            "/close" => (b"HTTP/1.1 200 OK\r\n\r\n{\"c\":3}".to_vec(), false),
-            "/truncated" => (b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{\"c\":3}".to_vec(), false),
-            "/error" => (b"HTTP/1.1 409 Conflict\r\nContent-Length: 17\r\n\r\n{\"error\":\"nope\"}\n".to_vec(), true),
-            "/host" => {
+            "/api/chats/close" => (b"HTTP/1.1 200 OK\r\n\r\n{\"c\":3}".to_vec(), false),
+            "/api/chats/truncated" => (b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{\"c\":3}".to_vec(), false),
+            "/api/chats/error" => (b"HTTP/1.1 409 Conflict\r\nContent-Length: 17\r\n\r\n{\"error\":\"nope\"}\n".to_vec(), true),
+            "/api/chats/host" => {
                 let host = head.lines().find_map(|l| l.strip_prefix("Host: ")).unwrap();
                 (json_reply(&format!("{{\"host\":\"{host}\"}}")), true)
             }
@@ -131,17 +137,17 @@ fn https_get_post_and_framing() {
     for host in ["localhost", "127.0.0.1"] {
         let url = format!("https://{host}:{port}");
         let peer = Endpoint::resolve(&format!("{url}/")).unwrap().with_tls_config(trusted(&ca));
-        assert_eq!(json::write_map(&peer.request("/plain", None).unwrap()), "{\"a\":1}");
-        assert_eq!(json::write_map(&peer.request("/chunked", None).unwrap()), "{\"b\":2}");
-        assert_eq!(json::write_map(&peer.request("/close", None).unwrap()), "{\"c\":3}");
-        assert_eq!(peer.request("/truncated", None).unwrap_err().message(), "Premature EOF");
-        assert_eq!(json::write_map(&peer.request("/host", None).unwrap()), format!("{{\"host\":\"{host}:{port}\"}}"));
-        let e = peer.request("/error", None).unwrap_err();
-        assert_eq!((e.kind, e.status, e.message()), (ErrorKind::Http, Some(409), "nope"));
+        assert_eq!(json::write_map(&peer.request(chat("plain"), None).unwrap()), "{\"a\":1}");
+        assert_eq!(json::write_map(&peer.request(chat("chunked"), None).unwrap()), "{\"b\":2}");
+        assert_eq!(json::write_map(&peer.request(chat("close"), None).unwrap()), "{\"c\":3}");
+        assert_eq!(peer.request(chat("truncated"), None).unwrap_err().message(), "Premature EOF");
+        assert_eq!(json::write_map(&peer.request(chat("host"), None).unwrap()), format!("{{\"host\":\"{host}:{port}\"}}"));
+        let e = peer.request(chat("error"), None).unwrap_err();
+        assert_eq!((e.kind, e.status, e.message()), (ErrorKind::Http, Some(HttpStatus::from(409)), "nope"));
         let secret = Endpoint::new(notemaker_core::object! { "url" => url.as_str(), "token" => "secret" }).with_tls_config(trusted(&ca));
         let body = json::parse("{\"operations\":[1,\"é\"]}").unwrap();
         assert_eq!(
-            json::write_map(&secret.request("/api/events", Some(&body)).unwrap()),
+            json::write_map(&secret.request(ApiPath::Events, Some(&body)).unwrap()),
             "{\"echo\":{\"operations\":[1,\"é\"]},\"auth\":true,\"json\":true}"
         );
     }
@@ -154,8 +160,8 @@ fn https_stream_lines_and_disconnect() {
         (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nc\r\ndata: one\n\n\r\n".to_vec(), false)
     });
     let peer = Endpoint::new(notemaker_core::object! { "url" => format!("https://localhost:{port}") }).with_tls_config(trusted(&ca));
-    let mut c = peer.open("/api/stream").unwrap();
-    assert_eq!(c.response_code().unwrap(), 200);
+    let mut c = peer.open(ApiPath::Stream).unwrap();
+    assert_eq!(c.response_code().unwrap(), HttpStatus::OK);
     let closer = c.disconnector();
     let mut lines = BufReader::new(c.input_stream().unwrap()).lines();
     assert_eq!(lines.next().unwrap().unwrap(), "data: one");
@@ -189,7 +195,7 @@ fn extra_ca_file_is_trusted_with_platform_store() {
     let ca = env_ca();
     let port = server(leaf(ca, &["localhost"]), |_, _| (json_reply("{\"ok\":true}"), true));
     let peer = Endpoint::resolve(&format!("https://localhost:{port}")).unwrap();
-    assert_eq!(json::write_map(&peer.request("/x", None).unwrap()), "{\"ok\":true}");
+    assert_eq!(json::write_map(&peer.request(chat("x"), None).unwrap()), "{\"ok\":true}");
 }
 
 #[test]
@@ -199,12 +205,12 @@ fn untrusted_certificate_fails_like_java() {
     let port = server(leaf(&stranger, &["localhost"]), |_, _| (json_reply("{}"), true));
     let pkix = "PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderException: unable to find valid certification path to requested target";
     // Platform store (+ the env CA, which did not sign this server).
-    let e = Endpoint::resolve(&format!("https://localhost:{port}")).unwrap().request("/x", None).unwrap_err();
+    let e = Endpoint::resolve(&format!("https://localhost:{port}")).unwrap().request(chat("x"), None).unwrap_err();
     assert_eq!((e.kind, e.message()), (ErrorKind::SslHandshake, pkix));
     assert!(e.kind.is_io());
     assert_eq!(e.to_string(), format!("javax.net.ssl.SSLHandshakeException: {pkix}"));
     // Explicit roots that do not include the issuer.
-    let mut c = HttpConnection::new(&format!("https://localhost:{port}/x")).unwrap();
+    let mut c = HttpConnection::new(&HttpUrl::from(format!("https://localhost:{port}/x"))).unwrap();
     c.set_tls_config(trusted(&ca("Other CA")));
     assert_eq!(c.response_code().unwrap_err().message(), pkix);
 }
@@ -218,7 +224,7 @@ fn hostname_mismatch_fails_like_java() {
         ("127.0.0.1", "No subject alternative names matching IP address 127.0.0.1 found".to_string()),
     ] {
         let peer = Endpoint::resolve(&format!("https://{host}:{port}")).unwrap().with_tls_config(trusted(&ca));
-        let e = peer.request("/x", None).unwrap_err();
+        let e = peer.request(chat("x"), None).unwrap_err();
         assert_eq!((e.kind, e.message()), (ErrorKind::SslHandshake, message.as_str()), "{host}");
     }
 }
@@ -236,6 +242,6 @@ fn plain_http_server_on_https_url_fails_handshake() {
         }
     });
     let ca = ca("unused");
-    let e = Endpoint::resolve(&format!("https://localhost:{port}")).unwrap().with_tls_config(trusted(&ca)).request("/x", None).unwrap_err();
+    let e = Endpoint::resolve(&format!("https://localhost:{port}")).unwrap().with_tls_config(trusted(&ca)).request(chat("x"), None).unwrap_err();
     assert_eq!(e.kind, ErrorKind::SslHandshake, "{e}");
 }

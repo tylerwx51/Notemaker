@@ -190,8 +190,10 @@ for compile errors and JNI literals against the skeleton.
   `page_dialog`, `object_dialog`, `text_placement_dialog`, `rename_layer`,
   `layer_command`, `fill_entity`, `resolve_conflict`, selection commands,
   `save_network_settings`, `persist_object`, `enqueue(_with)`,
-  `apply_erase`, statics `obj`, `id`, `compose_server_address`,
-  `server_address_for_settings`, `server_port_for_settings`.
+  `apply_erase`, statics `obj`, `id`. The server address statics
+  (`compose_server_address`, `*_for_settings`, `normalize_server_address`)
+  are now `network::ServerAddr::{compose, settings_host, settings_port,
+  normalize}` (ADR 0030).
   `CanvasView` methods used elsewhere are `scale`, `visible`,
   `invalidate(_rect)`, `stroke`, `draw_stroke`, `tile_cache_metrics`,
   `document_viewport`, `on_touch_event`, `erase_at`, `emit`, `view()`

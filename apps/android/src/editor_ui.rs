@@ -27,6 +27,7 @@ use crate::field::Field;
 use crate::ink_cache::InkCache;
 use crate::jx::{self, JResult, JavaError, Local, Obj, Reply, WeakObj};
 use crate::main_activity::{CanvasView, MainActivity};
+use crate::network::NetworkSettingsForm;
 use crate::org_json::{JSONArray, JV};
 use crate::ui;
 use indexmap::IndexMap;
@@ -1876,14 +1877,14 @@ impl EditorUi {
         let host = app.host.get();
         let server = edit_text(&ctx)?;
         jcall!(server, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&server, &ui::UiText::from(&MainActivity::server_address_for_settings(Some(&host))))?;
+        ui::set_text(&server, &host.settings_host())?;
         set_hint(&server, "192.168.50.180")?;
         set_input_type(&server, INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_VARIATION_URI)?;
         ui::add_view(&box_, &self.text("Notes server address", 12, INK, true)?)?;
         ui::add_view(&box_, &server)?;
         let server_port = edit_text(&ctx)?;
         jcall!(server_port, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&server_port, &ui::UiText::from(&MainActivity::server_port_for_settings(Some(&host))))?;
+        ui::set_text(&server_port, &host.settings_port())?;
         set_hint(&server_port, "8765")?;
         set_input_type(&server_port, INPUTTYPE_TYPE_CLASS_NUMBER)?;
         ui::add_view(&box_, &self.text("Server port", 12, INK, true)?)?;
@@ -1898,14 +1899,14 @@ impl EditorUi {
         ui::add_view(&box_, &server_help)?;
         let proxy = edit_text(&ctx)?;
         jcall!(proxy, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&proxy, &ui::UiText::from(&app.proxy_url.get()))?;
+        ui::set_text(&proxy, &ui::UiText::from(app.proxy_url.get().to_string()))?;
         set_hint(&proxy, "Optional editing proxy URL")?;
         set_input_type(&proxy, INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_VARIATION_URI)?;
         ui::add_view(&box_, &self.text("Editing proxy URL", 12, INK, true)?)?;
         ui::add_view(&box_, &proxy)?;
         let token = edit_text(&ctx)?;
         jcall!(token, "android/widget/TextView", "setSingleLine", "()V")?;
-        ui::set_text(&token, &ui::UiText::from(&app.proxy_token.get()))?;
+        ui::set_text(&token, &ui::UiText::from(&*app.proxy_token.get()))?;
         set_hint(&token, "Proxy bearer token")?;
         set_input_type(&token, INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_VARIATION_PASSWORD)?;
         ui::add_view(&box_, &self.text("Editing proxy token", 12, INK, true)?)?;
@@ -1924,11 +1925,13 @@ impl EditorUi {
             "Save network settings",
             true,
             self.act(move |_, app| {
-                let server = String::from(ui::text_of(&fields[0].get())?);
-                let port = String::from(ui::text_of(&fields[1].get())?);
-                let proxy = String::from(ui::text_of(&fields[2].get())?);
-                let token = String::from(ui::text_of(&fields[3].get())?);
-                app.save_network_settings(&server, &port, &proxy, &token)
+                let form = NetworkSettingsForm {
+                    server: ui::text_of(&fields[0].get())?,
+                    port: ui::text_of(&fields[1].get())?,
+                    proxy: ui::text_of(&fields[2].get())?,
+                    token: ui::text_of(&fields[3].get())?,
+                };
+                app.save_network_settings(&form)
             }),
         )?;
         self.menu_action(&box_, "Done", true, self.act(|ui, _| ui.dismiss_popup()))?;

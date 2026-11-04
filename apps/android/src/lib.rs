@@ -31,6 +31,7 @@ pub mod ink_cache;
 pub mod integration;
 pub mod interaction_performance;
 pub mod main_activity;
+pub mod network;
 pub mod performance;
 pub mod replica_service;
 pub mod stroke_check;

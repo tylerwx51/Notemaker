@@ -1,6 +1,7 @@
 //! Java library semantics the app relies on: Android's `org.json`
 //! (`org_json`), `java.util.concurrent` executors, futures and latches
 //! (`concurrent`), monitors (`monitor`), `java.net.URI` parsing (`uri`),
+//! `Integer.parseInt` (`integer`),
 //! `Math.round/min/max(float)` and `Number.floatValue()` (`math`), `android.graphics.RectF` geometry
 //! (`rect_f`), exception class names, messages and `Model.require`
 //! (`exception`), and the generic JNI value marshalling under `jx` (`jvm`).
@@ -13,6 +14,7 @@
 
 pub mod concurrent;
 pub mod exception;
+pub mod integer;
 pub mod jvm;
 pub mod math;
 pub mod monitor;

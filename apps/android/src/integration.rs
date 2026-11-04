@@ -23,6 +23,8 @@ use crate::editor_ui::ToolKind;
 use crate::ink_cache::BitmapSize;
 use crate::jx::{self, Arg, JResult, Obj, Reply, UptimeMillis};
 use crate::main_activity::{MainActivity, ScreenPoint, StylusPressure};
+use crate::network::{ProxyAddr, ServerAddr};
+use notemaker_core::net::{ApiPath, BearerToken, HeaderName, HeaderValue, HttpMethod, HttpStatus, HttpUrl};
 use crate::org_json::{JSONArray, JSONObject, JV};
 use crate::{replica_service, ui};
 use notemaker_core::json::{self, Map, Value};
@@ -779,16 +781,16 @@ impl Integration {
             if action == "configure" {
                 app.save();
                 app.document.set(bundle_string_or(arguments, "document", "integration")?);
-                app.host.set(bundle_string_or(arguments, "host", "http://10.0.2.2:8765")?);
-                app.proxy_url.set(bundle_string_or(arguments, "proxyUrl", "")?);
-                app.proxy_token.set(bundle_string_or(arguments, "proxyToken", "")?);
+                app.host.set(ServerAddr::from(bundle_string_or(arguments, "host", "http://10.0.2.2:8765")?.as_str()));
+                app.proxy_url.set(ProxyAddr::from(bundle_string_or(arguments, "proxyUrl", "")?.as_str()));
+                app.proxy_token.set(BearerToken::from(bundle_string_or(arguments, "proxyToken", "")?));
                 app.load(&crate::main_activity::DocumentType::from(bundle_string_or(arguments, "type", "fixed")?))?;
                 app.configure_proxy()?;
                 let editor = ui::edit(&app.this)?;
-                ui::put_string(&editor, &ui::PrefKey::from("host"), &ui::PrefText::from(&app.host.get()))?;
+                ui::put_string(&editor, &ui::PrefKey::from("host"), &ui::PrefText::from(app.host.get().to_string()))?;
                 ui::put_string(&editor, &ui::PrefKey::from("document"), &ui::PrefText::from(&app.document.get()))?;
-                ui::put_string(&editor, &ui::PrefKey::from("proxyUrl"), &ui::PrefText::from(&app.proxy_url.get()))?;
-                ui::put_string(&editor, &ui::PrefKey::from("proxyToken"), &ui::PrefText::from(&app.proxy_token.get()))?;
+                ui::put_string(&editor, &ui::PrefKey::from("proxyUrl"), &ui::PrefText::from(app.proxy_url.get().to_string()))?;
+                ui::put_string(&editor, &ui::PrefKey::from("proxyToken"), &ui::PrefText::from(&*app.proxy_token.get()))?;
                 jcall!(editor, "android/content/SharedPreferences$Editor", "commit", "()Z")?;
             }
             if action == "live-draw" {
@@ -1278,15 +1280,15 @@ impl Integration {
         let proxy = replica_service::ensure(&app.this)?;
         let descriptor_bytes = std::fs::read(app.files_dir()?.join("proxy.json"))?;
         let descriptor = json::map(&json::parse(&String::from_utf8_lossy(&descriptor_bytes))?)?.clone();
-        let mut request = notemaker_core::endpoint::HttpConnection::new(&format!("http://127.0.0.1:{}/api/events", proxy.port()))?;
-        request.set_request_method("POST");
+        let mut request = notemaker_core::endpoint::HttpConnection::new(&HttpUrl::from(format!("http://127.0.0.1:{}", proxy.port())).join(ApiPath::Events))?;
+        request.set_request_method(HttpMethod::Post);
         request.set_connect_timeout(5000);
         request.set_read_timeout(10000);
-        request.set_request_property("Authorization", &format!("Bearer {}", json::java_string(descriptor.get("token"))));
-        request.set_request_property("Content-Type", "application/json; charset=utf-8");
+        request.set_request_property(HeaderName::Authorization, BearerToken::from(json::java_string(descriptor.get("token"))).authorization());
+        request.set_request_property(HeaderName::ContentType, HeaderValue::from("application/json; charset=utf-8"));
         let body = json::write_map(&object! {"document" => document, "operations" => incoming}).into_bytes();
         request.write_body(body);
-        if request.response_code()? != 200 {
+        if request.response_code()? != HttpStatus::OK {
             let mut error = Vec::new();
             let mut stream = request.error_stream()?.ok_or_else(null_pointer)?;
             Integration::copy(&mut stream, &mut error)?;

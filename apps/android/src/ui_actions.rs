@@ -13,6 +13,8 @@ use crate::editor_ui::{PanelName, PenPresetName, ToolLabels};
 use crate::error::{require, AppError, AppResult};
 use crate::jx::{self, Obj};
 use crate::main_activity::{DocumentType, MainActivity, TemplateKind};
+use crate::network::{NetworkSettingsForm, ServerAddr};
+use crate::ui::UiText;
 use crate::ui;
 use indexmap::IndexMap;
 use notemaker_cli::local_proxy::{UiActionName, UiError, UiSession, UiVerb};
@@ -266,10 +268,10 @@ impl UiActions {
             let port = string(a, "port")?;
             let proxy = string(a, "proxy")?;
             let token = string(a, "token")?;
-            let host = app.host.get();
-            MainActivity::compose_server_address(&server, &port, Some(&host))?;
+            let form = NetworkSettingsForm { server: UiText::from(server), port: UiText::from(port), proxy: UiText::from(&proxy), token: UiText::from(&token) };
+            ServerAddr::compose(&form.server, &form.port, &app.host.get())?;
             require(proxy.is_empty() || (proxy.starts_with("http://") || proxy.starts_with("https://")) && !token.is_empty(), "Proxy URL requires an HTTP(S) URL and token")?;
-            app.save_network_settings(&server, &port, &proxy, &token)
+            app.save_network_settings(&form)
         }));
         UiActions::add(ac, de, "history.undo", "{}", Box::new(|app, _| app.history(HistoryDirection::Undo)));
         UiActions::add(ac, de, "history.redo", "{}", Box::new(|app, _| app.history(HistoryDirection::Redo)));

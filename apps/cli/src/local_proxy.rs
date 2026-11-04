@@ -18,6 +18,10 @@ use notemaker_core::ids::{
     ActorId, DocumentName, EntityId, EntityKind, LayerId, PageNumber, SessionId,
 };
 use notemaker_core::layer_editor::{self, ItemFilter, LayerEditor};
+use notemaker_core::net::{
+    ApiPath, ChatId, ChatPath, EndpointPath, HeaderName, HeaderValue, HttpMethod, HttpStatus, Port,
+    UiPath,
+};
 use notemaker_core::store::{self, HistoryDirection, ReplicaCursor, State, Store, SyncMode};
 use notemaker_core::timing::TimingPhase;
 use notemaker_core::{actions, json, object, timing, Error, ErrorKind, Map, Result, Value};
@@ -117,7 +121,7 @@ thread_local! {
 pub struct LocalProxy {
     directory: PathBuf,
     listener: TcpListener,
-    local_port: i32,
+    local_port: Port,
     ownership: Mutex<Option<FileLock>>,
     sockets: Mutex<HashMap<u64, TcpStream>>,
     next_socket: AtomicU64,
@@ -234,7 +238,7 @@ impl LocalProxy {
     ///
     /// Java wrapped setup failures as `new IOException(cause)`; the CLI prints
     /// the root cause, so the Rust error is the root cause itself.
-    pub fn new(directory: &Path, port: i32) -> Result<Arc<LocalProxy>> {
+    pub fn new(directory: &Path, port: Port) -> Result<Arc<LocalProxy>> {
         std::fs::create_dir_all(directory).map_err(|e| {
             Error::io(format!(
                 "{}: {}",
@@ -257,7 +261,7 @@ impl LocalProxy {
 
     fn open(
         directory: &Path,
-        port: i32,
+        port: Port,
         ownership: &mut Option<FileLock>,
     ) -> Result<Arc<LocalProxy>> {
         let config = directory.join("proxy-config.json");
@@ -287,7 +291,7 @@ impl LocalProxy {
             TcpListener::bind(&address)
                 .map_err(|e| Error::io(notemaker_core::error::io_message(&e)))?
         };
-        let local_port = listener.local_addr().map(|a| a.port() as i32).unwrap_or(-1);
+        let local_port = listener.local_addr().map(|a| Port::from(a.port())).unwrap_or(port);
         let proxy = Arc::new(LocalProxy {
             directory: directory.to_path_buf(),
             listener,
@@ -747,7 +751,7 @@ impl LocalProxy {
             if let Some(candidate) = &candidate {
                 let validated = (|| -> Result<()> {
                     let parent = candidate
-                        .request(&format!("/api/info?trail={}&validate=1", self.id), None)?;
+                        .request(ApiPath::Info { trail: self.id.clone(), validate: true }, None)?;
                     require(
                         int_of(Some(json::get_or_default(
                             &parent,
@@ -832,10 +836,10 @@ impl LocalProxy {
             .filter(|p| validate && p.descriptor.contains_key("token"))
         {
             let parent = peer.request(
-                &format!(
-                    "/api/info?trail={}&validate=1",
-                    store::url_encode(&lineage.join(","))
-                ),
+                ApiPath::Info {
+                    trail: lineage.join(","),
+                    validate: true,
+                },
                 None,
             )?;
             root = parent.get("rootId").cloned().unwrap_or(Value::Null);
@@ -963,7 +967,13 @@ impl LocalProxy {
     }
 
     fn sync_once(self: &Arc<Self>, peer: &Endpoint, upload: bool) -> Result<Map> {
-        let remote = peer.request(&format!("/api/info?trail={}", self.id), None)?;
+        let remote = peer.request(
+            ApiPath::Info {
+                trail: self.id.clone(),
+                validate: false,
+            },
+            None,
+        )?;
         require(
             int_of(Some(json::get_or_default(
                 &remote,
@@ -1100,12 +1110,12 @@ impl LocalProxy {
                 continue;
             };
             let outcome = (|| -> Result<()> {
-                let mut c = peer.open("/api/stream")?;
+                let mut c = peer.open(ApiPath::Stream)?;
                 c.set_read_timeout(45000);
                 *lock(&self.stream) = Some(c.disconnector());
                 let read = (|| -> Result<()> {
                     let code = c.response_code()?;
-                    if code != 200 {
+                    if code != HttpStatus::OK {
                         return Err(Error::io(format!("Notification stream HTTP {}", code)));
                     }
                     let mut reader = BufReader::new(c.input_stream()?);
@@ -1143,14 +1153,14 @@ impl LocalProxy {
         }
     }
 
-    fn ui_relay(&self, path: &str, body: Option<&Map>) -> Result<Map> {
+    fn ui_relay(&self, path: UiPath, body: Option<&Map>) -> Result<Map> {
         let peer = self.ui_peer();
         if let Some(peer) = &peer {
             match peer.request(path, body.map(|b| Value::Object(b.clone())).as_ref()) {
                 Ok(r) => return Ok(r),
                 Err(e) if e.kind == ErrorKind::Http => return Err(e),
                 Err(e) if e.kind.is_io() => {
-                    if path == "/api/ui/command" {
+                    if path == UiPath::Command {
                         return Err(e);
                     }
                     // Keep reachable child sessions usable while the ancestor is offline.
@@ -1159,7 +1169,7 @@ impl LocalProxy {
             }
         }
         match path {
-            "/api/ui/sessions" => {
+            UiPath::Sessions => {
                 let mut listing = self.ui_hub.list();
                 if peer.is_some() {
                     listing.insert("scope".into(), Value::from("reachable"));
@@ -1167,9 +1177,8 @@ impl LocalProxy {
                 }
                 Ok(listing)
             }
-            "/api/ui/heartbeat" => self.ui_hub.heartbeat(body.ok_or_else(Error::null_pointer)?),
-            "/api/ui/command" => self.ui_hub.command(body.ok_or_else(Error::null_pointer)?),
-            _ => Err(Error::illegal_argument("Unknown UI route")),
+            UiPath::Heartbeat => self.ui_hub.heartbeat(body.ok_or_else(Error::null_pointer)?),
+            UiPath::Command => self.ui_hub.command(body.ok_or_else(Error::null_pointer)?),
         }
     }
 
@@ -1202,7 +1211,7 @@ impl LocalProxy {
                 if !states.is_empty() || sent_presence || !results.is_empty() {
                     let present = !states.is_empty();
                     let heartbeat = object! {"proxyId" => self.id.clone(), "sessions" => states, "results" => results};
-                    let reply = self.ui_relay("/api/ui/heartbeat", Some(&heartbeat))?;
+                    let reply = self.ui_relay(UiPath::Heartbeat, Some(&heartbeat))?;
                     sent_presence = present;
                     let empty = Value::Array(Vec::new());
                     for value in json::list(json::get_or_default(&reply, "acknowledged", &empty))? {
@@ -1274,7 +1283,7 @@ impl LocalProxy {
     }
 
     /// `port()`: bound local port.
-    pub fn port(&self) -> i32 {
+    pub fn port(&self) -> Port {
         self.local_port
     }
 
@@ -1468,10 +1477,15 @@ impl LocalProxy {
             }
             let get = |k: &str, d: &str| q.get(k).cloned().unwrap_or_else(|| d.to_string());
             let response: Value = if method == "GET" && path == "/api/ui/sessions" {
-                Value::Object(self.ui_relay(&path, None)?)
+                Value::Object(self.ui_relay(UiPath::Sessions, None)?)
             } else if method == "POST" && (path == "/api/ui/heartbeat" || path == "/api/ui/command")
             {
-                Value::Object(self.ui_relay(&path, Some(&body))?)
+                let ui = if path == "/api/ui/heartbeat" {
+                    UiPath::Heartbeat
+                } else {
+                    UiPath::Command
+                };
+                Value::Object(self.ui_relay(ui, Some(&body))?)
             } else if method == "GET" && path == "/api/info" {
                 Value::Object(self.info(&get("trail", ""), q.contains_key("validate"))?)
             } else if method == "GET" && path == "/api/replica" {
@@ -1563,7 +1577,7 @@ impl LocalProxy {
         if let Some(peer) = &peer {
             // Keep arbitration at the nearest reachable proxy.
             decision = peer
-                .request("/api/locks", Some(&Value::Object(body.clone())))
+                .request(ApiPath::LockUpdate, Some(&Value::Object(body.clone())))
                 .ok();
         }
         let mut accepted = body.clone();
@@ -1629,40 +1643,48 @@ impl LocalProxy {
                 "No upstream proxy configured for chat. All app traffic must go through the proxy.",
             )
         })?;
-        let path = format!(
-            "{}{}",
-            uri.raw_path,
-            uri.raw_query
-                .as_ref()
-                .map(|q| format!("?{}", q))
-                .unwrap_or_default()
-        );
-        let mut c = peer.open(&path)?;
-        c.set_request_method(method);
-        c.set_read_timeout(if path.contains("/stream") {
-            45000
-        } else {
-            10000
-        });
         let io = |e: std::io::Error| Error::io(notemaker_core::error::io_message(&e));
+        let Some(path) = chat_path(method, uri)? else {
+            // The primary server has no such chat route.
+            let data = json::write(&Value::Object(object! {"error" => "Not found"}));
+            let head = format!(
+                "HTTP/1.1 {} Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                HttpStatus::NOT_FOUND,
+                data.len()
+            );
+            let mut out = socket;
+            return out
+                .write_all(head.as_bytes())
+                .and_then(|_| out.write_all(data.as_bytes()))
+                .and_then(|_| out.flush())
+                .map_err(io);
+        };
+        let streaming = matches!(path, ChatPath::Stream { .. });
+        let path = EndpointPath::from(path);
+        let mut c = peer.open(&path)?;
+        c.set_request_method(path.method());
+        c.set_read_timeout(if streaming { 45000 } else { 10000 });
         let outcome = (|| -> Result<()> {
             if let Some(body) = body {
-                c.set_request_property("Content-Type", "application/json");
+                c.set_request_property(HeaderName::ContentType, HeaderValue::json());
                 c.write_body(body);
             }
             let status = c.response_code()?;
-            let source = if status < 400 {
-                Some(c.input_stream()?)
-            } else {
+            let source = if status.is_error() {
                 c.error_stream()?
+            } else {
+                Some(c.input_stream()?)
             };
             let mut out = socket;
-            let content_type = c.header_field("Content-Type").map(str::to_string);
+            let content_type = c
+                .header_field(HeaderName::ContentType)
+                .cloned()
+                .unwrap_or_else(HeaderValue::json);
             let head = format!(
                 "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
                 status,
-                if status < 400 { "OK" } else { "Upstream Error" },
-                content_type.unwrap_or_else(|| "application/json".into())
+                if status.is_error() { "Upstream Error" } else { "OK" },
+                content_type
             );
             out.write_all(head.as_bytes())
                 .and_then(|_| out.flush())
@@ -1751,7 +1773,7 @@ impl LocalProxy {
             let verb = args[1].as_str();
             if verb == "sessions" {
                 require(args.len() == 2, "ui sessions")?;
-                let mut result = self.ui_relay("/api/ui/sessions", None)?;
+                let mut result = self.ui_relay(UiPath::Sessions, None)?;
                 let mut sessions =
                     json::list(result.get("sessions").unwrap_or(&Value::Null))?.clone();
                 for (session, handler) in self.ui_sessions_ordered() {
@@ -1774,7 +1796,7 @@ impl LocalProxy {
                 require_msg(args.len() == 3, format!("ui {} SESSION", verb))?;
                 return match handler {
                     Some(h) => h.request(&UiVerb::from(verb), &UiActionName::from(""), Map::new()).map_err(ui_error),
-                    None => Ok(self.ui_relay("/api/ui/command", Some(&object! {"session" => session, "verb" => verb, "action" => "", "input" => empty_map()}))?.get("result").cloned().unwrap_or(Value::Null)),
+                    None => Ok(self.ui_relay(UiPath::Command, Some(&object! {"session" => session, "verb" => verb, "action" => "", "input" => empty_map()}))?.get("result").cloned().unwrap_or(Value::Null)),
                 };
             }
             require(
@@ -1784,7 +1806,7 @@ impl LocalProxy {
             return match handler {
                 Some(h) => h.request(&UiVerb::from("action"), &UiActionName::from(&args[3]), input()?).map_err(ui_error),
                 None => Ok(self
-                    .ui_relay("/api/ui/command", Some(&object! {"session" => session, "verb" => "action", "action" => args[3].clone(), "input" => Value::Object(input()?)}))?
+                    .ui_relay(UiPath::Command, Some(&object! {"session" => session, "verb" => "action", "action" => args[3].clone(), "input" => Value::Object(input()?)}))?
                     .get("result")
                     .cloned()
                     .unwrap_or(Value::Null)),
@@ -2099,7 +2121,7 @@ impl LocalProxy {
         let (document, actor): (&str, &str) = (document, actor);
         let body = object! {"document" => document, "actor" => actor, "args" => str_list(args), "input" => input.cloned().unwrap_or(Value::Null)};
         Ok(Endpoint::new(descriptor.clone())
-            .request("/command", Some(&Value::Object(body)))?
+            .request(EndpointPath::Command, Some(&Value::Object(body)))?
             .get("result")
             .cloned()
             .unwrap_or(Value::Null))
@@ -2277,7 +2299,7 @@ impl LocalProxy {
         if let Some(peer) = &peer {
             // Offline selection remains local until the next sync attempt.
             decision = peer
-                .request("/api/locks", Some(&Value::Object(object! {"document" => document, "session" => session.clone(), "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})))
+                .request(ApiPath::LockUpdate, Some(&Value::Object(object! {"document" => document, "session" => session.clone(), "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})))
                 .ok();
         }
         let mut accepted: Vec<Value> = Vec::new();
@@ -2320,7 +2342,9 @@ impl LocalProxy {
             let peer = peer.as_ref().expect("decision implies a peer");
             let authoritative = peer
                 .request(
-                    &format!("/api/locks?document={}", store::url_encode(document)),
+                    ApiPath::Locks {
+                        document: DocumentName::from(document),
+                    },
                     None,
                 )
                 .ok()
@@ -2562,7 +2586,7 @@ impl LocalProxy {
         let mut decision: Option<Map> = None;
         if let Some(peer) = &peer {
             decision = peer
-                .request("/api/locks", Some(&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})))
+                .request(ApiPath::LockUpdate, Some(&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => Value::Object(candidates.clone()), "remove" => Value::Array(Vec::new())})))
                 .ok();
         }
         let empty = Value::Array(Vec::new());
@@ -2703,7 +2727,7 @@ impl LocalProxy {
             }
         }
         let _ = peer.request(
-            "/api/locks",
+            ApiPath::LockUpdate,
             Some(&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => Value::Object(leases.clone()), "remove" => Value::Array(remove.to_vec()), "previews" => Value::Object(previews)})),
         );
     }
@@ -2711,7 +2735,7 @@ impl LocalProxy {
     fn forward_preview_clear(&self, document: &str, session: &str, actor: &str) {
         let Some(peer) = self.upstream() else { return };
         let _ = peer.request(
-            "/api/locks",
+            ApiPath::LockUpdate,
             Some(&Value::Object(object! {"document" => document, "session" => session, "actor" => actor, "leases" => empty_map(), "remove" => Value::Array(Vec::new()), "clearPreviews" => vec![Value::from(session)]})),
         );
     }
@@ -2804,6 +2828,49 @@ fn line(input: &mut impl BufRead) -> Result<String> {
         .iter()
         .map(|&b| if b < 128 { b as char } else { '\u{fffd}' })
         .collect())
+}
+
+/// The chat request a client sent, routed as the primary server routes it
+/// (`server.py` `chat_request`); `None` for a route the server does not have.
+fn chat_path(method: &str, uri: &Uri) -> Result<Option<ChatPath>> {
+    let Ok(method) = method.parse::<HttpMethod>() else {
+        return Ok(None);
+    };
+    let query = uri.query()?;
+    let number = |key: &str| -> Result<Option<i64>> {
+        query
+            .get(key)
+            .map(|v| {
+                v.parse::<i64>().map_err(|_| {
+                    Error::illegal_argument(format!("Invalid chat {key}: {v}"))
+                })
+            })
+            .transpose()
+    };
+    let segments: Vec<&str> = uri.raw_path.trim_matches('/').split('/').collect();
+    let chat = |id: &str| ChatId::from(id);
+    Ok(Some(match (method, segments.as_slice()) {
+        (HttpMethod::Get, ["api", "chats", "options"]) => ChatPath::Options,
+        (HttpMethod::Get, ["api", "chats"]) => ChatPath::List {
+            limit: number("limit")?,
+            offset: number("offset")?,
+        },
+        (HttpMethod::Get, ["api", "chats", id]) => ChatPath::Get { chat: chat(id) },
+        (HttpMethod::Get, ["api", "chats", id, "events"]) => ChatPath::Events {
+            chat: chat(id),
+            after: number("after")?,
+        },
+        (HttpMethod::Get, ["api", "chats", id, "stream"]) => ChatPath::Stream {
+            chat: chat(id),
+            after: number("after")?,
+        },
+        (HttpMethod::Post, ["api", "chats"]) => ChatPath::Create,
+        (HttpMethod::Post, ["api", "chats", id, "messages"]) => {
+            ChatPath::Messages { chat: chat(id) }
+        }
+        (HttpMethod::Post, ["api", "chats", id, "stop"]) => ChatPath::Stop { chat: chat(id) },
+        _ => return Ok(None),
+    }))
 }
 
 /// The parts of `java.net.URI` the proxy used.

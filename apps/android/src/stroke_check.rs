@@ -79,8 +79,8 @@ fn run_case(test: &Arc<Integration>, app: &Arc<MainActivity>, brush: &str, trans
     test.wait_for_idle_sync()?;
     on_main(test, || {
         app.document.set(format!("stroke-pixels-{}", String::from(ids::Uuid::random())));
-        app.host.set(String::new());
-        app.proxy_url.set(String::new());
+        app.host.set(crate::network::ServerAddr::Unset);
+        app.proxy_url.set(crate::network::ProxyAddr::Unset);
         app.load(&crate::main_activity::DocumentType::from("fixed"))?;
         app.configure_proxy()?;
         app.set_drawing_tool(None)?;

@@ -8,6 +8,7 @@
 
 use crate::error::{io_message, Error, Result};
 use crate::json::{self, Map, Value};
+use crate::net::{EndpointPath, HeaderName, HeaderValue, HttpMethod, HttpStatus, HttpUrl};
 use crate::tls::{self, TlsConfig};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConnection, StreamOwned};
@@ -245,14 +246,14 @@ impl Read for BodyReader {
 
 /// Blocking HTTP/1.1 request with the `HttpURLConnection` subset NoteMaker uses.
 pub struct HttpConnection {
-    url: String,
-    method: String,
-    headers: Vec<(String, String)>,
+    url: HttpUrl,
+    method: HttpMethod,
+    headers: Vec<(HeaderName, HeaderValue)>,
     body: Option<Vec<u8>>,
     connect_timeout: u32,
     read_timeout: u32,
-    status: Option<i32>,
-    response_headers: Vec<(String, String)>,
+    status: Option<HttpStatus>,
+    response_headers: Vec<(String, HeaderValue)>,
     body_reader: Option<BodyReader>,
     disconnector: Disconnector,
     tls: Option<TlsConfig>,
@@ -260,11 +261,11 @@ pub struct HttpConnection {
 
 impl HttpConnection {
     /// `new URL(url).openConnection()` (no I/O happens until [`Self::response_code`]).
-    pub fn new(url: &str) -> Result<HttpConnection> {
+    pub fn new(url: &HttpUrl) -> Result<HttpConnection> {
         parse_url(url)?;
         Ok(HttpConnection {
-            url: url.to_string(),
-            method: "GET".into(),
+            url: url.clone(),
+            method: HttpMethod::Get,
             headers: Vec::new(),
             body: None,
             connect_timeout: 0,
@@ -296,15 +297,15 @@ impl HttpConnection {
         self.read_timeout
     }
     /// `setRequestMethod(method)`.
-    pub fn set_request_method(&mut self, method: &str) {
-        self.method = method.to_string();
+    pub fn set_request_method(&mut self, method: HttpMethod) {
+        self.method = method;
     }
     /// `setRequestProperty(name, value)` (replaces an existing value).
-    pub fn set_request_property(&mut self, name: &str, value: &str) {
-        if let Some(entry) = self.headers.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
-            entry.1 = value.to_string();
+    pub fn set_request_property(&mut self, name: HeaderName, value: HeaderValue) {
+        if let Some(entry) = self.headers.iter_mut().find(|(k, _)| *k == name) {
+            entry.1 = value;
         } else {
-            self.headers.push((name.to_string(), value.to_string()));
+            self.headers.push((name, value));
         }
     }
     /// Fixed-length request body (`setDoOutput` + `setFixedLengthStreamingMode`
@@ -321,8 +322,9 @@ impl HttpConnection {
         self.disconnector.disconnect();
     }
     /// Response header value (case-insensitive name), after `response_code`.
-    pub fn header_field(&self, name: &str) -> Option<&str> {
-        self.response_headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    pub fn header_field(&self, name: HeaderName) -> Option<&HeaderValue> {
+        let name = name.to_string();
+        self.response_headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(&name)).map(|(_, v)| v)
     }
 
     fn io_error(&self, e: std::io::Error, connecting: bool) -> Error {
@@ -374,13 +376,10 @@ impl HttpConnection {
         let mut stream = if url.https { self.handshake(&url, stream)? } else { Transport::Plain(stream) };
         let mut request = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", self.method, url.target, url.host_header);
         for (k, v) in &self.headers {
-            request.push_str(k);
-            request.push_str(": ");
-            request.push_str(v);
-            request.push_str("\r\n");
+            request.push_str(&format!("{}: {}\r\n", k, v));
         }
         if let Some(body) = &self.body {
-            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+            request.push_str(&format!("{}: {}\r\n", HeaderName::ContentLength, body.len()));
         }
         request.push_str("Connection: close\r\n\r\n");
         let write = stream.write_all(request.as_bytes()).and_then(|_| match &self.body {
@@ -398,7 +397,7 @@ impl HttpConnection {
         })?;
         let mut parts = status_line.splitn(3, ' ');
         let version = parts.next().unwrap_or("");
-        let status = parts.next().and_then(|s| s.parse::<i32>().ok());
+        let status = parts.next().and_then(|s| s.parse::<u16>().ok()).map(HttpStatus::from);
         let status = match status {
             Some(s) if version.starts_with("HTTP/") => s,
             _ => return Err(Error::io(format!("Invalid Http response: {}", status_line))),
@@ -410,15 +409,18 @@ impl HttpConnection {
                 break;
             }
             if let Some((k, v)) = line.split_once(':') {
-                headers.push((k.trim().to_string(), v.trim().to_string()));
+                headers.push((k.trim().to_string(), HeaderValue::from(v.trim())));
             }
         }
-        let header = |name: &str| headers.iter().find(|(k, _): &&(String, String)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str());
-        reader.framing = if self.method == "HEAD" || status == 204 || status == 304 || (100..200).contains(&status) {
+        let header = |name: HeaderName| {
+            let name = name.to_string();
+            headers.iter().find(|(k, _): &&(String, HeaderValue)| k.eq_ignore_ascii_case(&name)).map(|(_, v)| v.to_string())
+        };
+        reader.framing = if status.has_no_body() {
             Framing::Empty
-        } else if header("Transfer-Encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
+        } else if header(HeaderName::TransferEncoding).is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
             Framing::Chunked { remaining: 0, done: false }
-        } else if let Some(length) = header("Content-Length").and_then(|v| v.parse::<u64>().ok()) {
+        } else if let Some(length) = header(HeaderName::ContentLength).and_then(|v| v.parse::<u64>().ok()) {
             Framing::Length(length)
         } else {
             Framing::Close
@@ -457,17 +459,17 @@ impl HttpConnection {
     }
 
     /// `getResponseCode()`: sends the request on first use.
-    pub fn response_code(&mut self) -> Result<i32> {
+    pub fn response_code(&mut self) -> Result<HttpStatus> {
         if self.status.is_none() {
             self.connect()?;
         }
-        Ok(self.status.unwrap_or(-1))
+        self.status.ok_or_else(|| Error::io("Unexpected end of file from server"))
     }
 
     /// `getInputStream()`: the response body; I/O error for status >= 400.
     pub fn input_stream(&mut self) -> Result<BodyReader> {
         let status = self.response_code()?;
-        if status >= 400 {
+        if status.is_error() {
             return Err(Error::io(format!("Server returned HTTP response code: {} for URL: {}", status, self.url)));
         }
         self.body_reader.take().ok_or_else(|| Error::io("Stream closed"))
@@ -476,7 +478,7 @@ impl HttpConnection {
     /// `getErrorStream()`: the body of a >= 400 response, otherwise `None`.
     pub fn error_stream(&mut self) -> Result<Option<BodyReader>> {
         match self.status {
-            Some(status) if status >= 400 => Ok(self.body_reader.take()),
+            Some(status) if status.is_error() => Ok(self.body_reader.take()),
             _ => Ok(None),
         }
     }
@@ -495,6 +497,17 @@ fn timeout(millis: u32) -> Option<Duration> {
         None
     } else {
         Some(Duration::from_millis(millis as u64))
+    }
+}
+
+/// `Endpoint.open`'s per-path read timeout in milliseconds.
+fn read_timeout(path: &EndpointPath) -> u32 {
+    use crate::net::{ApiPath, UiPath};
+    match path {
+        EndpointPath::Command | EndpointPath::Api(ApiPath::Ui(UiPath::Command)) => 40000,
+        EndpointPath::Api(ApiPath::Locks { .. } | ApiPath::LockUpdate | ApiPath::Replica { .. } | ApiPath::Info { .. }) => 2000,
+        EndpointPath::Api(ApiPath::Stream) => 45000,
+        EndpointPath::Api(ApiPath::Events | ApiPath::Ui(UiPath::Sessions | UiPath::Heartbeat) | ApiPath::Chats(_)) => 5000,
     }
 }
 
@@ -551,34 +564,29 @@ impl Endpoint {
     }
 
     /// `open(path)`: connection with the per-path timeouts and bearer token.
-    pub fn open(&self, path: &str) -> Result<HttpConnection> {
-        let mut c = HttpConnection::new(&format!("{}{}", json::string(&self.descriptor, "url")?, path))?;
+    pub fn open(&self, path: impl Into<EndpointPath>) -> Result<HttpConnection> {
+        let path = path.into();
+        let mut c = HttpConnection::new(&HttpUrl::from(json::string(&self.descriptor, "url")?).join(&path))?;
         if let Some(config) = &self.tls {
             c.set_tls_config(config.clone());
         }
         c.set_connect_timeout(3000);
-        c.set_read_timeout(if path == "/command" || path == "/api/ui/command" {
-            40000
-        } else if path.starts_with("/api/locks") || path.starts_with("/api/replica") || path.starts_with("/api/info") {
-            2000
-        } else if path.starts_with("/api/stream") {
-            45000
-        } else {
-            5000
-        });
+        c.set_read_timeout(read_timeout(&path));
         if self.descriptor.contains_key("token") {
-            c.set_request_property("Authorization", &format!("Bearer {}", json::string(&self.descriptor, "token")?));
+            let token = crate::net::BearerToken::from(json::string(&self.descriptor, "token")?);
+            c.set_request_property(HeaderName::Authorization, token.authorization());
         }
         Ok(c)
     }
 
-    /// `request(path, body)`: GET without a body, JSON POST with one.
-    pub fn request(&self, path: &str, body: Option<&Value>) -> Result<Map> {
+    /// `request(path, body)`: the path's method, with `body` as JSON when given.
+    pub fn request(&self, path: impl Into<EndpointPath>, body: Option<&Value>) -> Result<Map> {
+        let path = path.into();
         let thread = std::thread::current().id();
         let state = Arc::new(RequestState { cancelled: AtomicBool::new(false), connection: Mutex::new(None) });
         self.active_requests.lock().unwrap_or_else(|e| e.into_inner()).insert(thread, state.clone());
         let mut connection: Option<HttpConnection> = None;
-        let result = self.request_inner(path, body, &state, &mut connection);
+        let result = self.request_inner(&path, body, &state, &mut connection);
         {
             let mut active = self.active_requests.lock().unwrap_or_else(|e| e.into_inner());
             if active.get(&thread).is_some_and(|s| Arc::ptr_eq(s, &state)) {
@@ -591,23 +599,23 @@ impl Endpoint {
         result
     }
 
-    fn request_inner(&self, path: &str, body: Option<&Value>, state: &RequestState, slot: &mut Option<HttpConnection>) -> Result<Map> {
+    fn request_inner(&self, path: &EndpointPath, body: Option<&Value>, state: &RequestState, slot: &mut Option<HttpConnection>) -> Result<Map> {
         let c = slot.insert(self.open(path)?);
         *state.connection.lock().unwrap_or_else(|e| e.into_inner()) = Some(c.disconnector());
         if state.cancelled.load(Ordering::SeqCst) {
             return Err(Error::io("Peer request cancelled"));
         }
-        if body.is_some() && path.starts_with("/api/events") {
+        if body.is_some() && *path == EndpointPath::Api(crate::net::ApiPath::Events) {
             c.set_read_timeout(40000);
         }
+        c.set_request_method(path.method());
         if let Some(body) = body {
             let bytes = json::write(body).into_bytes();
-            c.set_request_method("POST");
-            c.set_request_property("Content-Type", "application/json");
+            c.set_request_property(HeaderName::ContentType, HeaderValue::json());
             c.write_body(bytes);
         }
         let status = c.response_code()?;
-        let source = if status == 200 { Some(c.input_stream()?) } else { c.error_stream()? };
+        let source = if status == HttpStatus::OK { Some(c.input_stream()?) } else { c.error_stream()? };
         let Some(mut source) = source else {
             return Err(Error::http(status, format!("Peer HTTP {}", status)));
         };
@@ -615,7 +623,7 @@ impl Endpoint {
         source.read_to_end(&mut bytes).map_err(|e| Error::io(io_message(&e)))?;
         let value = json::parse(&String::from_utf8_lossy(&bytes))?;
         let result = json::map(&value)?.clone();
-        if status != 200 {
+        if status != HttpStatus::OK {
             return Err(Error::http(status, json::java_string(result.get("error"))));
         }
         Ok(result)
@@ -625,7 +633,13 @@ impl Endpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::{ApiPath, ChatId, ChatPath};
     use std::net::TcpListener;
+
+    /// A GET target the test servers route on.
+    fn chat(id: &str) -> ChatPath {
+        ChatPath::Get { chat: ChatId::from(id) }
+    }
 
     /// Serve each connection with `respond(request_head, request_body)`.
     fn server(respond: impl Fn(&str, &[u8]) -> Vec<u8> + Send + 'static) -> String {
@@ -662,11 +676,11 @@ mod tests {
         let url = server(|head, body| {
             let target = head.split(' ').nth(1).unwrap().to_string();
             match target.as_str() {
-                "/plain" => b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"a\":1}".to_vec(),
-                "/chunked" => b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{\"b\"\r\n3;x=y\r\n:2}\r\n0\r\n\r\n".to_vec(),
-                "/close" => b"HTTP/1.1 200 OK\r\n\r\n{\"c\":3}".to_vec(),
-                "/error" => b"HTTP/1.1 409 Conflict\r\nContent-Length: 17\r\n\r\n{\"error\":\"nope\"}\n".to_vec(),
-                "/empty" => b"HTTP/1.1 204 No Content\r\n\r\n".to_vec(),
+                "/api/chats/plain" => b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"a\":1}".to_vec(),
+                "/api/chats/chunked" => b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n{\"b\"\r\n3;x=y\r\n:2}\r\n0\r\n\r\n".to_vec(),
+                "/api/chats/close" => b"HTTP/1.1 200 OK\r\n\r\n{\"c\":3}".to_vec(),
+                "/api/chats/error" => b"HTTP/1.1 409 Conflict\r\nContent-Length: 17\r\n\r\n{\"error\":\"nope\"}\n".to_vec(),
+                "/api/chats/empty" => b"HTTP/1.1 204 No Content\r\n\r\n".to_vec(),
                 "/api/events" => {
                     let auth = head.lines().any(|l| l == "Authorization: Bearer secret");
                     let json = head.lines().any(|l| l == "Content-Type: application/json");
@@ -677,17 +691,17 @@ mod tests {
             }
         });
         let peer = Endpoint::resolve(&format!("{}//", url)).unwrap();
-        assert_eq!(json::write_map(&peer.request("/plain", None).unwrap()), "{\"a\":1}");
-        assert_eq!(json::write_map(&peer.request("/chunked", None).unwrap()), "{\"b\":2}");
-        assert_eq!(json::write_map(&peer.request("/close", None).unwrap()), "{\"c\":3}");
-        let e = peer.request("/error", None).unwrap_err();
-        assert_eq!((e.kind, e.status, e.message()), (crate::error::ErrorKind::Http, Some(409), "nope"));
-        let e = peer.request("/empty", None).unwrap_err();
-        assert_eq!((e.status, e.message()), (Some(204), "Peer HTTP 204"));
+        assert_eq!(json::write_map(&peer.request(chat("plain"), None).unwrap()), "{\"a\":1}");
+        assert_eq!(json::write_map(&peer.request(chat("chunked"), None).unwrap()), "{\"b\":2}");
+        assert_eq!(json::write_map(&peer.request(chat("close"), None).unwrap()), "{\"c\":3}");
+        let e = peer.request(chat("error"), None).unwrap_err();
+        assert_eq!((e.kind, e.status, e.message()), (crate::error::ErrorKind::Http, Some(HttpStatus::from(409)), "nope"));
+        let e = peer.request(chat("empty"), None).unwrap_err();
+        assert_eq!((e.status, e.message()), (Some(HttpStatus::NO_CONTENT), "Peer HTTP 204"));
         let secret = Endpoint::new(crate::object! { "url" => url.as_str(), "token" => "secret" });
         let body = json::parse("{\"operations\":[1,\"é\"]}").unwrap();
         assert_eq!(
-            json::write_map(&secret.request("/api/events", Some(&body)).unwrap()),
+            json::write_map(&secret.request(ApiPath::Events, Some(&body)).unwrap()),
             "{\"echo\":{\"operations\":[1,\"é\"]},\"auth\":true,\"json\":true}"
         );
     }
@@ -710,9 +724,9 @@ mod tests {
             out
         });
         let peer = Endpoint::new(crate::object! { "url" => url.as_str() });
-        let mut c = peer.open("/api/stream").unwrap();
+        let mut c = peer.open(ApiPath::Stream).unwrap();
         assert_eq!(c.read_timeout(), 45000);
-        assert_eq!(c.response_code().unwrap(), 200);
+        assert_eq!(c.response_code().unwrap(), HttpStatus::OK);
         let closer = c.disconnector();
         let mut lines = BufReader::new(c.input_stream().unwrap()).lines();
         assert_eq!(lines.next().unwrap().unwrap(), "data: one");
@@ -738,7 +752,7 @@ mod tests {
         let peer = Arc::new(Endpoint::new(crate::object! { "url" => url.as_str() }));
         let worker = {
             let peer = peer.clone();
-            std::thread::spawn(move || peer.request("/command", None))
+            std::thread::spawn(move || peer.request(EndpointPath::Command, None))
         };
         let id = worker.thread().id();
         let started = std::time::Instant::now();

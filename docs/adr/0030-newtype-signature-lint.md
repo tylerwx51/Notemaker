@@ -88,6 +88,25 @@ this, and a syntax-only checker cannot resolve imports or type aliases.
   `Instant`, `ThreadId`, `process::Child`). Shared types live in
   `notemaker_core::{ids, geometry, style, clock}`, `notemaker_cli::canvas`,
   and the Android `jx`, `ui`, `android_consts` and `main_activity` modules.
+- 2026-11-03 network pass: 224 warnings remain. `notemaker_core::net` holds
+  `HttpUrl`, `Port` (`DEFAULT_SERVER` 8765, `DEFAULT_PROXY` 8766,
+  `EPHEMERAL`), `BearerToken` (its `Debug` hides the value and it has no
+  `Display`), the `HttpMethod` and `HeaderName` enums, `HeaderValue`,
+  `HttpStatus` and `ChatId`. `EndpointPath` is an enum tree
+  (`EndpointPath` → `ApiPath` → `UiPath`, `ChatPath`) that covers every
+  request a client sends, `/command`, `/api/{info,replica,events,locks,stream}`,
+  `/api/ui/*` and `/api/chats*`, with typed query parameters. It renders the
+  exact targets the hand-built strings produced and names each request's
+  method. `Endpoint::open`/`request` take it, and the per-path read timeouts
+  are a `match` over it. The proxy parses forwarded chat requests into
+  `ChatPath` with `server.py`'s routing and answers 404 `{"error":"Not found"}`
+  itself for routes the server lacks. On Android, `network::ServerAddr` and
+  `ProxyAddr` are enums (`Unset` or `Set(HttpUrl)`) instead of empty strings,
+  with `normalize`/`compose`/`from_input` constructors that keep the Java
+  `URI` behaviour. The settings fields arrive as a `NetworkSettingsForm`. The
+  endpoint descriptor (`Endpoint::new(Map)`, `Endpoint::resolve`,
+  `LocalProxy::configure` targets), replica lineage IDs, change generations,
+  connection timeouts and `Endpoint::cancel(ThreadId)` are outside this pass.
 - Moving to `deny` requires fixing or explicitly allowing each crate's
   warnings, then adding the lint to the check runner.
 - Bumping the pinned nightly can break the lint, because rustc internals are

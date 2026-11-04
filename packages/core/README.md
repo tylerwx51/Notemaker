@@ -48,6 +48,7 @@ replica directory written by the Java CLI (`tests/parity/fixtures/state-java`).
 | — | `jfmt` | JDK 17 `Double.toString`/`Float.toString` (`double`, `float`, `append_double`), `parse_double`, `hex_color`, `base64_encode`/`base64_decode` (Java messages), `java_trim` |
 | — | `jmath` | fdlibm `atan2`, `atan`, `acos`, `hypot`; Java `round`, `rint`, `to_radians`, `min`/`max`, `floor_div`, `d2i` |
 | — | `ids` | `random_uuid`, `name_uuid_from_bytes` |
+| — | `net` | `HttpUrl`, `Port`, `BearerToken`, `HttpMethod`, `HeaderName`, `HeaderValue`, `HttpStatus`, `ChatId`; `EndpointPath` → `ApiPath` → `UiPath`/`ChatPath`, every request target with its method (ADR 0030) |
 
 ## Signature mappings
 
