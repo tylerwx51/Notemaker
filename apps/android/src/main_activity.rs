@@ -53,6 +53,7 @@ use crate::ui;
 use crate::ui_actions::UiActions;
 use indexmap::IndexMap;
 use notemaker_cli::canvas::{RectF, Style};
+use notemaker_cli::local_proxy::ChangeWaitTimeout;
 use notemaker_cli::item_coverage;
 use notemaker_cli::png::{self, Png};
 use notemaker_core::draw_item::DrawItem;
@@ -656,7 +657,7 @@ impl MainActivity {
         }
     }
     /// `this.getFilesDir()`.
-    pub fn files_dir(&self) -> AppResult<PathBuf> {
+    pub fn files_dir(&self) -> AppResult<crate::ui::AppFilesDir> {
         Ok(crate::ui::files_dir(&self.this)?)
     }
     /// The current editor (`editor`, set in `onCreate`).
@@ -993,7 +994,7 @@ impl MainActivity {
         }
         if let Some(target) = self.replica.get() {
             if !target.remote() {
-                let mut journal = target.local.file.clone().into_os_string();
+                let mut journal = PathBuf::from(target.local.file.clone()).into_os_string();
                 journal.push(".journal");
                 let length = std::fs::metadata(&journal).map(|m| m.len()).unwrap_or(0);
                 if length >= 1024 * 1024 {
@@ -1079,7 +1080,7 @@ impl MainActivity {
     // State and persistence
 
     /// `File stateFile()`: `store.file`.
-    pub fn state_file(&self) -> PathBuf {
+    pub fn state_file(&self) -> notemaker_core::paths::JournalPath {
         self.store.get().expect("store").file.clone()
     }
     /// `void configureProxy()`: (re)starts `local-state` and routes UI sessions.
@@ -1973,7 +1974,7 @@ impl MainActivity {
                         if JThread::current_interrupted() {
                             return Err(None);
                         }
-                        let generation = proxy.await_change_timeout(observed, std::time::Duration::from_millis(250));
+                        let generation = proxy.await_change_timeout(observed, ChangeWaitTimeout::from(std::time::Duration::from_millis(250)));
                         if generation != observed {
                             break generation;
                         }
@@ -2010,7 +2011,7 @@ impl MainActivity {
     /// `public Process startCli(String... arguments) throws IOException`.
     /// The Rust build runs `libnotemaker_cli.so` from `nativeLibraryDir`
     /// (docs/design/rust-port.md, "Android") with the same arguments.
-    pub fn start_cli(&self, arguments: crate::app_replica::CliArgs) -> AppResult<std::process::Child> {
+    pub fn start_cli(&self, arguments: crate::app_replica::CliArgs) -> AppResult<crate::app_replica::CliProcess> {
         let arguments = arguments.0;
         let mut ui_command = false;
         let mut i = 0;
@@ -2035,7 +2036,7 @@ impl MainActivity {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
-        Ok(child)
+        Ok(child.into())
     }
     /// `void objectDialog()` (`synchronized(lock)`).
     pub fn object_dialog(self: &Arc<Self>) -> AppResult<()> {

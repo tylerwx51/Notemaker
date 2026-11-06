@@ -11,6 +11,7 @@
 use crate::android_consts::{Gravity, Orientation, ToastDuration, Visibility, TYPEFACE_NORMAL};
 use crate::jx::{self, DelayMillis, JResult, Local, Obj, Reply};
 use notemaker_core::style::ArgbColor;
+use notemaker_core::paths::ReplicaDir;
 use std::path::PathBuf;
 
 pub use crate::java_port::math::round_f32;
@@ -335,13 +336,31 @@ fn file_path(file: Option<Obj>) -> JResult<PathBuf> {
     let s = jcall!(file, "java/io/File", "getAbsolutePath", "()Ljava/lang/String;")?.string().unwrap_or_default();
     Ok(PathBuf::from(s))
 }
+notemaker_core::path_newtype! {
+    /// `Context.getFilesDir()`: the app's private files, where the embedded
+    /// replica and its `proxy.json` live.
+    pub struct AppFilesDir;
+}
+
+impl AppFilesDir {
+    /// The embedded replica's directory, which is the files directory itself.
+    pub fn replica_dir(&self) -> ReplicaDir {
+        ReplicaDir::new(self.to_path_buf())
+    }
+}
+
+notemaker_core::path_newtype! {
+    /// `Context.getCacheDir()`: scratch space that the system may clear.
+    pub struct AppCacheDir;
+}
+
 /// `context.getFilesDir()`.
-pub fn files_dir(context: &Obj) -> JResult<PathBuf> {
-    file_path(jcall!(context, "android/content/Context", "getFilesDir", "()Ljava/io/File;")?.global())
+pub fn files_dir(context: &Obj) -> JResult<AppFilesDir> {
+    file_path(jcall!(context, "android/content/Context", "getFilesDir", "()Ljava/io/File;")?.global()).map(AppFilesDir::from)
 }
 /// `context.getCacheDir()`.
-pub fn cache_dir(context: &Obj) -> JResult<PathBuf> {
-    file_path(jcall!(context, "android/content/Context", "getCacheDir", "()Ljava/io/File;")?.global())
+pub fn cache_dir(context: &Obj) -> JResult<AppCacheDir> {
+    file_path(jcall!(context, "android/content/Context", "getCacheDir", "()Ljava/io/File;")?.global()).map(AppCacheDir::from)
 }
 
 // ---------------------------------------------------------------------------

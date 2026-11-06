@@ -27,6 +27,7 @@ pub mod journal;
 pub mod layer_editor;
 pub mod model;
 pub mod net;
+pub mod paths;
 pub mod region_fill;
 pub mod render;
 pub mod shape_catalog;

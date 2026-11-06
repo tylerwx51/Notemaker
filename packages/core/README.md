@@ -115,7 +115,8 @@ replica directory written by the Java CLI (`tests/parity/fixtures/state-java`).
   `disconnector()` for cancelling from another thread).
   `HttpConnection::set_tls_config` / `Endpoint::with_tls_config` replace
   `HttpsURLConnection.setSSLSocketFactory` (custom roots, used by tests).
-  `cancel(Thread)` is `cancel(ThreadId)`.
+  `cancel(Thread)` is `cancel(RequestThread)`. `Store::new`/`writer` take a
+  `paths::ReplicaDir`, and `journal::access`/`checkpoint` a `paths::JournalPath`.
 
 ## Platform numerics
 

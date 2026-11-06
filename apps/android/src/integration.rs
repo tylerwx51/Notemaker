@@ -387,7 +387,7 @@ impl Integration {
             return Ok(result);
         }
         self.drain_writes()?;
-        let mut child: Option<std::process::Child> = None;
+        let mut child: Option<crate::app_replica::CliProcess> = None;
         if action == "cli" || action == "cli-concurrent" {
             let arguments_json = JSONArray::parse(&String::from_utf8_lossy(&base64_decode(bundle_string(arguments, "cli")?.as_deref())?))?;
             let mut cli_args = Vec::new();
@@ -1253,8 +1253,8 @@ impl Integration {
         let id = "android-conflict-item";
         let root = ui::cache_dir(&app.this)?.join("drawing-conflict-fixture");
         let document = notemaker_core::ids::DocumentName::from(app.document.get());
-        let a = Store::writer(&root.join("a"), &document)?;
-        let b = Store::writer(&root.join("b"), &document)?;
+        let a = Store::writer(&notemaker_core::paths::ReplicaDir::new(root.join("a")), &document)?;
+        let b = Store::writer(&notemaker_core::paths::ReplicaDir::new(root.join("b")), &document)?;
         let seed = notemaker_core::actions::drawing(&notemaker_core::wire::ActionInput(object! {"object" => id, "shape" => "rect", "x" => 80, "y" => 90, "w" => 180, "h" => 120, "color" => COLOR_BLACK, "width" => 5}), &notemaker_core::ids::LayerId::from("base"))?;
         a.append(&seed, &notemaker_core::ids::ActorId::from("fixture-seed"))?;
         let common = {

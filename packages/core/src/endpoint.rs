@@ -528,6 +528,24 @@ json_object_newtype! {
     pub struct ResponseBody;
 }
 
+/// The thread that made an `Endpoint` request, so a peer can cancel that
+/// request alone (`cancel(Thread)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RequestThread(ThreadId);
+
+impl RequestThread {
+    /// The calling thread.
+    pub fn current() -> RequestThread {
+        RequestThread(std::thread::current().id())
+    }
+}
+
+impl From<ThreadId> for RequestThread {
+    fn from(thread: ThreadId) -> Self {
+        RequestThread(thread)
+    }
+}
+
 struct RequestState {
     cancelled: AtomicBool,
     connection: Mutex<Option<Disconnector>>,
@@ -536,7 +554,7 @@ struct RequestState {
 /// `Endpoint`: HTTP peer, optionally authenticated with a private proxy descriptor.
 pub struct Endpoint {
     pub descriptor: EndpointDescriptor,
-    active_requests: Mutex<HashMap<ThreadId, Arc<RequestState>>>,
+    active_requests: Mutex<HashMap<RequestThread, Arc<RequestState>>>,
     tls: Option<TlsConfig>,
 }
 
@@ -553,7 +571,7 @@ impl Endpoint {
 
     /// Interrupt this peer's request from a particular worker without
     /// disturbing other callers (`cancel(Thread)`).
-    pub fn cancel(&self, thread: ThreadId) -> bool {
+    pub fn cancel(&self, thread: RequestThread) -> bool {
         let state = self.active_requests.lock().unwrap_or_else(|e| e.into_inner()).get(&thread).cloned();
         let Some(state) = state else { return false };
         state.cancelled.store(true, Ordering::SeqCst);
@@ -599,7 +617,7 @@ impl Endpoint {
     /// `request(path, body)`: the path's method, with `body` as JSON when given.
     pub fn request(&self, path: impl Into<EndpointPath>, body: Option<&RequestBody>) -> Result<ResponseBody> {
         let path = path.into();
-        let thread = std::thread::current().id();
+        let thread = RequestThread::current();
         let state = Arc::new(RequestState { cancelled: AtomicBool::new(false), connection: Mutex::new(None) });
         self.active_requests.lock().unwrap_or_else(|e| e.into_inner()).insert(thread, state.clone());
         let mut connection: Option<HttpConnection> = None;
@@ -771,7 +789,7 @@ mod tests {
             let peer = peer.clone();
             std::thread::spawn(move || peer.request(EndpointPath::Command, None))
         };
-        let id = worker.thread().id();
+        let id = RequestThread::from(worker.thread().id());
         let started = std::time::Instant::now();
         while !peer.cancel(id) {
             std::thread::sleep(Duration::from_millis(10));

@@ -14,12 +14,13 @@ use crate::json::{self, jlen, Map, Value};
 use crate::model::Model;
 use crate::net::ApiPath;
 use crate::object;
+use crate::paths::{JournalPath, ReplicaDir};
 use crate::timing::{mark, TimingPhase};
 use crate::wire::{ConflictList, EntityRefs, Operation, OperationList, Operations, ReplicaState};
 use crate::{json_object_newtype, json_value_newtype};
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
@@ -343,7 +344,7 @@ pub type UploadGate<'a> = dyn FnMut() -> Result<()> + 'a;
 
 /// `Store`.
 pub struct Store {
-    pub file: PathBuf,
+    pub file: JournalPath,
     pub document: DocumentName,
     writable: bool,
     coordination: Arc<Coordination>,
@@ -355,12 +356,12 @@ fn bytes_len(value: &Value) -> usize {
 
 impl Store {
     /// `new Store(directory, document)`: read-only access.
-    pub fn new(directory: &Path, document: &DocumentName) -> Result<Store> {
+    pub fn new(directory: &ReplicaDir, document: &DocumentName) -> Result<Store> {
         Store::open(directory, document.as_ref(), false)
     }
 
     /// `Store.writer(directory, document)`: the selected proxy's writable store.
-    pub fn writer(directory: &Path, document: &DocumentName) -> Result<Store> {
+    pub fn writer(directory: &ReplicaDir, document: &DocumentName) -> Result<Store> {
         Store::open(directory, document.as_ref(), true)
     }
 
@@ -369,7 +370,7 @@ impl Store {
         if writable {
             std::fs::create_dir_all(directory).map_err(|e| Error::io(format!("{} ({})", directory.display(), crate::error::io_message(&e))))?;
         }
-        let file = directory.join(format!("document-{}.json", String::from(ids::Uuid::from_name(document))));
+        let file = JournalPath::new(directory.join(format!("document-{}.json", String::from(ids::Uuid::from_name(document)))));
         let key = canonical_path(&file);
         let coordination = coordinations().lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_default().clone();
         Ok(Store { file, document: DocumentName::from(document), writable, coordination })

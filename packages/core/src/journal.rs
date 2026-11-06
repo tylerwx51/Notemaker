@@ -14,6 +14,7 @@ use crate::error::{io_message, require, Error, ErrorKind, Result};
 use crate::json::{self, Map, Value};
 use crate::model::Model;
 use crate::object;
+use crate::paths::JournalPath;
 use crate::store::{State, StateKind};
 use crate::timing::{mark, TimingPhase};
 use crate::wire::ReplicaState;
@@ -206,7 +207,7 @@ pub enum JournalMode {
 /// end of the cached journal state itself, updated in place under the journal
 /// lock, so the returned state can share that map instead of deep-copying it;
 /// they are stripped wherever the state is persisted.
-pub fn access(file: &Path, document: &DocumentName, edit: Option<&mut Edit<'_>>, scope: EditScope, mode: JournalMode, overlay: Option<&Overlay<'_>>) -> Result<State> {
+pub fn access(file: &JournalPath, document: &DocumentName, edit: Option<&mut Edit<'_>>, scope: EditScope, mode: JournalMode, overlay: Option<&Overlay<'_>>) -> Result<State> {
     let (document, writable): (&str, bool) = (document, mode == JournalMode::Writable);
     let path = canonical_path(file);
     let cache = cache_for(&path);
@@ -254,7 +255,7 @@ crate::json_object_newtype! {
 }
 
 /// `Journal.checkpoint(file, document)`: fold the WAL into a new base file.
-pub fn checkpoint(file: &Path, document: &DocumentName) -> Result<CheckpointResult> {
+pub fn checkpoint(file: &JournalPath, document: &DocumentName) -> Result<CheckpointResult> {
     let document: &str = document;
     let path = canonical_path(file);
     let cache = cache_for(&path);

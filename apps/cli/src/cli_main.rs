@@ -6,7 +6,7 @@ use crate::jutil;
 use crate::local_proxy::{CommandReply, LeaseUpdate, LocalProxy};
 use notemaker_core::endpoint::EndpointDescriptor;
 use notemaker_core::store::EditorPreferences;
-use crate::png::Png;
+use crate::png::{Png, RenderOutputPath};
 use crate::raster::PixelSize;
 use notemaker_core::clock::EpochMillis;
 use notemaker_core::collaboration;
@@ -20,6 +20,7 @@ use notemaker_core::ids::{
 use notemaker_core::layer_editor::{self, HitMode, ItemFilter, LayerEditor};
 use notemaker_core::model::Model;
 use notemaker_core::net::Port;
+use notemaker_core::paths::ReplicaDir;
 use notemaker_core::render::{self, HiddenLayers};
 use notemaker_core::shape_catalog;
 use notemaker_core::store::{self, HistoryDirection, State, Store, WithState};
@@ -493,7 +494,7 @@ fn run_command(args: &CommandArgs) -> Result<Option<Value>> {
             "UI commands require the running tablet's local --proxy-file",
         ));
     }
-    let directory = PathBuf::from(&state);
+    let directory = ReplicaDir::new(&state);
     let store = if remote_model.is_none() {
         Some(if in_proxy() {
             Store::writer(&directory, &document_name)?
@@ -855,7 +856,7 @@ fn run_command(args: &CommandArgs) -> Result<Option<Value>> {
                 a.len() == 1 || a.len() == 2 || a.len() == 6,
                 "export FILE [PAGE [X Y WIDTH HEIGHT]]",
             )?;
-            let out = PathBuf::from(&a[0]);
+            let out = RenderOutputPath::new(&a[0]);
             let page = if a.len() > 1 {
                 jutil::parse_int(&a[1])?
             } else {

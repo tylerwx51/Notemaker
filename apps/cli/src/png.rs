@@ -28,6 +28,11 @@ use notemaker_core::style::{
 use notemaker_core::svg_asset::{self, DotGrid};
 use notemaker_core::wire::EntityContent;
 use notemaker_core::{Error, Result};
+
+notemaker_core::path_newtype! {
+    /// The file a rendered page image is written to.
+    pub struct RenderOutputPath;
+}
 use resvg::{tiny_skia, usvg};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -301,7 +306,7 @@ impl<'a> Png<'a> {
         page: PageNumber,
         origin: DocPoint,
         size: PixelSize,
-        out: &std::path::Path,
+        out: &RenderOutputPath,
     ) -> Result<()> {
         let DocPoint { x, y } = origin;
         let mut image = RasterCanvas::new(size)?;

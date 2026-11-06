@@ -5,6 +5,7 @@
 //! compares the cache with a fresh read of the files.
 
 use notemaker_core::ids::{ActorId, DocumentName};
+use notemaker_core::paths::ReplicaDir;
 use notemaker_core::store::{self, EditorPreferences, HistoryDirection, State, Store};
 use notemaker_core::{json, object, Model, Value};
 use std::path::PathBuf;
@@ -35,7 +36,7 @@ fn assert_replays(dir: &PathBuf, document: &str, cached: &State) {
             std::fs::copy(entry.path(), copy.join(&name)).unwrap();
         }
     }
-    let fresh = Store::new(&copy, &DocumentName::from(document)).unwrap().read().unwrap();
+    let fresh = Store::new(&ReplicaDir::from(copy.as_path()), &DocumentName::from(document)).unwrap().read().unwrap();
     assert_eq!(json::write_map(&fresh), json::write_map(cached), "cache differs from replay");
     let _ = std::fs::remove_dir_all(&copy);
 }
@@ -43,7 +44,7 @@ fn assert_replays(dir: &PathBuf, document: &str, cached: &State) {
 #[test]
 fn action_edits_match_full_path_while_state_is_shared() {
     let dir = directory("shared");
-    let store = Store::writer(&dir, &DocumentName::from("shared")).unwrap();
+    let store = Store::writer(&ReplicaDir::from(dir.as_path()), &DocumentName::from("shared")).unwrap();
     store.append(&object! {"kind" => "document", "type" => "fixed"}.into(), &ActorId::from("alice")).unwrap();
     // Held reads share the cached map, so each edit has to unshare it first;
     // history entry identities must survive that.
@@ -81,7 +82,7 @@ fn action_edits_match_full_path_while_state_is_shared() {
 #[test]
 fn rejected_action_edits_keep_the_cache() {
     let dir = directory("rejected");
-    let store = Store::writer(&dir, &DocumentName::from("rejected")).unwrap();
+    let store = Store::writer(&ReplicaDir::from(dir.as_path()), &DocumentName::from("rejected")).unwrap();
     store.append(&object! {"kind" => "document", "type" => "fixed"}.into(), &ActorId::from("alice")).unwrap();
     store.commit(&ActorId::from("alice"), &mut |_m: &mut Model| Ok((rect("a", 10)).into())).unwrap();
     let before = json::write_map(&store.read().unwrap());

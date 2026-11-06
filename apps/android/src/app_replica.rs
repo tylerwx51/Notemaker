@@ -23,6 +23,29 @@ use std::sync::{Arc, Weak};
 #[derive(Clone, Copy, Debug)]
 pub struct CliArgs<'a>(pub &'a [&'a str]);
 
+/// A CLI command process started by [`MainActivity::start_cli`].
+#[derive(Debug)]
+pub struct CliProcess(std::process::Child);
+
+impl From<std::process::Child> for CliProcess {
+    fn from(child: std::process::Child) -> Self {
+        CliProcess(child)
+    }
+}
+
+impl std::ops::Deref for CliProcess {
+    type Target = std::process::Child;
+    fn deref(&self) -> &std::process::Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for CliProcess {
+    fn deref_mut(&mut self) -> &mut std::process::Child {
+        &mut self.0
+    }
+}
+
 /// A `… snapshot` command's reply and its snapshot (see
 /// [`AppReplica::command_snapshot`]).
 pub struct SnapshotReply {
@@ -48,7 +71,7 @@ impl AppReplica {
     /// `ProxyAddr::Unset` selects the embedded proxy.
     pub fn new(app: &Arc<MainActivity>, document: &DocumentName, proxy: &ProxyAddr, token: &BearerToken) -> AppResult<Arc<AppReplica>> {
         let files = app.files_dir()?;
-        let local = Arc::new(Store::new(&files, document)?);
+        let local = Arc::new(Store::new(&files.replica_dir(), document)?);
         let descriptor = match proxy {
             ProxyAddr::Unset => None,
             ProxyAddr::Set(url) => Some((object! {"url" => &**url, "token" => token}, format!("{url}\n{}", &**token))),

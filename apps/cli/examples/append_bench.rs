@@ -37,7 +37,7 @@ fn main() -> notemaker_core::Result<()> {
     let objects = std::env::args().nth(2).as_deref() == Some("objects");
     let dir = std::env::temp_dir().join(format!("notemaker-append-bench-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(notemaker_core::Error::from)?;
-    let proxy = LocalProxy::new(&dir, notemaker_core::net::Port::EPHEMERAL)?;
+    let proxy = LocalProxy::new(&notemaker_core::paths::ReplicaDir::from(dir.as_path()), notemaker_core::net::Port::EPHEMERAL)?;
     let doc = "bench";
     let body = |args: &[&str], input: Value| {
         object! {"document" => doc, "actor" => "human", "args" => Value::Array(args.iter().map(|a| Value::from(*a)).collect()), "input" => input}

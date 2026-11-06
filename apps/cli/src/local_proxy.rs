@@ -12,7 +12,8 @@ use crate::main::{self as cli, CommandArgs};
 use crate::ui_hub::UiHub;
 use notemaker_core::clock::EpochMillis;
 use notemaker_core::collaboration::{self, LEASE_MILLIS};
-use notemaker_core::endpoint::{Disconnector, Endpoint, EndpointDescriptor};
+use notemaker_core::endpoint::{Disconnector, Endpoint, EndpointDescriptor, RequestThread};
+use notemaker_core::paths::ReplicaDir;
 use notemaker_core::error::require;
 use notemaker_core::ids::{
     ActorId, DocumentName, EntityId, EntityKind, LayerId, PageNumber, SessionId,
@@ -34,7 +35,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
-use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 notemaker_core::string_newtype! {
@@ -172,8 +172,20 @@ thread_local! {
     static CAPTURED_SNAPSHOT: std::cell::RefCell<Option<Option<State>>> = const { std::cell::RefCell::new(None) };
 }
 
+/// How long [`LocalProxy::await_change_timeout`] waits for the replica to
+/// change before it returns, so the caller can check for a cooperative
+/// interrupt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ChangeWaitTimeout(Duration);
+
+impl From<Duration> for ChangeWaitTimeout {
+    fn from(timeout: Duration) -> Self {
+        ChangeWaitTimeout(timeout)
+    }
+}
+
 pub struct LocalProxy {
-    directory: PathBuf,
+    directory: ReplicaDir,
     listener: TcpListener,
     local_port: Port,
     ownership: Mutex<Option<FileLock>>,
@@ -206,7 +218,7 @@ pub struct LocalProxy {
     sync_uploading: AtomicBool,
     active_document: Mutex<String>,
     last_upload: AtomicI64,
-    synchronizer: OnceLock<ThreadId>,
+    synchronizer: OnceLock<RequestThread>,
     sync_alive: AtomicBool,
     workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
     acceptor_done: Mutex<bool>,
@@ -292,7 +304,7 @@ impl LocalProxy {
     ///
     /// Java wrapped setup failures as `new IOException(cause)`; the CLI prints
     /// the root cause, so the Rust error is the root cause itself.
-    pub fn new(directory: &Path, port: Port) -> Result<Arc<LocalProxy>> {
+    pub fn new(directory: &ReplicaDir, port: Port) -> Result<Arc<LocalProxy>> {
         std::fs::create_dir_all(directory).map_err(|e| {
             Error::io(format!(
                 "{}: {}",
@@ -314,7 +326,7 @@ impl LocalProxy {
     }
 
     fn open(
-        directory: &Path,
+        directory: &ReplicaDir,
         port: Port,
         ownership: &mut Option<FileLock>,
     ) -> Result<Arc<LocalProxy>> {
@@ -347,7 +359,7 @@ impl LocalProxy {
         };
         let local_port = listener.local_addr().map(|a| Port::from(a.port())).unwrap_or(port);
         let proxy = Arc::new(LocalProxy {
-            directory: directory.to_path_buf(),
+            directory: directory.clone(),
             listener,
             local_port,
             ownership: Mutex::new(None),
@@ -405,7 +417,7 @@ impl LocalProxy {
         timing::mark(TimingPhase("proxy_known_documents"));
         let known: HashSet<PathBuf> = lock(&proxy.documents)
             .values()
-            .map(|s| s.file.clone())
+            .map(|s| PathBuf::from(s.file.clone()))
             .collect();
         let mut files: Vec<PathBuf> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(directory) {
@@ -493,7 +505,7 @@ impl LocalProxy {
         let synchronizer = spawn(
             "proxy-sync",
             Box::new(move || {
-                let _ = p.synchronizer.set(std::thread::current().id());
+                let _ = p.synchronizer.set(RequestThread::current());
                 p.sync_loop();
                 p.sync_alive.store(false, Ordering::SeqCst);
             }),
@@ -722,8 +734,8 @@ impl LocalProxy {
 
     /// `awaitChange` with a bound, for callers that must observe a
     /// cooperative interrupt (Java interrupted the waiting thread instead).
-    pub fn await_change_timeout(&self, previous: i64, timeout: Duration) -> i64 {
-        let deadline = Instant::now() + timeout;
+    pub fn await_change_timeout(&self, previous: i64, timeout: ChangeWaitTimeout) -> i64 {
+        let deadline = Instant::now() + timeout.0;
         let mut c = lock(&self.changes);
         while self.running.load(Ordering::SeqCst) && c.generation == previous {
             let left = deadline.saturating_duration_since(Instant::now());

@@ -3,14 +3,15 @@
 
 use notemaker_cli::item_coverage::{self, FACTORY};
 use notemaker_cli::local_proxy::LocalProxy;
-use notemaker_cli::png::Png;
-use notemaker_cli::probe::{self, memory, ms_since, timed, ProbePhase};
+use notemaker_cli::png::{Png, RenderOutputPath};
+use notemaker_cli::probe::{self, memory, ms_since, timed, ProbePhase, ProbeStart};
 use notemaker_cli::raster::PixelSize;
 use notemaker_core::coverage::{Coverage, CoverageFactory};
 use notemaker_core::drawing_actions;
 use notemaker_core::geometry::{DocPoint, Polygon, Radius, Segment};
 use notemaker_core::ids::{DocumentName, LayerId, PageNumber};
 use notemaker_core::layer_editor::LayerEditor;
+use notemaker_core::paths::ReplicaDir;
 use notemaker_core::store::{self, Store};
 use notemaker_core::{json, object, Error, Map, Result, Value};
 use std::cell::Cell;
@@ -59,7 +60,7 @@ fn run(args: &[String]) -> Result<()> {
         ));
     }
     let doc = args[1].clone();
-    let store = Store::writer(&dir, &DocumentName::from(&doc))?;
+    let store = Store::writer(&ReplicaDir::from(dir.as_path()), &DocumentName::from(&doc))?;
     let state = timed(&ProbePhase::from("cold_read"), || store.read())?;
     let model = store::model(&state)?;
     let layer = match state.get("selected") {
@@ -112,7 +113,7 @@ fn run(args: &[String]) -> Result<()> {
     };
     timed(&ProbePhase::from("all_item_hit_tests"), || {
         for item in editor.items() {
-            let start = Instant::now();
+            let start = ProbeStart::now();
             let hit = item.intersects(&region, &measured)?;
             let n = if item.kind == "stroke" {
                 point_list(&item.content)?.len()
@@ -189,10 +190,10 @@ fn run(args: &[String]) -> Result<()> {
             PageNumber(page),
             DocPoint { x: 0.0, y: 0.0 },
             PixelSize { width: 1000, height: 1400 },
-            &dir.join("render.png"),
+            &RenderOutputPath::new(dir.join("render.png")),
         )
     })?;
-    let proxy = LocalProxy::new(&dir, notemaker_core::net::Port::EPHEMERAL)?;
+    let proxy = LocalProxy::new(&ReplicaDir::from(dir.as_path()), notemaker_core::net::Port::EPHEMERAL)?;
     let outcome = (|| -> Result<()> {
         for _ in 0..3 {
             timed(&ProbePhase::from("proxy_erase"), || {
@@ -242,7 +243,7 @@ fn run(args: &[String]) -> Result<()> {
                     }
                     probe::print(Value::Object(object! {
                         "phase" => "queued_erase", "index" => index, "queue_ms" => json::double((start - submitted).as_nanos() as f64 / 1e6),
-                        "work_ms" => json::double(ms_since(start).0), "total_ms" => json::double(ms_since(submitted).0), "error" => error
+                        "work_ms" => json::double(ms_since(ProbeStart::from(start)).0), "total_ms" => json::double(ms_since(ProbeStart::from(submitted)).0), "error" => error
                     }));
                 }
             })
@@ -261,7 +262,7 @@ fn run(args: &[String]) -> Result<()> {
             let pts = point_list(&item.content)?;
             let point = json::list(&pts[pts.len() / 2])?.clone();
             let request = object! {"mode" => "partial", "layer" => layer.clone(), "page" => page, "radius" => 12, "points" => vec![Value::Array(vec![point[0].clone(), point[1].clone()])]};
-            let start = Instant::now();
+            let start = ProbeStart::now();
             let mut changed = true;
             if let Err(e) = proxy.execute((&command(&doc, &["erase", "-"], Some(&request))).into()) {
                 if !(e.kind.is_illegal_argument()

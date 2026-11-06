@@ -65,6 +65,22 @@ this, and a syntax-only checker cannot resolve imports or type aliases.
   `Display`), which the lint does not check, rather than inherent
   constructors or accessors that take or return the raw value.
   `notemaker_core::string_newtype!` defines string newtypes this way.
+- **Std value types:** there is no allowlist for `std` or `core` types.
+  `Path`, `PathBuf`, `Duration`, `Instant`, `ThreadId` and `process::Child`
+  say what kind of value something is, not what it is for, so a signature
+  wraps them in a type named by purpose: which directory, which timeout,
+  which thread. One std type may back several purpose types
+  (`ReplicaDir`, `JournalPath`, `RenderOutputPath`, `AppFilesDir` and
+  `AppCacheDir` are all paths). Each has a small set of constructors (`new`,
+  `From`, or `now`/`current`). `notemaker_core::path_newtype!` defines path
+  newtypes; they deref to `Path`, so `std::fs` calls work on them directly.
+  A generic wait that cannot know its caller's purpose may take a general
+  `WaitTimeout`. `java_port::concurrent`'s `Future::get_timeout` and
+  `CountDownLatch::await_timeout` are such waits; they keep `Duration` under
+  the `java_port` exemption, and take `WaitTimeout` if they move out of it.
+  `std::io::Error`
+  stays as it is: a helper that formats any I/O failure has no narrower
+  purpose to name.
 - The lint is introduced at **warn**. It does not run from `tests/run.py` or
   the pre-commit checks yet.
 
@@ -113,6 +129,15 @@ this, and a syntax-only checker cannot resolve imports or type aliases.
   inputs. Each command has its own result wrapper. Small Rust-only shapes are
   real structs: editor preferences, tile and bounds cache metrics, latency
   stats, and the UI state of the file browser and GIF player.
+- 2026-11-05 std value pass: 37 warnings remain, none of them std types.
+  `notemaker_core::paths` holds `ReplicaDir` (the `Store` and `LocalProxy`
+  directory) and `JournalPath` (`Store::file`, `journal::access`/`checkpoint`).
+  `endpoint::RequestThread` names the thread whose request
+  `Endpoint::cancel` interrupts. The CLI has `local_proxy::ChangeWaitTimeout`,
+  `png::RenderOutputPath` and `probe::ProbeStart`; Android has
+  `ui::AppFilesDir` (with `replica_dir()`), `ui::AppCacheDir` and
+  `app_replica::CliProcess`. `java_port` keeps `std::time::Duration` for its
+  `java.util.concurrent` waits under the module exemption.
 - Moving to `deny` requires fixing or explicitly allowing each crate's
   warnings, then adding the lint to the check runner.
 - Bumping the pinned nightly can break the lint, because rustc internals are

@@ -308,14 +308,14 @@ Run `nix-shell --run 'python3 tests/ui_sessions_android.py'` for the live API 36
 session check, then `nix-shell --run 'python3 tests/ui_topology_android.py'` for
 the two-proxy, main-server route.
 
-Call `MainActivity::start_cli(&[&str])` (Rust, `apps/android/src/main_activity.rs`)
+Call `MainActivity::start_cli(CliArgs(&[&str]))` (Rust, `apps/android/src/main_activity.rs`)
 off the UI thread, write input, drain stdout **and** stderr concurrently, wait for
 completion with a timeout, and check the exit code. It returns a
-`std::process::Child` with all three streams piped; orchestration and process
+`CliProcess` (derefs to `std::process::Child`) with all three streams piped; orchestration and process
 lifecycle management belong to the caller. Example arguments:
 
 ```rust
-app.start_cli(&["--actor", "agent-session-17", "diagram", "add", "-"])
+app.start_cli(CliArgs(&["--actor", "agent-session-17", "diagram", "add", "-"]))
 ```
 
 The launcher runs the APK's native CLI (`<nativeLibraryDir>/libnotemaker_cli.so`,

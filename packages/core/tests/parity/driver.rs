@@ -15,6 +15,7 @@ use notemaker_core::ink_geometry::{AreaOverlap, InkGeometry, InkPart};
 use notemaker_core::json::{self, Map, Value};
 use notemaker_core::layer_editor::{HitMode, ItemFilter, LayerEditor};
 use notemaker_core::model::{Entity, Model};
+use notemaker_core::paths::ReplicaDir;
 use notemaker_core::render::{self, HiddenLayers, Svg};
 use notemaker_core::store::{EditorPreferences, HistoryDirection, ReplicaCursor, State, Store};
 use notemaker_core::style::{ArgbPixels, RectShape, StrokeWidth};
@@ -923,7 +924,7 @@ impl Driver {
     // ------------------------------------------------------------------ store
     fn read_store(&mut self, dir: &Path, document: &str) {
         self.begin(&format!("store/{}", document));
-        let store = match Store::new(dir, &DocumentName::from(document)) {
+        let store = match Store::new(&ReplicaDir::from(dir), &DocumentName::from(document)) {
             Ok(s) => s,
             Err(e) => {
                 self.line(&err(&e));
@@ -972,7 +973,7 @@ impl Driver {
 
     fn write_sequence(&mut self, dir: &Path) {
         self.begin("write");
-        let w = Store::writer(dir, &DocumentName::from("parity-doc")).unwrap();
+        let w = Store::writer(&ReplicaDir::from(dir), &DocumentName::from("parity-doc")).unwrap();
         let diagram = json::parse(&read_text(&self.fixtures.join("../../../../../apps/cli/examples/diagram.json"))).unwrap().as_object().unwrap().clone();
         let pts = |v: &[(f64, f64, f64)]| Value::Array(v.iter().map(|(x, y, p)| point(*x, *y, *p)).collect());
         let int_point = |x: i64, y: i64, p: f64| Value::Array(vec![Value::from(x), Value::from(y), json::double(p)]);
@@ -1083,7 +1084,7 @@ impl Driver {
         self.attempt("delete-again", |_| w.delete_document(&actor("alice")));
         self.attempt("after-delete", |_| w.commit(&actor("alice"), &mut |_m: &mut Model| Ok(vec![Value::from(actions::drawing(&object! {"shape" => "rect"}.into(), &LayerId::from("base"))?)].into())));
         self.attempt("read", |_| w.read());
-        self.attempt("invalid-doc", |_| Store::writer(dir, &DocumentName::from("")).map(|_| "store"));
+        self.attempt("invalid-doc", |_| Store::writer(&ReplicaDir::from(dir), &DocumentName::from("")).map(|_| "store"));
         self.flush();
         self.begin("write/files");
         self.dump(dir);
@@ -1091,7 +1092,7 @@ impl Driver {
 
     fn mutate(&mut self, dir: &Path, document: &str) {
         self.begin(&format!("mutate/{}", document));
-        let w = Store::writer(dir, &DocumentName::from(document)).unwrap();
+        let w = Store::writer(&ReplicaDir::from(dir), &DocumentName::from(document)).unwrap();
         self.attempt("commit", |_| {
             w.commit(&actor("cross"), &mut |_m: &mut Model| {
                 Ok(vec![Value::from(actions::drawing(&object! {"object" => "cross-1", "shape" => "hexagon", "x" => 11, "y" => 12, "text" => "from mutate"}.into(), &LayerId::from("base"))?)].into())

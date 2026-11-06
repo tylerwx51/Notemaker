@@ -60,7 +60,7 @@ pub struct LocalProxy { pub connected: Mutex<HashMap<String,bool>>, pub errors: 
 | Java | Rust |
 | --- | --- |
 | `interface UiSession { Object request(String verb,String action,Map input) throws Exception; }` | `trait UiSession: Send + Sync { fn request(&self, verb: &str, action: &str, input: Map) -> Result<Value, UiError>; }`. The error's `Display` is used where Java called `error.toString()`. |
-| `new LocalProxy(File directory, int port) throws IOException` | `LocalProxy::new(directory: &Path, port: i32) -> Result<Arc<LocalProxy>>` |
+| `new LocalProxy(File directory, int port) throws IOException` | `LocalProxy::new(directory: &ReplicaDir, port: Port) -> Result<Arc<LocalProxy>>` |
 | `void configure(String document, String target) throws Exception` (synchronized) | `fn configure(&self, document: &str, target: Option<&str>) -> Result<()>` |
 | `Object execute(Map body) throws Exception` | `fn execute(&self, body: &Map) -> Result<Value>` |
 | `static Object request(Map descriptor, String document, String actor, List<String> args, Object input)` | `LocalProxy::request(descriptor: &Map, document: &str, actor: &str, args: &[String], input: Option<&Value>) -> Result<Value>` |
@@ -70,7 +70,7 @@ pub struct LocalProxy { pub connected: Mutex<HashMap<String,bool>>, pub errors: 
 | `void unregisterUiSession(String)` | `fn unregister_ui_session(&self, session: &str)` |
 | `void setUiUpstream(Map descriptor)` (nullable) | `fn set_ui_upstream(&self, descriptor: Option<&Map>)` |
 | `long version()` | `fn version(&self) -> i64` |
-| `long awaitChange(long) throws InterruptedException` | `fn await_change(&self, previous: i64) -> i64`; plus `await_change_timeout(previous, Duration) -> i64` (see below) |
+| `long awaitChange(long) throws InterruptedException` | `fn await_change(&self, previous: i64) -> i64`; plus `await_change_timeout(previous, ChangeWaitTimeout) -> i64` (see below) |
 | `int port()` | `fn port(&self) -> i32` |
 | `void await()` | `fn await_(&self)` |
 | `Object preview(String document,String actor,String session,List entities,Map transform)` | `fn preview(&self, document: &str, actor: &str, session: &str, entities: &[Value], transform: &Map) -> Result<Map>` |
@@ -141,7 +141,7 @@ has a default implementation).
 | --- | --- |
 | `public Png(Canvas canvas)` (Android) / `private Png(Graphics2D)` (JVM) | `Png::new(canvas: &mut dyn Canvas) -> Png<'_>` |
 | `static int[] coverageTile(Model, Map item, int x, int y, int size)` | `Png::coverage_tile(m: &Model, item: &Map, x: i32, y: i32, size: i32) -> Result<Vec<i32>>` (unpremultiplied ARGB) |
-| `static void export(Model, int page, double x, double y, int w, int h, File out)` | `Png::export(m: &Model, page: i32, x: f64, y: f64, w: i32, h: i32, out: &Path) -> Result<()>` |
+| `static void export(Model, int page, double x, double y, int w, int h, File out)` | `Png::export(m: &Model, page: PageNumber, origin: DocPoint, size: PixelSize, out: &RenderOutputPath) -> Result<()>` |
 | `static StrokeCommands compileStroke(Map stroke)` | `Png::compile_stroke(stroke: &Map) -> Result<StrokeCommands>` |
 | `static void replayStroke(Canvas, StrokeCommands, Paint)` | `Png::replay_stroke(canvas: &mut dyn Canvas, commands: &StrokeCommands, paint: &mut Paint)` |
 | `static void ensureFonts()` | `Png::ensure_fonts() -> Result<()>` (= `typeface::ensure_fonts`) |
@@ -204,7 +204,7 @@ The phase-1 signatures are unchanged. Additions only:
 
 - `canvas::Path::from_skia(&tiny_skia::Path, FillType) -> Path`, which
   converts stroker output.
-- `probe::ms_since(Instant) -> f64` and `probe::print(Value)` for the probe
+- `probe::ms_since(ProbeStart) -> ElapsedMillis` and `probe::print(Value)` for the probe
   binaries.
 
 Core change:

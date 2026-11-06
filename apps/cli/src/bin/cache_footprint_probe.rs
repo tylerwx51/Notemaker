@@ -21,7 +21,7 @@ fn run() -> Result<()> {
     item_coverage::create((&stroke(-1, 20)).into())?;
     item_coverage::cache_clear();
     probe::memory(&ProbePhase::from("cache_empty"))?;
-    let start = std::time::Instant::now();
+    let start = probe::ProbeStart::now();
     let mut from = 0;
     for count in [100i64, 1000, 10000] {
         for i in from..count {

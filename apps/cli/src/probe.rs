@@ -13,6 +13,23 @@ notemaker_core::string_newtype! {
 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
 pub struct ElapsedMillis(pub f64);
 
+/// When a measured probe phase began; [`ms_since`] reads the wall time from it.
+#[derive(Clone, Copy, Debug)]
+pub struct ProbeStart(std::time::Instant);
+
+impl ProbeStart {
+    /// A phase starting now.
+    pub fn now() -> ProbeStart {
+        ProbeStart(std::time::Instant::now())
+    }
+}
+
+impl From<std::time::Instant> for ProbeStart {
+    fn from(start: std::time::Instant) -> Self {
+        ProbeStart(start)
+    }
+}
+
 /// Allocator bytes in use (`mallinfo().uordblks`).
 fn allocated_bytes() -> i64 {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -65,13 +82,13 @@ pub fn memory(phase: &ProbePhase) -> Result<()> {
 }
 
 /// Milliseconds since `start` as Java's `(System.nanoTime()-start)/1e6`.
-pub fn ms_since(start: std::time::Instant) -> ElapsedMillis {
-    ElapsedMillis(start.elapsed().as_nanos() as f64 / 1e6)
+pub fn ms_since(start: ProbeStart) -> ElapsedMillis {
+    ElapsedMillis(start.0.elapsed().as_nanos() as f64 / 1e6)
 }
 
 /// `LatencyProbe.timed(phase, work)`: prints `{"phase", "ms"}` and flushes.
 pub fn timed<T>(phase: &ProbePhase, work: impl FnOnce() -> Result<T>) -> Result<T> {
-    let start = std::time::Instant::now();
+    let start = ProbeStart::now();
     let result = work()?;
     println(Value::Object(
         object! {"phase" => phase.clone(), "ms" => json::double(ms_since(start).0)},
