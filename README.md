@@ -723,6 +723,37 @@ inspection because document deletion is not supported. It does not disconnect,
 crash, reconfigure, or deploy remote services; destructive fault injection stays
 in the isolated local topology suite.
 
+### Mutation testing
+
+`tools/mutation/` measures how well the tests detect injected faults and which
+tests detect them (ADR 0033). cargo-mutants (from `shell.nix`) lists the Rust
+mutants, `python_mutants.py` generates mutants for the Python server, and
+`run_mutants.py` applies a stratified sample in isolated worker copies. It runs
+`cargo test` and the local tier against each mutant and records which
+individual tests failed. Results are in
+[docs/mutation-testing.md](docs/mutation-testing.md).
+
+```sh
+nix-shell --run 'cargo mutants --list --json --workspace' | sed -n '/^\[/,$p' > /tmp/mutants.json
+python3 tools/mutation/python_mutants.py apps/server/server.py apps/server/ui_sessions.py \
+  apps/server/svg_asset.py > /tmp/python-mutants.json
+python3 tools/mutation/run_mutants.py sample --stride 12 --package notemaker_core \
+  --package notemaker_cli /tmp/mutants.json > /tmp/sample.json
+nix-shell --run 'python3 tools/mutation/run_mutants.py run --workers 6 --baselines 10 \
+  --workdir /tmp/nm-mut --out /tmp/results.jsonl /tmp/sample.json'
+python3 tools/mutation/run_mutants.py report /tmp/results.jsonl \
+  --out-md docs/mutation-testing-results.md --out-json /tmp/summary.json
+```
+
+Give each sample's mutants distinct `id`s if you combine several sample files.
+`run` resumes from the results file. Each worker is a full copy of the
+repository with its own `target/` (about 3 GB). Each command runs in a systemd
+user scope capped at `NOTEMAKER_MUTANT_MEMORY` (default `4G`; empty disables),
+because some mutants allocate without bound. A full sample of about 1,800
+mutants takes about 6 hours on a 16-core machine. Run long campaigns under
+`systemd-run --user` so they outlive the terminal. Android mutants run only the
+Android unit tests; the emulator tier is not run per mutant.
+
 ### Stroke rendering regressions
 
 ```sh

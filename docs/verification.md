@@ -1,5 +1,24 @@
 # Verification
 
+## Mutation testing (ADR 0033) — 2026-11-07
+
+- `cargo mutants --version` in `nix-shell` reports 27.1.0 (added to
+  `shell.nix`).
+- 1,767 sampled mutants (core and CLI 734; server Python
+  155; Android 878) ran through `tools/mutation/run_mutants.py` with 10
+  unmutated baselines. The last 3 baselines, run after the mtime fix,
+  passed 228/228. Results and analysis: `docs/mutation-testing.md`; generated
+  tables: `docs/mutation-testing-results.md`.
+- The span-based mutant application matched cargo-mutants' own diffs for all
+  1,612 Rust mutants in the sample, apart from 15 cases where `difflib` aligned
+  an identical line differently (same resulting file).
+- The per-command memory cap was checked: a 400 MB allocation under
+  `MemoryMax=200M` was killed alone (exit 137), and `parity_snapshot` passes
+  under the default 4 GB cap.
+- No product code changed.
+- Not verified: mutants against the emulator tier or BOOX hardware. Android
+  scores cover unit tests only.
+
 ## Relaunch waits for the previous replica owner (ADR 0031) — 2026-11-03
 
 Intermittent emulator-tier failures in `cli_android` and `chat_ui` under the

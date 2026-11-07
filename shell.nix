@@ -95,7 +95,7 @@ in
 pkgs.mkShell {
   packages = [ android.androidsdk pkgs.jdk17 (pkgs.python3.withPackages (ps: [ ps.pyyaml ps.hypothesis ps.matplotlib ps.pillow ])) pkgs.chromium pkgs.fontconfig pkgs.dejavu_fonts pkgs.zip pkgs.unzip pkgs.jadx pkgs.apktool emulator headless pkgs.git pkgs.jujutsu pkgs.openssh pkgs.tmux pkgs.iproute2 pkgs.bubblewrap pkgs.nodejs
     pkgs.docker pkgs.rootlesskit pkgs.slirp4netns pkgs.fuse-overlayfs rootlessDocker arm64Emulator arm64Headless pkgs.gdb
-    pkgs.rustup pkgs.cargo-ndk pkgs.pkg-config dylint.cargo-dylint dylint.dylint-link ];
+    pkgs.rustup pkgs.cargo-ndk pkgs.pkg-config dylint.cargo-dylint dylint.dylint-link pkgs.cargo-mutants ];
   ANDROID_HOME = sdk;
   ANDROID_SDK_ROOT = sdk;
   JAVA_HOME = pkgs.jdk17.home;
