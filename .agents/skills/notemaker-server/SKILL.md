@@ -5,8 +5,7 @@ description: Work with the NoteMaker tablet sync server through its CLI to inspe
 
 # NoteMaker server
 
-Work from this repository's root. Read its `AGENTS.md` and
-`../computer-it/NETWORK_OPERATING_GUIDE.md` for current operating context.
+Work from this repository's root. Read its `AGENTS.md` for current operating context.
 Run commands inside the repository's `nix-shell`. Build with `apps/cli/build.sh`
 if needed, then **read `apps/cli/notemaker --help` before using the CLI**.
 Read `apps/cli/README.md` for JSON schemas and the root `README.md` for server

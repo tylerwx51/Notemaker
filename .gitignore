@@ -16,3 +16,19 @@ apps/cli/build/
 /?/
 *.kate-swp
 /tools/lints/*/target/
+
+# Local secrets and credentials (keep these out of a public repository)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.keystore
+*.jks
+local.properties
+
+# Build outputs and local tool state
+*.apk
+*.aab
+.claude/settings.local.json

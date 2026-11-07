@@ -1878,7 +1878,7 @@ impl EditorUi {
         let server = edit_text(&ctx)?;
         jcall!(server, "android/widget/TextView", "setSingleLine", "()V")?;
         ui::set_text(&server, &host.settings_host())?;
-        set_hint(&server, "192.168.50.180")?;
+        set_hint(&server, "192.168.1.10")?;
         set_input_type(&server, INPUTTYPE_TYPE_CLASS_TEXT | INPUTTYPE_TYPE_TEXT_VARIATION_URI)?;
         ui::add_view(&box_, &self.text("Notes server address", 12, INK, true)?)?;
         ui::add_view(&box_, &server)?;
@@ -1890,7 +1890,7 @@ impl EditorUi {
         ui::add_view(&box_, &self.text("Server port", 12, INK, true)?)?;
         ui::add_view(&box_, &server_port)?;
         let server_help = self.text(
-            "Leave the address blank for local-only notes. A blank port uses 8765. For the Android emulator, use 10.0.2.2. On your LAN, enter the computer running NoteMaker, for example 192.168.50.180.",
+            "Leave the address blank for local-only notes. A blank port uses 8765. For the Android emulator, use 10.0.2.2. On your LAN, enter the computer running NoteMaker, for example 192.168.1.10.",
             11,
             MUTED,
             false,

@@ -1640,51 +1640,6 @@ operation receipts and verification report are under
 `.test-artifacts/delete-deploy-20261014-220228/`. No Phenom II deployment was
 needed; the existing primary is this development computer.
 
-## ARM64 Android 16 emulator (2026-10-19)
-
-Added the API 36 Google APIs `arm64-v8a` image and separate ARM64 GUI/headless
-launchers through the root Nix shell. Android Emulator 37.1.11's frontend still
-rejects this guest/host combination. The bundled ARM64 engine boots with the
-`virt` machine and Cortex-A57 CPU, process-local KVM masking, ART class-loading
-fallback, and a 10× guest hardware timeout multiplier. See ADR 0015 for the
-workarounds and scope.
-
-Verified through actual emulator/ADB commands:
-
-- Android boot completion, release `16`, SDK `36`, ABI `arm64-v8a`, and kernel
-  architecture `aarch64` on this x86_64 development computer.
-- Display `1860x2480`, density `300`, enforcing SELinux, and restored shell UID
-  `2000` after launcher setup.
-- `apps/android/build.sh` passed through `nix-shell`. APK installation succeeded;
-  `com.notemaker/.MainActivity` launched with `Status: ok`, remained the resumed
-  activity, and rendered the NoteMaker editor in a captured screenshot.
-- Nix launcher builds/ShellCheck passed. Odd console ports and an occupied
-  console port were rejected. Informational AVD listing bypasses guest setup.
-- The existing host `emulator -accel-check` still reports KVM installed and usable.
-- A final GUI shutdown/relaunch using the finished launcher reached boot
-  completion automatically in 387 seconds, with the runtime fallback and timeout
-  multiplier applied and ADB restored to UID 2000. A concurrent launcher was
-  rejected by the AVD lock without reconfiguring the running guest.
-- A further cold restart completed in 386 seconds and preserved the installed
-  APK. After user 0 reached `RUNNING_UNLOCKED`, the saved NoteMaker installation
-  launched with `Status: ok` and `LaunchState: COLD` in 104 seconds without
-  reinstalling. Launching immediately at `sys.boot_completed=1` had returned
-  `Error type 3` because user storage was still unlocking. This occurred after
-  both incremental and full-transfer installs; it was not lost APK storage.
-  README now includes the actual user-unlock readiness check.
-
-This is a compatibility experiment, not a performance baseline. The initial
-smoke run's APK install took about 161 seconds and cold activity launch about
-68 seconds. Google's SDK setup app crashed in PNG decoding; this target is not
-a claim of complete Android/Google app compatibility. BOOX firmware services,
-E Ink behavior and physical stylus characteristics remain untested here.
-The physical tablet was not modified, and the full x86_64 emulator regression
-suite was not rerun for this additional launcher.
-
-Private logs, crash investigation, ADB output and screenshots are in
-`.test-artifacts/arm64-*`, `.test-artifacts/boox-arm64*` and
-`.test-artifacts/arm64-verification.txt`.
-
 ## Stroke rendering regressions (2026-10-19)
 
 Added `tests/stroke_rendering_checks.py` to the local tier and `stroke-pixels`
@@ -1858,26 +1813,6 @@ refresh behavior was not checked.
 
 The full `nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py'`
 suite then passed all drawing checks on the isolated emulator.
-
-## Phenom II Android VM feasibility — 2026-10-29
-
-Cloned `/git-repos/NoteMaker.git` at commit `0534499` into
-`/home/tyler/NoteMaker` on Phenom II and built the repository's root Nix
-shell there. `emulator -accel-check` reported usable KVM, and `nvidia-smi`
-reported the GTX 1060 with driver 580.142. A minimal Xorg server on `:99`
-allowed the headless emulator's `-gpu host` mode to report
-`NVIDIA GeForce GTX 1060 6GB/PCIe/SSE2` and OpenGL ES 3.0;
-`nvidia-smi` listed the emulator as a graphics process.
-
-The Android 16 / API 36 x86_64 image reported missing SSSE3 and SSE4.x.
-With KVM, its `init` trapped on an invalid opcode and the guest kernel
-panicked. With `-accel off -qemu -cpu max`, ADB became available, but
-`sys.boot_completed` stayed empty and the user state stayed `BOOTING`
-after more than an hour. An Android 8.0 / API 26 x86 Google APIs image
-reported missing SSSE3 under KVM; `adbd`, `logd`, and keymaster repeatedly
-exited with signal 4, and ADB stayed offline. Both guests were stopped.
-The exploratory legacy SDK addition was removed from `shell.nix`; the remote
-checkout remains clean. No NoteMaker APK was installed in either guest.
 
 ## Rust CLI port (`notemaker_cli`) — 2026-11-02
 

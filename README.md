@@ -12,13 +12,11 @@ jj git fetch
 jj git push --bookmark main
 ```
 
-The `origin` remote is `tyler@192.168.50.129:/git-repos/NoteMaker.git` on the
-Phenom II home server. Its address is assigned automatically; consult
-`../computer-it/NETWORK_OPERATING_GUIDE.md` if it changes. To create another
-local checkout:
+The `origin` remote is `<user>@<IP Address>:/git-repos/NoteMaker.git` on the
+home server. To create another local checkout:
 
 ```sh
-jj git clone tyler@192.168.50.129:/git-repos/NoteMaker.git NoteMaker
+jj git clone <user>@<IP Address>:/git-repos/NoteMaker.git NoteMaker
 ```
 
 Move the `main` bookmark to the commit you intend to publish before pushing.
@@ -473,7 +471,7 @@ rendering. It uses a temporary server on port 18766 and writes artifacts under
 The current primary host is this development computer's existing server and
 `notemaker.sqlite3` database. The BOOX currently connects over the USB tunnel
 described below. For Wi-Fi, the desktop's current LAN URL is
-`http://192.168.50.180:8765`; configure it under **Notes → Open or create document**
+`http://<IP Address>:8765`; configure it under **Notes → Open or create document**
 after allowing the port through the desktop firewall. Addresses remain
 configurable because DHCP can change them; `10.0.2.2` is for the emulator only.
 
@@ -897,7 +895,7 @@ nix-shell
 apps/cli/build.sh
 apps/android/build.sh
 python3 apps/server/server.py --port 8765 --database notemaker.sqlite3 \
-  --pi-command /home/tyler/.npm-global/bin/pi
+  --pi-command <Pi path>
 ```
 
 Use the existing primary database when restarting the primary server. The CLI

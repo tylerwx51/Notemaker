@@ -229,7 +229,7 @@ class ChatChecks(unittest.TestCase):
         secret = self.data / 'outside.txt'; secret.write_text('must not be visible')
         script = '''import json, pathlib, subprocess, urllib.request
 assert not pathlib.Path(%r).exists()
-assert not pathlib.Path('/home/tyler/.ssh').exists()
+assert not pathlib.Path(%r).exists()
 p=pathlib.Path(%r); p.write_text('writable'); p.unlink()
 print(json.load(urllib.request.urlopen(%r))['protocol'])
 args=['apps/cli/notemaker','--state',%r,'--document','sandbox-check','--actor','agent-check']
@@ -237,7 +237,7 @@ for tail in [['document','create','fixed'], ['layer','put','-'], ['sync',%r], ['
  result=subprocess.run(args+tail,input=json.dumps({'layer':'agent-layer','name':'Agent layer','force':False}),text=True,capture_output=True)
  assert result.returncode==0, result.stderr
  print(result.stdout)
-''' % (str(secret), str(ROOT / '.test-artifacts/sandbox-write'), self.url + '/api/info', str(harness.data / 'replica'), self.url)
+''' % (str(secret), str(Path.home() / '.ssh'), str(ROOT / '.test-artifacts/sandbox-write'), self.url + '/api/info', str(harness.data / 'replica'), self.url)
         (ROOT / '.test-artifacts').mkdir(exist_ok=True)
         result = subprocess.run(command + [sys.executable, '-c', script], text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)

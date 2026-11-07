@@ -47,22 +47,6 @@ Do not add AI agent orchestration unless requested.
   E Ink refresh, BOOX-specific behavior, and stylus characteristics require
   validation on actual hardware.
 
-## Home server and network
-
-Read `../computer-it/NETWORK_OPERATING_GUIDE.md` for the network inventory,
-connection details, and server operating context before server-related work.
-That guide is the source of truth; avoid duplicating its full inventory here.
-
-The guide records SSH access as `ssh tyler@192.168.50.129`. Addresses are assigned
-automatically and may change. SSH inspection is available when needed; inspect
-existing configuration before making server changes.
-
-The server is an x86_64 AMD Phenom II X4 955 with approximately 8 GiB RAM running
-NixOS. Choose server workloads with these limits in mind, verify CPU instruction
-requirements for dependencies, and do not assume GPU acceleration or sufficient
-capacity for large local AI models. Preserve existing services during project
-work. A request to develop locally does not by itself require remote deployment.
-
 ## Verification
 
 Run checks appropriate to the affected application through the Nix development
