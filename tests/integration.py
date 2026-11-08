@@ -3,22 +3,25 @@
 import concurrent.futures
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import urllib.parse
 import uuid
 from replica import read_replica
 from android_bridge import AndroidBridge
+from android_emulator import Emulator
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / '.test-artifacts'
 OUT.mkdir(exist_ok=True)
 SERIALS = ['emulator-5580', 'emulator-5582']
-processes = []
+emulators = {}
+# Fresh AVDs: a killed emulator leaves its AVD locked for the next run.
+avd_root = tempfile.TemporaryDirectory(prefix='notemaker-integration-')
 server = None
 completed = False
 bridges = {serial: AndroidBridge(serial, OUT) for serial in SERIALS}
@@ -103,17 +106,12 @@ try:
         (OUT / name).unlink(missing_ok=True)
     start_server()
     for index, serial in enumerate(SERIALS):
-        env = dict(os.environ, ANDROID_AVD_HOME=str(OUT / f'avd-{index}'))
-        log = (OUT / f'{serial}.log').open('w')
-        process = subprocess.Popen(['boox-emulator-headless', '-port', str(5580 + index * 2), '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'], env=env, stdout=log, stderr=subprocess.STDOUT)
-        processes.append((serial, process))
-    for serial in SERIALS:
+        emulators[serial] = Emulator(5580 + index * 2, OUT / f'{serial}.log', Path(avd_root.name) / f'avd-{index}').start()
+    for serial, emulator in emulators.items():
         report(f'Waiting for {serial} to boot')
-        wait_until(lambda: adb(serial, 'shell', 'getprop', 'sys.boot_completed').strip() == '1', 240)
-        adb(serial, 'shell', 'settings', 'put', 'global', 'window_animation_scale', '0')
-        adb(serial, 'shell', 'settings', 'put', 'global', 'transition_animation_scale', '0')
-        adb(serial, 'shell', 'settings', 'put', 'global', 'animator_duration_scale', '0')
-        adb(serial, 'install', '-r', str(ROOT / 'apps/android/build/notemaker.apk'))
+        emulator.wait_booted()
+        emulator.disable_animations()
+        emulator.install()
         instrument(serial, 'configure', document='integration', host='http://10.0.2.2:18765')
     # Both actual emulators submit distinct pressure-bearing strokes concurrently.
     with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -278,26 +276,16 @@ finally:
         bridge.close()
     if server is not None and server.poll() is None:
         server.terminate();server.wait(timeout=10)
-    for serial, process in processes:
+    for serial, emulator in emulators.items():
         if not completed:
             try:
-                pid=adb(serial,'shell','pidof','com.notemaker').strip()
+                pid = emulator.adb('shell', 'pidof', 'com.notemaker', timeout=10).strip()
                 if pid:
-                    (OUT / (serial+'-failure-threads.txt')).write_text(
-                        adb(serial,'shell','run-as','com.notemaker','debuggerd','-j',pid))
+                    emulator.save(OUT / (serial + '-failure-threads.txt'),
+                                  'shell', 'run-as', 'com.notemaker', 'debuggerd', '-j', pid)
             except Exception:
                 pass
-            try:
-                (OUT / (serial+'-failure-logcat.txt')).write_text(adb(serial,'logcat','-d','-s','NoteMaker','AndroidRuntime'))
-                with (OUT / (serial+'-failure.png')).open('wb') as image:
-                    subprocess.run(['adb','-s',serial,'exec-out','screencap','-p'],stdout=image,timeout=10)
-            except Exception:
-                pass
-        try:
-            adb(serial, 'emu', 'kill')
-        except Exception:
-            process.terminate()
-        try:
-            process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            emulator.save(OUT / (serial + '-failure-logcat.txt'), 'logcat', '-d', '-s', 'NoteMaker', 'AndroidRuntime')
+            emulator.save(OUT / (serial + '-failure.png'), 'exec-out', 'screencap', '-p', timeout=10, binary=True)
+        emulator.stop()
+    avd_root.cleanup()

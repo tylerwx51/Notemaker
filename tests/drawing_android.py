@@ -12,9 +12,9 @@ import sys
 import tempfile
 import time
 from android_bridge import AndroidBridge
+from android_emulator import APK, Emulator
 
 ROOT = Path(__file__).resolve().parents[1]
-APK = ROOT / 'apps/android/build/notemaker.apk'
 PORT = int(os.environ.get('NOTEMAKER_DRAWING_ANDROID_PORT', '5590'))
 SERIAL = os.environ.get('NOTEMAKER_DRAWING_ANDROID_SERIAL', f'emulator-{PORT}')
 OUT = ROOT / os.environ.get('NOTEMAKER_DRAWING_ANDROID_OUT', '.test-artifacts/drawing-android')
@@ -28,18 +28,6 @@ def run(*args, timeout=90):
 
 def adb(*args):
     return run('adb', '-s', SERIAL, *args)
-
-
-def wait_ready():
-    deadline = time.monotonic() + 240
-    while time.monotonic() < deadline:
-        try:
-            if adb('shell', 'getprop', 'sys.boot_completed').strip() == '1':
-                return
-        except Exception:
-            pass
-        time.sleep(1)
-    raise TimeoutError('Android emulator did not finish booting')
 
 
 def encoded(value):
@@ -163,18 +151,11 @@ def check_panels():
 
 
 def main():
-    devices = run('adb', 'devices')
-    assert SERIAL not in devices, f'Reserved emulator already running: {SERIAL}'
-    emulator = None
     with tempfile.TemporaryDirectory(prefix='notemaker-drawing-android-') as temp:
-        env = dict(os.environ, ANDROID_AVD_HOME=temp + '/avd')
-        log = (OUT / 'emulator.log').open('w')
+        emulator = Emulator(PORT, OUT / 'emulator.log', temp + '/avd')
         try:
-            emulator = subprocess.Popen(
-                ['boox-emulator-headless', '-port', str(PORT), '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'],
-                env=env, stdout=log, stderr=subprocess.STDOUT)
-            wait_ready()
-            adb('install', '-r', str(APK))
+            emulator.start().wait_booted()
+            emulator.install(APK)
             if '--viewport-only' in sys.argv:
                 instrument('viewport', timeout=600)
                 print('PASS viewport culling, edge coverage, pan/zoom reuse and bounded tile cache')
@@ -215,8 +196,13 @@ def main():
             result = run('adb', '-s', SERIAL, 'shell', 'am', 'instrument', '-w',
                          '-e', 'action', 'fill-tap', 'com.notemaker/.Integration')
             assert 'PASS fill-tap' in result, result
-            state = json.loads(adb('shell', 'run-as', 'com.notemaker', 'cat', 'files/integration.json'))
-            objects = state['model']['objects']
+            # The fill runs as a background CLI command after the tap returns;
+            # wait for it to land instead of reading the state written by fill-tap.
+            deadline = time.monotonic() + 30
+            objects = json.loads(adb('shell', 'run-as', 'com.notemaker', 'cat', 'files/integration.json'))['model']['objects']
+            while len(objects) < 2 and time.monotonic() < deadline:
+                time.sleep(.5)
+                objects = latest_state()['model']['objects']
             assert len(objects) == 2, objects
             assert objects[0]['shape'] == 'rect', objects
             assert objects[1]['shape'] == 'svg' and '#ff0000' in objects[1]['svg'], objects
@@ -317,29 +303,13 @@ def main():
             check_panels()
         finally:
             bridge.close()
-            if emulator is not None:
-                try:
-                    (OUT/'logcat.txt').write_text(adb('logcat','-d','-t','600'))
-                    for name in ('stroke-before.png', 'stroke-after.png'):
-                        result = subprocess.run(['adb', '-s', SERIAL, 'exec-out', 'run-as', 'com.notemaker', 'cat', 'files/'+name], capture_output=True)
-                        if result.returncode == 0 and result.stdout.startswith(b'\x89PNG'):
-                            (OUT/name).write_bytes(result.stdout)
-                except Exception:
-                    pass
-                emulator.terminate()
-                try:
-                    emulator.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    emulator.kill()
-                    emulator.wait()
-                # ADB can retain a disconnected emulator briefly after QEMU exits.
-                # Wait before releasing this suite's port to the next test.
-                deadline = time.monotonic() + 10
-                while time.monotonic() < deadline:
-                    if SERIAL not in run('adb', 'devices'):
-                        break
-                    time.sleep(.2)
-            log.close()
+            emulator.save(OUT / 'logcat.txt', 'logcat', '-d', '-t', '600')
+            for name in ('stroke-before.png', 'stroke-after.png'):
+                path = OUT / name
+                if emulator.save(path, 'exec-out', 'run-as', 'com.notemaker', 'cat', 'files/' + name, binary=True) \
+                        and not path.read_bytes().startswith(b'\x89PNG'):
+                    path.unlink()
+            emulator.stop()
 
 
 if __name__ == '__main__':

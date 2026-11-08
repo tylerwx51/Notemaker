@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 import tablet_checks
 import network_checks
-from run import plan, execute, recent_averages, claims_conflict
+from run import SUITES, plan, execute, recent_averages, claims_conflict
 from tablet_checks import verify_history
 from network_checks import check
 from topology_support import Proxy, eventually
@@ -41,6 +41,12 @@ class FrameworkChecks(unittest.TestCase):
         self.assertFalse(claims_conflict('integration', set(), 1, isolated_networks=True, max_emulators=4))
         self.assertFalse(claims_conflict('cli_android', {'integration'}, 2, isolated_networks=True, max_emulators=4))
         self.assertTrue(claims_conflict('drawing_android', set(), 4, max_emulators=4))
+        self.assertFalse(claims_conflict('integration', set(), 0, max_emulators=1))
+        self.assertTrue(claims_conflict('drawing_android', set(), 1, max_emulators=1))
+        # Every --jobs value can start every suite once nothing else is active.
+        for jobs in range(1, 9):
+            for name in SUITES['emulator'] + SUITES['local']:
+                self.assertFalse(claims_conflict(name, set(), 0, max_emulators=min(jobs, 5)), (jobs, name))
 
     def test_default_is_independent_of_devices(self):
         selected = plan(['local'], None)

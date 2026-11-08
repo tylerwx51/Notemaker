@@ -1925,3 +1925,34 @@ Not verified:
   inside the app sandbox);
 - `drawing_latency.py` against a captured tablet archive;
 - any E Ink behavior.
+
+## Headless emulator-tier harness reliability (2026-11-07)
+
+Changes: the `--jobs 1` scheduler deadlock, bounded emulator cleanup after a
+failed boot, full (`--no-incremental`) APK installs after user unlock, and
+load races in `chat_ui`, `cli_android`, `drawing_android` and `files_android`
+(ADR 0025, update 2026-11-07). All runs below used a fresh display-less
+`nmc` container (16 vCPUs on a VM with about 20% CPU steal, 30 GiB RAM) with
+`NOTEMAKER_TEST_GPU=swiftshader_indirect` and the default `--jobs 6` unless
+noted.
+
+- Baseline before the changes: one run passed all seven suites.
+- With every fix except the `files_android` dropdown wait: one run failed only
+  `files_android`, whose second tap on "Fixed page" closed a dropdown that was
+  still opening. The next run passed all seven suites.
+- Final code, three consecutive runs: all seven suites passed each time
+  (361–371 s per run; for example
+  `.test-artifacts/runs/20261107-202003-296832/report.json`). No QEMU,
+  crash-handler or chat-server processes remained after any run.
+- `--jobs 1`: all seven suites passed one at a time in 694 s; integration
+  ran alone.
+- Failed boot (host GPU without a display, `NOTEMAKER_TEST_BOOT_SECONDS=60`):
+  all seven suites failed with a boot timeout after 75–90 s, the run ended in
+  226 s with exit status 1, and no emulator processes remained.
+- `tests/framework_checks.py` passed, including the check that every `--jobs`
+  value can start every suite.
+
+Two full tiers at once (ten software-rendered emulators) exceeded this host's
+CPU: QEMU reported hanging vCPU threads and emulators failed to boot. One tier
+at the default `--jobs` is the supported load. Host-GPU runs on the
+development desktop were not repeated.

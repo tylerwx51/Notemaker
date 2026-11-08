@@ -34,7 +34,7 @@ def main():
         emulator=subprocess.Popen(["boox-emulator-headless","-port","5592","-memory","1536","-cores","2","-wipe-data"],env=dict(os.environ,ANDROID_AVD_HOME=str(Path(root)/"avd")),stdout=log,stderr=subprocess.STDOUT)
         try:
             wait(lambda:adb("shell","getprop","sys.boot_completed")=="1",240)
-            adb("install","-r",str(APK))
+            adb("install","--no-incremental","-r",str(APK))
             adb("shell","am","start","-W","-n","com.notemaker/.MainActivity")
             descriptor=wait(lambda:json.loads(adb("shell","run-as","com.notemaker","cat","files/proxy.json")))
             adb("forward","tcp:18792","tcp:8766")

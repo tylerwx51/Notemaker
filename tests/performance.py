@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+from android_emulator import Emulator
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get('NOTEMAKER_PERFORMANCE_PORT', '5586'))
@@ -61,20 +62,12 @@ def wait_for_reserved_emulator_release(seconds=30):
 
 wait_for_reserved_emulator_release()
 with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
-    env = dict(os.environ, ANDROID_AVD_HOME=temp+'/avd')
+    env = dict(os.environ)
     if Path('/run/opengl-driver/lib').exists():
         env['LD_LIBRARY_PATH']=os.environ.get('NOTEMAKER_GL_LIBRARY_PATH','')+':/run/opengl-driver/lib:'+env.get('LD_LIBRARY_PATH','')
-    log = (OUT/'emulator.log').open('w')
-    process = subprocess.Popen(['boox-emulator-headless', '-port', str(PORT), '-memory', '2048', '-cores', '4', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'], env=env, stdout=log, stderr=subprocess.STDOUT)
+    emulator = Emulator(PORT, OUT/'emulator.log', temp+'/avd', memory=2048, cores=4, env=env)
     try:
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            if process.poll() is not None: raise AssertionError('Emulator exited; see emulator.log')
-            try:
-                if adb('shell', 'getprop', 'sys.boot_completed', timeout=5).strip() == '1': break
-            except Exception: pass
-            time.sleep(1)
-        else: raise AssertionError('Emulator boot timed out')
+        emulator.start().wait_booted()
         # This benchmark exercises offline ink. Keep first-boot Google/WebView
         # downloads from competing with the measured app on the disposable AVD.
         adb('shell', 'svc', 'wifi', 'disable')
@@ -85,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
             adb('shell', 'pm', 'disable-user', '--user', '0', package)
             assert 'package:' + package in adb('shell', 'pm', 'list', 'packages', '-d').splitlines()
         time.sleep(3)  # Disabled first-boot packages have time to leave the frame scheduler.
-        adb('install', '-r', str(ROOT/'apps/android/build/notemaker.apk'))
+        emulator.install()
         print('Running 1,000 strokes on isolated API 36 emulator; timings include real window frames.', flush=True)
         output = adb('shell', 'am', 'instrument', '-w', '-e', 'action', 'performance', 'com.notemaker/.Integration', timeout=600)
         (OUT/'instrumentation.txt').write_text(output)
@@ -118,10 +111,5 @@ with tempfile.TemporaryDirectory(prefix='notemaker-performance-') as temp:
         assert ui['strokes']==1000 and ui['model']==model
         print('PASS strict <30ms for every measured input, including 500-point figure eights; growth limits, replay equivalence, and 1,000 durable strokes after restart', flush=True)
     finally:
-        try:
-            (OUT/'logcat.txt').write_text(adb('logcat', '-d', '-v', 'threadtime'))
-            adb('emu', 'kill')
-        except Exception: pass
-        try: process.wait(timeout=20)
-        except subprocess.TimeoutExpired: process.kill(); process.wait()
-        log.close()
+        emulator.save(OUT/'logcat.txt', 'logcat', '-d', '-v', 'threadtime')
+        emulator.stop()

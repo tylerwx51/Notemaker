@@ -1,5 +1,42 @@
 # NoteMaker
 
+## Running the tests (quick start)
+
+All tests go through one runner, `tests/run.py`, inside the Nix shell. Tiers are
+`local` (default), `emulator`, `hardware` and `network`; see
+[Automated test tiers](#automated-test-tiers) for details.
+
+```sh
+# Local tier: no devices needed.
+nix-shell --run 'python3 tests/run.py'
+# Emulator tier on a machine with a desktop session (host GPU):
+nix-shell --run 'python3 tests/run.py --tier emulator'
+# Emulator tier on a headless machine, container or SSH session (no DISPLAY):
+nix-shell --run 'NOTEMAKER_TEST_GPU=swiftshader_indirect python3 tests/run.py --tier emulator'
+# Show the plan without starting anything:
+nix-shell --run 'python3 tests/run.py --tier emulator --list'
+```
+
+- Requirements for the emulator tier: x86_64 Linux, read/write access to
+  `/dev/kvm`, and enough memory. Each test emulator requests 1.5–2 GiB of guest
+  RAM plus host overhead, and the default `--jobs 6` runs six suites at once, at
+  most five of them with emulators; lower `--jobs` on machines with less memory.
+  The runner builds the CLI and APK itself, and each suite starts and stops its
+  own emulator. No AVD or tablet setup is needed.
+- Without a display, set `NOTEMAKER_TEST_GPU=swiftshader_indirect` as shown.
+  Otherwise emulators fail with `Failed to open display` / `Could not start
+  renderer` and the suites time out waiting for boot.
+- `adb`, `emulator` and the build toolchain only exist inside `nix-shell`; run
+  every command through `nix-shell --run '…'` or an interactive `nix-shell`.
+- The first run needs network access and takes a long time. It downloads the
+  Android SDK and system image (Nix), the Rust toolchain pinned in
+  `rust-toolchain.toml` (rustup installs it automatically) and the Cargo crates,
+  then builds the CLI and APK. Later runs reuse all of these.
+- The console streams each suite's output and ends with a `Report:` path. The
+  per-suite pass/fail/skip summary is in that run's
+  `.test-artifacts/runs/<timestamp>/report.json`, next to one log per suite.
+  The exit code is non-zero if any suite failed.
+
 ## Version control
 
 This repository uses Jujutsu with a colocated Git repository. Git, Jujutsu, and
@@ -601,6 +638,11 @@ nix-shell --run 'python3 tests/run.py --tier hardware --tier network --list'
 nix-shell --run 'apps/android/build.sh && python3 tests/drawing_android.py --tool-switch-only'
 ```
 
+The emulator tier needs `/dev/kvm`, and on a machine without a display it needs
+`NOTEMAKER_TEST_GPU=swiftshader_indirect`; see
+[Running the tests (quick start)](#running-the-tests-quick-start) for these
+requirements and the first-run downloads.
+
 The repository pre-commit hook runs both local and emulator tiers, excluding
 the external network and physical-tablet tiers. Enable it for this checkout with
 `git config core.hooksPath .githooks`. It runs through `nix-shell` and blocks a
@@ -623,7 +665,12 @@ The runner builds the required artifacts once, then schedules suites in parallel
 using six workers by default (`--jobs 1` through `--jobs 8`), with at most five
 emulator slots. The strict
 performance suite runs first and alone, before other suites load host memory.
-Integration uses two emulator slots; other emulator suites use one. Drawing and
+Integration uses two emulator slots; other emulator suites use one. A suite
+that needs more slots than the limit (integration at `--jobs 1`) runs alone.
+Each emulator suite waits up to 300 seconds for boot, unlocked user storage and
+the package manager (`NOTEMAKER_TEST_BOOT_SECONDS` overrides this), then
+installs the APK with a full `--no-incremental` transfer. Cleanup always kills
+the suite's emulator, even after a failed boot. Drawing and
 viewport start in the first functional emulator batch, and files start at the
 next free slot. The remaining suites use the mean of their last five durations, with
 initial estimates where there is no history. Resource claims keep overlapping

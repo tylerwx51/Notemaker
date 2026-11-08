@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Agent popup on an isolated API 36 emulator with the real mock chat service."""
 import json
-import os
 from pathlib import Path
 import re
 import sqlite3
@@ -12,6 +11,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from chat_checks import ChatChecks, ROOT
 from android_bridge import AndroidBridge
+from android_emulator import Emulator
 
 OUT = ROOT / '.test-artifacts/chat-ui'
 OUT.mkdir(parents=True, exist_ok=True)
@@ -101,18 +101,14 @@ def keyboard_top():
 check = ChatChecks()
 emulator = None
 try:
-    assert SERIAL not in command('adb', 'devices'), 'Reserved emulator already running'
     check.setUp()
     for _ in range(6):
         check.create()
     with tempfile.TemporaryDirectory(prefix='notemaker-chat-ui-') as temp:
-        env = dict(os.environ, ANDROID_AVD_HOME=temp + '/avd')
-        emulator = subprocess.Popen(['boox-emulator-headless', '-port', '5586', '-memory', '1536', '-cores', '2', '-gpu', os.environ.get('NOTEMAKER_TEST_GPU', 'host'), '-feature', '-Vulkan', '-wipe-data'],
-            env=env, stdout=(OUT / 'emulator.log').open('w'), stderr=subprocess.STDOUT)
-        wait(lambda: adb('shell', 'getprop', 'sys.boot_completed').strip() == '1', 240)
-        for setting in ('window_animation_scale', 'transition_animation_scale', 'animator_duration_scale'):
-            adb('shell', 'settings', 'put', 'global', setting, '0')  # taps must not land on animating dialogs
-        adb('install', '-r', str(ROOT / 'apps/android/build/notemaker.apk'))
+        emulator = Emulator(5586, OUT / 'emulator.log', temp + '/avd')
+        emulator.start().wait_booted()
+        emulator.disable_animations()
+        emulator.install()
         adb('shell', 'settings', 'put', 'secure', 'show_ime_with_hard_keyboard', '1')
         bridge.command('configure',document='chat-ui',host=f'http://10.0.2.2:{check.port}')
         bridge.close()
@@ -127,7 +123,7 @@ try:
         tap('Effort'); tap('high'); capture('new-chat')
         tap('Start chat')
         original_bottom = control_bounds('Send')[3]
-        tap('Message agent'); adb('shell', 'input', 'text', 'Hello-agent')
+        tap('Message agent'); emulator.type_text('Hello-agent')
         top = wait(keyboard_top)
         assert control_bounds('Message agent')[3] <= top
         assert control_bounds('Send')[3] <= top
@@ -141,7 +137,10 @@ try:
         chat = check.get('/api/chats')['chats'][0]['id']
         config = check.get('/api/chats/' + chat)
         assert config['model'] == 'gpt-5.6-luna' and config['effort'] == 'high', config
-        assert check.wait_done(chat)['status'] == 'done'
+        # Send posts asynchronously, so the chat can still be idle here; wait
+        # for this turn to finish rather than for any non-running status.
+        state = wait(lambda: (row := check.get('/api/chats/' + chat))['status'] not in ('idle', 'running') and row, 60)
+        assert state['status'] == 'done', state
         with sqlite3.connect(check.data / 'chat.sqlite3') as db:
             sent = json.loads(db.execute('SELECT payload FROM chat_requests WHERE chat=?', (chat,)).fetchone()[0])
         app_session = sent['session']
@@ -154,7 +153,7 @@ try:
         wait(lambda: any('no document was read or changed' in n.attrib.get('text', '') for n in tree().iter('node')))
         tap('Close'); tap('Open Agent'); tap('Hello-agent · done')
         wait(lambda: any('Mock response: Hello-agent' in n.attrib.get('text', '') for n in tree().iter('node')))
-        tap('Message agent'); adb('shell', 'input', 'text', 'Saved-draft'); adb('shell', 'input', 'keyevent', '4')
+        tap('Message agent'); emulator.type_text('Saved-draft'); adb('shell', 'input', 'keyevent', '4')
         tap('Close'); tap('Open Agent'); tap('Hello-agent · done')
         wait(lambda: any(n.attrib.get('text') == 'Saved-draft' for n in tree().iter('node')))
         capture('reopened')
@@ -187,10 +186,12 @@ try:
         errors = adb('logcat', '-d', '--pid=' + process, '-s', 'AndroidRuntime:E')
         assert 'FATAL EXCEPTION' not in errors, errors
         print('PASS: chats, selectors, streaming, draft persistence, keyboard resize/restore and readable read/bash/edit activity')
-        bridge.close();adb('emu', 'kill'); emulator.wait(timeout=30); emulator = None
 finally:
-    bridge.close()
-    if emulator:
-        emulator.terminate(); emulator.wait(timeout=30)
-    if hasattr(check, 'process'):
-        check.tearDown()
+    try:
+        bridge.close()
+        if emulator:
+            emulator.save(OUT / 'logcat.txt', 'logcat', '-d', '-t', '2000')
+            emulator.stop()
+    finally:
+        if hasattr(check, 'process'):
+            check.tearDown()

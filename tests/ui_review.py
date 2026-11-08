@@ -78,7 +78,7 @@ for _ in range(180):
     time.sleep(1)
 else:
     raise AssertionError('Emulator did not finish booting')
-adb('install', '-r', str(ROOT / 'apps/android/build/notemaker.apk'))
+adb('install', '--no-incremental', '-r', str(ROOT / 'apps/android/build/notemaker.apk'))
 adb('shell', 'am', 'force-stop', 'com.notemaker')
 result = adb('shell', 'am', 'instrument', '-w', '-e', 'action', 'configure', '-e', 'document', DOCUMENT,
              '-e', 'host', 'http://10.0.2.2:18766', 'com.notemaker/.Integration')

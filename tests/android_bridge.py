@@ -43,7 +43,7 @@ class AndroidBridge:
                 self.socket.settimeout(120)
                 self.stream = self.socket.makefile('rwb')
                 return
-            except (OSError, ValueError, subprocess.CalledProcessError):
+            except (OSError, ValueError, subprocess.SubprocessError):
                 time.sleep(.1)
         raise TimeoutError(f'Android instrumentation bridge did not start; see {self.log.name}')
 
@@ -70,6 +70,7 @@ class AndroidBridge:
     def close(self):
         if self.stream is not None:
             try:
+                self.socket.settimeout(10)
                 self.stream.write(b'{"action":"shutdown"}\n')
                 self.stream.flush()
                 self.stream.readline()
@@ -82,8 +83,8 @@ class AndroidBridge:
             self.socket = None
         if self.forward is not None:
             try:
-                self.adb('forward', '--remove', f'tcp:{self.forward}')
-            except (OSError, subprocess.CalledProcessError):
+                self.adb('forward', '--remove', f'tcp:{self.forward}', timeout=10)
+            except (OSError, subprocess.SubprocessError):
                 pass
             self.forward = None
         if self.process is not None:

@@ -54,3 +54,38 @@ the guest. The normal application and production CLI do not expose it.
 The full pre-commit hook passed all 22 checks in 292.23 seconds on this host
 with six workers and five emulator slots. See `docs/verification.md` for the
 suite timings and remaining hardware limits.
+
+## Update 2026-11-07
+
+Headless runs with `NOTEMAKER_TEST_GPU=swiftshader_indirect` exposed three
+harness defects:
+
+- With `--jobs 1` the emulator limit was one slot, so integration (two slots)
+  never started and the runner waited forever. A suite that needs more slots
+  than the limit now runs when no other emulator is active.
+- Suites installed with a plain `adb install -r`. Because the build writes a
+  v4 signature (`.idsig`), API 30+ installs incrementally: `adb` reports
+  success and then streams the APK in the background. Under CPU load the app
+  could load `libnotemaker.so` (or `cli_android` could run the packaged CLI)
+  before its pages arrived (`file offset ... >= file size: 0 >= 0`). Suites
+  now use a full `--no-incremental` install, and only after
+  `sys.boot_completed`, `RUNNING_UNLOCKED` user storage and a responding package
+  manager.
+- An emulator that never registers with ADB makes `adb -s SERIAL logcat`
+  wait indefinitely, and QEMU in that state ignores SIGTERM. `chat_ui` raised
+  out of its cleanup and left QEMU, its crash handler and the mock chat server
+  running. `tests/android_emulator.py` now owns emulator start, boot wait,
+  install, diagnostics and cleanup for every emulator suite. Every ADB call has a
+  timeout, and stop escalates to SIGKILL for QEMU. It signals only QEMU: the
+  first emulator spawns the per-user `netsimd` that all running emulators share,
+  so killing an emulator's process group breaks the others.
+
+Two load-dependent test races were fixed: `chat_ui` now waits for the sent turn
+to leave `idle` before requiring `done` (Send posts asynchronously), and
+`cli_android` waits for the force-stopped app process to exit, and so release
+`proxy.lock`, before starting its lock holder. Verification under the same load
+found three more: text typed before the IME bound to a newly focused field
+could repeat its first key (`TToolbar-text`), so suites type only after
+`mInputShown=true`; `drawing_android` read the state before the background
+fill command finished; and `files_android` tapped a still-opening dropdown a
+second time, which closed it.

@@ -79,7 +79,10 @@ def claims_conflict(name, active, active_emulator_count, isolated_networks=False
         return True
     if not isolated_networks and CLAIMS.get(name, set()) & active:
         return True
-    if name in EMULATOR_SUITES and active_emulator_count + EMULATOR_SLOTS.get(name, 1) > max_emulators:
+    # A suite needing more slots than the limit (integration at --jobs 1)
+    # runs alone instead of waiting forever.
+    if (name in EMULATOR_SUITES and active_emulator_count
+            and active_emulator_count + EMULATOR_SLOTS.get(name, 1) > max_emulators):
         return True
     if name == 'performance' and active_emulator_count:
         return True

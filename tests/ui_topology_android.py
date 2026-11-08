@@ -45,7 +45,7 @@ def main():
             child=Proxy(root/'child',upstream=parent.descriptor_path)
             emulator=subprocess.Popen(['boox-emulator-headless','-port','5594','-memory','1536','-cores','2','-wipe-data'],env=dict(os.environ,ANDROID_AVD_HOME=str(root/'avd')),stdout=(root/'emulator.log').open('w'),stderr=subprocess.STDOUT)
             wait(lambda:adb('shell','getprop','sys.boot_completed')=='1',240)
-            adb('install','-r',str(ROOT/'apps/android/build/notemaker.apk'))
+            adb('install','--no-incremental','-r',str(ROOT/'apps/android/build/notemaker.apk'))
             adb('shell','am','start','-W','-n','com.notemaker/.MainActivity')
             instrument=adb('shell','am','instrument','-w','-e','action','configure','-e','document','topology-ui','-e','host',f'http://10.0.2.2:{port}','com.notemaker/.Integration')
             assert 'PASS configure' in instrument,instrument

@@ -2,7 +2,6 @@
 """App-spawned CLI, offline shared state and three-way synchronization on API 36."""
 import base64
 import json
-import os
 from pathlib import Path
 import socket
 import subprocess
@@ -19,6 +18,7 @@ from replica import cli_command, read_replica
 import threading
 from topology_support import Proxy
 from android_bridge import AndroidBridge
+from android_emulator import Emulator
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'.test-artifacts/cli-android'
@@ -117,18 +117,15 @@ def desktop(*args,value=None):
 
 server=None;emulator=None;desktop_proxy=None
 try:
-    assert SERIAL not in command('adb','devices'),'Reserved emulator already running'
     with socket.socket() as s:
         s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         s.bind(('127.0.0.1',PORT))
     # Unique directories keep prior artifacts and any personal state untouched.
     with tempfile.TemporaryDirectory(prefix='notemaker-cli-android-') as temp:
-        env=dict(os.environ,ANDROID_AVD_HOME=temp+'/avd')
-        emulator=subprocess.Popen(['boox-emulator-headless','-port','5584','-memory','1536','-cores','2','-gpu',os.environ.get('NOTEMAKER_TEST_GPU','host'),'-feature','-Vulkan','-wipe-data'],env=env,stdout=(OUT/'emulator.log').open('w'),stderr=subprocess.STDOUT)
-        wait(lambda:adb('shell','getprop','sys.boot_completed').strip()=='1',240)
-        for setting in ('window_animation_scale','transition_animation_scale','animator_duration_scale'):
-            adb('shell','settings','put','global',setting,'0')  # taps must not land on animating dialogs
-        adb('install','-r',str(ROOT/'apps/android/build/notemaker.apk'))
+        emulator=Emulator(5584,OUT/'emulator.log',temp+'/avd')
+        emulator.start().wait_booted()
+        emulator.disable_animations()
+        emulator.install()
         instrument('configure',document='drawing-ui',host='')
         tap('Shape tools')
         wait(lambda:any('Create Triangle' in node.get('content-desc','') for node in bridge.ui_nodes()),15)
@@ -137,7 +134,7 @@ try:
         state=instrument('state')
         assert len(state['model']['objects'])==1 and state['model']['objects'][0]['shape']=='triangle',state
         tap('Text placement');tap('Enter text…');tap('Text to place')
-        adb('shell','input','text','Toolbar-text')
+        emulator.type_text('Toolbar-text')
         tap('Continue');canvas_gesture()
         state=instrument('state')
         assert state['model']['objects'][-1]['text']=='Toolbar-text',state
@@ -171,8 +168,12 @@ try:
         # Relaunch while another process still owns proxy.lock, as a killed
         # predecessor does while it exits (ADR 0031): the app waits for it.
         bridge.close();adb('shell','am','force-stop','com.notemaker')
+        # force-stop returns before the killed process exits and releases
+        # proxy.lock; the holder must start only once it owns the lock.
+        wait(lambda:not subprocess.run(['adb','-s',SERIAL,'shell','pidof','com.notemaker'],capture_output=True,text=True,timeout=10).stdout.strip(),30)
         holder=subprocess.Popen(cli_command(SERIAL)+['--state','/data/user/0/com.notemaker/files','--document','drawing-tools','serve','8799'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
-        assert 'descriptor' in holder.stdout.readline()
+        first=holder.stdout.readline()
+        assert 'descriptor' in first,f'Lock holder did not start: {first!r}'
         released=[]
         def release():
             # Let go 1 s after the relaunched app process appears.
@@ -296,15 +297,11 @@ try:
         assert p.returncode==0,p.stderr
         assert json.loads(p.stdout)['objects'][-1]==star,'Android shape bypassed selected proxy'
         print('PASS selected proxy creates and renders a multipage document',flush=True)
-        bridge.close();adb('emu','kill');emulator.wait(timeout=20);emulator=None
+        bridge.close();emulator.stop();emulator=None
 finally:
     bridge.close()
     if desktop_proxy:desktop_proxy.stop()
     if server:server.terminate();server.wait(timeout=10)
     if emulator:
-        try:(OUT/'failure-logcat.txt').write_text(adb('logcat','-d','-s','NoteMaker','AndroidRuntime'))
-        except Exception:pass
-        try:adb('emu','kill')
-        except Exception:emulator.terminate()
-        try:emulator.wait(timeout=20)
-        except subprocess.TimeoutExpired:emulator.kill()
+        emulator.save(OUT/'failure-logcat.txt','logcat','-d','-s','NoteMaker','AndroidRuntime')
+        emulator.stop()
